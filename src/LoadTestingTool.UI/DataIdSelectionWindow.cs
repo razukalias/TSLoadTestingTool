@@ -9,9 +9,11 @@ namespace LoadTestingTool.UI;
 internal sealed class DataIdSelectionWindow : Window
 {
     private readonly Dictionary<int, List<CheckBox>> _checks = [];
+    private readonly Action<string>? _log;
 
-    public DataIdSelectionWindow(IReadOnlyDictionary<int, List<string>> options, string selection)
+    public DataIdSelectionWindow(IReadOnlyDictionary<int, List<string>> options, string selection, Action<string>? log = null)
     {
+        _log = log;
         Title = "Configure request data IDs";
         Width = 520;
         Height = 620;
@@ -34,10 +36,10 @@ internal sealed class DataIdSelectionWindow : Window
         }
         content.Children.Add(new ScrollViewer { Content = groups, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Height = 470 });
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8 };
-        var all = new Button { Content = "Select all" }; all.Click += (_, _) => SetAll(true);
-        var none = new Button { Content = "Clear (run all)" }; none.Click += (_, _) => SetAll(false);
-        var cancel = new Button { Content = "Cancel" }; cancel.Click += (_, _) => Close(null);
-        var apply = new Button { Content = "Apply", IsDefault = true }; apply.Click += (_, _) => Close(Serialize());
+        var all = new Button { Content = "Select all" }; all.Click += (_, _) => { _log?.Invoke("Data-ID dialog action: select all."); SetAll(true); };
+        var none = new Button { Content = "Clear (run all)" }; none.Click += (_, _) => { _log?.Invoke("Data-ID dialog action: clear selection (run all)."); SetAll(false); };
+        var cancel = new Button { Content = "Cancel" }; cancel.Click += (_, _) => { _log?.Invoke("Data-ID dialog action: cancel."); Close(null); };
+        var apply = new Button { Content = "Apply", IsDefault = true }; apply.Click += (_, _) => { var value = Serialize(); _log?.Invoke($"Data-ID dialog action: apply. selection={value}"); Close(value); };
         buttons.Children.Add(all); buttons.Children.Add(none); buttons.Children.Add(cancel); buttons.Children.Add(apply);
         content.Children.Add(buttons);
         Content = content;

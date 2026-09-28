@@ -89,24 +89,26 @@ internal sealed class InstanceRow : Border
     private readonly Button _dataIdsButton;
     private readonly WrapPanel _environmentChecks = new() { Orientation = Orientation.Horizontal, MinWidth = 180, MaxWidth = 320 };
     private readonly Action<InstanceInfo> _select;
+    private readonly Action<string> _log;
 
-    public InstanceRow(InstanceInfo item, Action<InstanceInfo> select)
+    public InstanceRow(InstanceInfo item, Action<InstanceInfo> select, Action<string> log)
     {
         _item = item;
         _select = select;
+        _log = log;
         Padding = new Thickness(8);
         BorderBrush = Brushes.LightGray;
         BorderThickness = new Thickness(0, 0, 0, 1);
 
         _check = new CheckBox { IsChecked = item.Selected, VerticalAlignment = VerticalAlignment.Center };
-        _check.IsCheckedChanged += (_, _) => item.Selected = _check.IsChecked == true;
+        _check.IsCheckedChanged += (_, _) => { item.Selected = _check.IsChecked == true; _log($"Instance selection changed. instance={item.Name}; selected={item.Selected}"); };
         var name = new TextBlock { Text = item.Name, Width = 220, Margin = new Thickness(8, 0, 8, 0), FontWeight = FontWeight.Bold, VerticalAlignment = VerticalAlignment.Center };
         var path = new TextBlock { Text = item.WorkbookPath, Width = 300, Foreground = Brushes.Gray, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
         _testcases = new TextBox { Text = item.TestcaseSelection, Width = 110, Watermark = "0 or 1,3", Margin = new Thickness(8, 0), VerticalContentAlignment = VerticalAlignment.Center };
-        _testcases.LostFocus += (_, _) => item.TestcaseSelection = string.IsNullOrWhiteSpace(_testcases.Text) ? "0" : _testcases.Text.Trim();
-        _testcases.KeyDown += (_, e) => { if (e.Key == Avalonia.Input.Key.Enter) { item.TestcaseSelection = string.IsNullOrWhiteSpace(_testcases.Text) ? "0" : _testcases.Text.Trim(); e.Handled = true; } };
+        _testcases.LostFocus += (_, _) => { item.TestcaseSelection = string.IsNullOrWhiteSpace(_testcases.Text) ? "0" : _testcases.Text.Trim(); _log($"Testcase selection changed. instance={item.Name}; selection={item.TestcaseSelection}"); };
+        _testcases.KeyDown += (_, e) => { if (e.Key == Avalonia.Input.Key.Enter) { item.TestcaseSelection = string.IsNullOrWhiteSpace(_testcases.Text) ? "0" : _testcases.Text.Trim(); _log($"Testcase selection changed. instance={item.Name}; selection={item.TestcaseSelection}; source=enter"); e.Handled = true; } };
         _executionMode = new ComboBox { Width = 135, ItemsSource = new[] { "Threaded", "Sequential loop" }, SelectedIndex = item.ExecutionMode.Equals("loop", StringComparison.OrdinalIgnoreCase) ? 1 : 0, Margin = new Thickness(8, 0), VerticalContentAlignment = VerticalAlignment.Center };
-        _executionMode.SelectionChanged += (_, _) => item.ExecutionMode = _executionMode.SelectedIndex == 1 ? "loop" : "threaded";
+        _executionMode.SelectionChanged += (_, _) => { item.ExecutionMode = _executionMode.SelectedIndex == 1 ? "loop" : "threaded"; _log($"Execution mode changed. instance={item.Name}; mode={item.ExecutionMode}"); };
         _dataIdsButton = new Button { Content = string.IsNullOrWhiteSpace(item.DataIdSelection) ? "Configure data IDs..." : "Data IDs selected", Margin = new Thickness(8, 0), VerticalContentAlignment = VerticalAlignment.Center };
         _dataIdsButton.Click += async (_, _) => await ConfigureDataIdsAsync();
         _status = new TextBlock { Text = item.Status, Width = 100, VerticalAlignment = VerticalAlignment.Center };
@@ -144,12 +146,14 @@ internal sealed class InstanceRow : Border
     private async Task ConfigureDataIdsAsync()
     {
         var owner = VisualRoot as Window;
-        if (owner is null) return;
-        var dialog = new DataIdSelectionWindow(_item.DataIdOptions, _item.DataIdSelection);
+        if (owner is null) { _log($"Data-ID dialog could not open. instance={_item.Name}; reason=no-owner-window"); return; }
+        _log($"Data-ID dialog opened. instance={_item.Name}; currentSelection={_item.DataIdSelection}");
+        var dialog = new DataIdSelectionWindow(_item.DataIdOptions, _item.DataIdSelection, _log);
         var selected = await dialog.ShowDialog<string?>(owner);
-        if (selected is null) return;
+        if (selected is null) { _log($"Data-ID dialog cancelled. instance={_item.Name}"); return; }
         _item.DataIdSelection = selected;
         _dataIdsButton.Content = string.IsNullOrWhiteSpace(selected) ? "Configure data IDs..." : "Data IDs selected";
+        _log($"Data-ID selection applied. instance={_item.Name}; selection={selected}");
     }
 
     public void SetEnvironmentOptions(IEnumerable<string> options)
@@ -159,7 +163,7 @@ internal sealed class InstanceRow : Border
         foreach (var environment in options.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             var check = new CheckBox { Content = environment, IsChecked = selected.Contains(environment, StringComparer.OrdinalIgnoreCase), Margin = new Thickness(3, 0) };
-            check.IsCheckedChanged += (_, _) => _item.EnvironmentSelection = string.Join(",", _environmentChecks.Children.OfType<CheckBox>().Where(x => x.IsChecked == true).Select(x => x.Content?.ToString()));
+            check.IsCheckedChanged += (_, _) => { _item.EnvironmentSelection = string.Join(",", _environmentChecks.Children.OfType<CheckBox>().Where(x => x.IsChecked == true).Select(x => x.Content?.ToString())); _log($"Environment selection changed. instance={_item.Name}; environments={_item.EnvironmentSelection}"); };
             _environmentChecks.Children.Add(check);
         }
     }
@@ -191,53 +195,54 @@ public sealed class MainWindow : Window
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
         _timer.Tick += (_, _) => PollEvents();
         _timer.Start();
+        UiLog($"UI initialized. instancesRoot={Path.GetFullPath(_config.InstancesRoot)}; uiLog={Path.GetFullPath(_config.UiLogFile)}; pollIntervalMs=500");
     }
 
     private void BuildLayout()
     {
         var refresh = new Button { Content = "Refresh instances", Margin = new Thickness(0, 0, 8, 0) };
-        refresh.Click += (_, _) => RefreshInstances();
+        refresh.Click += (_, _) => { UiLog("UI action: refresh instances clicked."); RefreshInstances(); };
         var selectAll = new Button { Content = "Select all", Margin = new Thickness(0, 0, 8, 0) };
-        selectAll.Click += (_, _) => { foreach (var item in _instances) item.Selected = true; RefreshRows(); };
+        selectAll.Click += (_, _) => { UiLog($"UI action: select all clicked. instances={_instances.Count}"); foreach (var item in _instances) item.Selected = true; RefreshRows(); };
         var clear = new Button { Content = "Clear selection", Margin = new Thickness(0, 0, 8, 0) };
-        clear.Click += (_, _) => { foreach (var item in _instances) item.Selected = false; RefreshRows(); };
+        clear.Click += (_, _) => { UiLog($"UI action: clear selection clicked. instances={_instances.Count}"); foreach (var item in _instances) item.Selected = false; RefreshRows(); };
         var run = new Button { Content = "Run selected", Background = Brushes.DarkGreen, Foreground = Brushes.White };
-        run.Click += (_, _) => RunSelected();
+        run.Click += (_, _) => { UiLog("UI action: run selected clicked."); RunSelected(); };
         var manual = new Button { Content = "Open user manual", Margin = new Thickness(8, 0, 0, 0) };
-        manual.Click += (_, _) => OpenFile(Path.GetFullPath(_config.DocumentationFile), "user manual");
+        manual.Click += (_, _) => { UiLog("UI action: open user manual clicked."); OpenFile(Path.GetFullPath(_config.DocumentationFile), "user manual"); };
         var log = new Button { Content = "Open internal.log", Margin = new Thickness(8, 0, 0, 0) };
-        log.Click += (_, _) => OpenLatestInternalLog();
+        log.Click += (_, _) => { UiLog("UI action: open internal log clicked."); OpenLatestInternalLog(); };
         var dataEngine = new Button { Content = "Open DataEngine", Margin = new Thickness(8, 0, 0, 0) };
-        dataEngine.Click += (_, _) => OpenSelectedDataEngine();
+        dataEngine.Click += (_, _) => { UiLog("UI action: open DataEngine clicked."); OpenSelectedDataEngine(); };
         var resultExcel = new Button { Content = "Open result Excel", Margin = new Thickness(8, 0, 0, 0) };
-        resultExcel.Click += (_, _) => OpenLatestResultWorkbook();
+        resultExcel.Click += (_, _) => { UiLog("UI action: open result Excel clicked."); OpenLatestResultWorkbook(); };
         var templates = new Button { Content = "Open Templates Folder", Margin = new Thickness(8, 0, 0, 0) };
-        templates.Click += (_, _) => OpenTemplatesFolder();
+        templates.Click += (_, _) => { UiLog("UI action: open Templates folder clicked."); OpenTemplatesFolder(); };
         var uiLog = new Button { Content = "Open UI log", Margin = new Thickness(8, 0, 0, 0) };
-        uiLog.Click += (_, _) => OpenFile(Path.GetFullPath(_config.UiLogFile), "UI log");
+        uiLog.Click += (_, _) => { UiLog("UI action: open UI log clicked."); OpenFile(Path.GetFullPath(_config.UiLogFile), "UI log"); };
         var compareAssertions = new Button { Content = "Compare failed assertions", Margin = new Thickness(8, 0, 0, 0) };
-        compareAssertions.Click += async (_, _) => await GenerateAssertionComparisonAsync();
+        compareAssertions.Click += async (_, _) => { UiLog("UI action: compare failed assertions clicked."); await GenerateAssertionComparisonAsync(); };
         var openComparison = new Button { Content = "Open latest comparison", Margin = new Thickness(8, 0, 0, 0) };
-        openComparison.Click += (_, _) => OpenLatestAssertionComparison();
+        openComparison.Click += (_, _) => { UiLog("UI action: open latest comparison clicked."); OpenLatestAssertionComparison(); };
         var top = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(12) };
         top.Children.Add(refresh); top.Children.Add(selectAll); top.Children.Add(clear); top.Children.Add(_enableInternalLog); top.Children.Add(run); top.Children.Add(manual); top.Children.Add(log); top.Children.Add(dataEngine); top.Children.Add(resultExcel); top.Children.Add(templates); top.Children.Add(uiLog); top.Children.Add(compareAssertions); top.Children.Add(openComparison);
 
         _instanceList.Margin = new Thickness(12, 0, 12, 12);
         _instanceList.ItemTemplate = new FuncDataTemplate<InstanceInfo>((item, _) => item is null ? new Border { Height = 1 } : GetOrCreateRow(item));
-        _instanceList.SelectionChanged += (_, _) => ShowDetails(_instanceList.SelectedItem as InstanceInfo);
+        _instanceList.SelectionChanged += (_, _) => { UiLog($"UI action: instance selection changed. instance={(_instanceList.SelectedItem as InstanceInfo)?.Name ?? "<none>"}"); ShowDetails(_instanceList.SelectedItem as InstanceInfo); };
         _details.Margin = new Thickness(12); _details.TextWrapping = TextWrapping.Wrap;
-        _failedOnly.IsCheckedChanged += (_, _) => RefreshAssertionList();
-        _environmentFilter.SelectionChanged += (_, _) => RefreshAssertionList();
+        _failedOnly.IsCheckedChanged += (_, _) => { UiLog($"Assertion filter changed. failedOnly={_failedOnly.IsChecked == true}"); RefreshAssertionList(); };
+        _environmentFilter.SelectionChanged += (_, _) => { UiLog($"Assertion environment filter changed. environment={_environmentFilter.SelectedItem ?? "<none>"}"); RefreshAssertionList(); };
         _environmentFilter.ItemsSource = new[] { "All environments" };
         _environmentFilter.SelectedIndex = 0;
         var refreshAssertions = new Button { Content = "Refresh assertions", Margin = new Thickness(0, 6, 6, 0) };
-        refreshAssertions.Click += (_, _) => { UpdateEnvironmentFilterOptions(); RefreshAssertionList(); };
+        refreshAssertions.Click += (_, _) => { UiLog($"UI action: refresh assertions clicked. instance={_selectedInstance?.Name ?? "<none>"}; assertionsBefore={_selectedInstance?.Assertions.Count ?? 0}"); UpdateEnvironmentFilterOptions(); RefreshAssertionList(); };
         var selectFailed = new Button { Content = "Select failed", Margin = new Thickness(0, 6, 6, 0) };
-        selectFailed.Click += (_, _) => { if (_selectedInstance is not null) foreach (var a in _selectedInstance.Assertions.Where(a => a.Result == "FAIL")) a.Selected = true; RefreshAssertionList(); };
+        selectFailed.Click += (_, _) => { var count = _selectedInstance?.Assertions.Count(a => a.Result == "FAIL") ?? 0; UiLog($"UI action: select failed assertions clicked. instance={_selectedInstance?.Name ?? "<none>"}; failedCount={count}"); if (_selectedInstance is not null) foreach (var a in _selectedInstance.Assertions.Where(a => a.Result == "FAIL")) a.Selected = true; RefreshAssertionList(); };
         var clearAssertions = new Button { Content = "Clear selection", Margin = new Thickness(0, 6, 6, 0) };
-        clearAssertions.Click += (_, _) => { if (_selectedInstance is not null) foreach (var a in _selectedInstance.Assertions) a.Selected = false; RefreshAssertionList(); };
+        clearAssertions.Click += (_, _) => { UiLog($"UI action: clear assertion selection clicked. instance={_selectedInstance?.Name ?? "<none>"}"); if (_selectedInstance is not null) foreach (var a in _selectedInstance.Assertions) a.Selected = false; RefreshAssertionList(); };
         var applyFixes = new Button { Content = "Apply selected actual values", Margin = new Thickness(0, 6, 0, 0) };
-        applyFixes.Click += (_, _) => ApplySelectedFixes();
+        applyFixes.Click += (_, _) => { UiLog($"UI action: apply selected actual values clicked. instance={_selectedInstance?.Name ?? "<none>"}"); ApplySelectedFixes(); };
         var filterLabel = new TextBlock { Text = "Environment:", Margin = new Thickness(0, 10, 0, 0), VerticalAlignment = VerticalAlignment.Top };
         var assertionActions = new StackPanel { Orientation = Orientation.Horizontal, Children = { refreshAssertions, filterLabel, _environmentFilter, selectFailed, clearAssertions, applyFixes } };
         _assertionItems.MinWidth = 900;
@@ -261,7 +266,7 @@ public sealed class MainWindow : Window
     private InstanceRow GetOrCreateRow(InstanceInfo item)
     {
         if (_rows.TryGetValue(item.FolderPath, out var existing)) return existing;
-        var row = new InstanceRow(item, selected => { _instanceList.SelectedItem = selected; ShowDetails(selected); });
+        var row = new InstanceRow(item, selected => { UiLog($"UI action: instance row clicked. instance={selected.Name}"); _instanceList.SelectedItem = selected; ShowDetails(selected); }, UiLog);
         row.SetEnvironmentOptions(item.EnvironmentOptions);
         _rows[item.FolderPath] = row;
         return row;
@@ -285,6 +290,7 @@ public sealed class MainWindow : Window
             .ToList() ?? [];
         _assertionItems.Children.Clear();
         foreach (var assertion in values) _assertionItems.Children.Add(CreateAssertionRow(assertion));
+        UiLog($"Assertion list refreshed. instance={_selectedInstance?.Name ?? "<none>"}; environment={selectedEnvironment ?? "<none>"}; failedOnly={_failedOnly.IsChecked == true}; visible={values.Count}; total={_selectedInstance?.Assertions.Count ?? 0}");
     }
 
     private void UpdateEnvironmentFilterOptions()
@@ -302,13 +308,15 @@ public sealed class MainWindow : Window
             && options.Any(option => option.Equals(current, StringComparison.OrdinalIgnoreCase))) return;
         _environmentFilter.ItemsSource = options;
         _environmentFilter.SelectedItem = options.FirstOrDefault(option => option.Equals(current, StringComparison.OrdinalIgnoreCase)) ?? "All environments";
+        UiLog($"Assertion environment options updated. instance={_selectedInstance?.Name ?? "<none>"}; options={string.Join(",", options)}; selected={_environmentFilter.SelectedItem}");
     }
 
     private void ApplySelectedFixes()
     {
-        if (_selectedInstance is null) return;
+        if (_selectedInstance is null) { UiLog("Apply selected values ignored. reason=no-selected-instance"); return; }
         var selected = _selectedInstance.Assertions.Where(a => a.Selected && a.Result == "FAIL").ToList();
-        if (selected.Count == 0) { _details.Text = "Select one or more failed assertions first."; return; }
+        UiLog($"Apply selected values started. instance={_selectedInstance.Name}; selectedFailed={selected.Count}");
+        if (selected.Count == 0) { _details.Text = "Select one or more failed assertions first."; UiLog($"Apply selected values ignored. instance={_selectedInstance.Name}; reason=no-failed-assertions-selected"); return; }
         try
         {
             var backup = $"{_selectedInstance.WorkbookPath}.backup.{DateTime.Now:yyyyMMdd_HHmmss}.xlsx";
@@ -356,8 +364,9 @@ public sealed class MainWindow : Window
             }
             workbook.Save();
             _details.Text = $"Updated {updated} assertion value(s); added {addedHeaders} response header(s). Skipped {skippedMissing} missing response value(s) and {skippedVariables} variable cell(s); dynamic values were not overwritten. New headers are highlighted green. Backup created: {Path.GetFileName(backup)}. Run the instance again to validate.";
+            UiLog($"Apply selected values completed. instance={_selectedInstance.Name}; updated={updated}; addedHeaders={addedHeaders}; skippedMissing={skippedMissing}; skippedVariables={skippedVariables}; backup={backup}");
         }
-        catch (Exception ex) { _details.Text = $"Workbook update failed: {ex.Message}"; }
+        catch (Exception ex) { _details.Text = $"Workbook update failed: {ex.Message}"; UiLog($"Apply selected values failed. instance={_selectedInstance.Name}; error={ex}"); }
     }
 
     private static bool IsUnexpectedAssertion(AssertionInfo assertion) => assertion.AssertionVerb.Equals("contract", StringComparison.OrdinalIgnoreCase) || assertion.ExpectedValue.Equals("<response-sheet-path>", StringComparison.OrdinalIgnoreCase);
@@ -373,6 +382,7 @@ public sealed class MainWindow : Window
     private void RefreshInstances()
     {
         var root = Path.GetFullPath(_config.InstancesRoot);
+        UiLog($"Instance refresh started. root={root}; prefix={_config.InstancePrefix}");
         Directory.CreateDirectory(root);
         var previous = _instances.ToDictionary(x => x.FolderPath, StringComparer.OrdinalIgnoreCase);
         _instances.Clear();
@@ -417,6 +427,7 @@ public sealed class MainWindow : Window
         }
         _instanceList.ItemsSource = _instances;
         _details.Text = $"Detected {_instances.Count} instance(s) under {root}. Select an instance to see its log. Set Testcases in each row, then select instances and press Run selected.";
+        UiLog($"Instance refresh completed. root={root}; instances={_instances.Count}; elapsedNotMeasured=true");
     }
 
     private void RefreshRows()
@@ -427,7 +438,9 @@ public sealed class MainWindow : Window
 
     private void RunSelected()
     {
-        foreach (var item in _instances.Where(x => x.Selected && (x.Process is null || x.Process.HasExited)))
+        var selected = _instances.Where(x => x.Selected).ToList();
+        UiLog($"Run selected started. selected={selected.Count}; runnable={selected.Count(x => x.Process is null || x.Process.HasExited)}");
+        foreach (var item in selected.Where(x => x.Process is null || x.Process.HasExited))
         {
             try
             {
@@ -447,6 +460,7 @@ public sealed class MainWindow : Window
                 item.Process = Process.Start(new ProcessStartInfo(runnerIsDll ? "dotnet" : runner, runnerIsDll ? $"\"{runner}\" {runnerArgs}" : runnerArgs) { WorkingDirectory = item.FolderPath, UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = false, RedirectStandardError = false });
                 UiLog($"Runner launch returned. instance={item.Name}; runId={item.CurrentRunId}; uiLaunchId={uiLaunchId}; processId={item.Process?.Id}; returnedAt={DateTimeOffset.Now:O}");
                 item.Status = "Running"; item.LastEvent = $"Started with testcases {selection}"; item.EventPosition = 0; item.EventLineIndex = 0; item.EventLinePositions.Clear(); item.Assertions.Clear();
+                UiLog($"Run state initialized. instance={item.Name}; runId={item.CurrentRunId}; testcases={selection}; mode={item.ExecutionMode}; environments={environments}; dataIds={item.DataIdSelection}; internalLog={_enableInternalLog.IsChecked == true}");
             }
             catch (Exception ex)
             {
@@ -455,7 +469,9 @@ public sealed class MainWindow : Window
                 item.LastEvent = ex.Message;
             }
         }
+        foreach (var item in selected.Where(x => x.Process is { HasExited: false })) UiLog($"Run skipped for already-running instance. instance={item.Name}; processId={item.Process?.Id}");
         RefreshRows();
+        UiLog("Run selected completed.");
     }
 
     private void PollEvents()
@@ -519,6 +535,7 @@ public sealed class MainWindow : Window
             var targetUrl = e.TryGetProperty("targetUrl", out var urlProperty) ? urlProperty.GetString() : "";
             var status = e.TryGetProperty("httpStatus", out var statusProperty) ? statusProperty.GetInt32().ToString() : "";
             item.LastEvent = $"DataId {e.GetProperty("dataId").GetString()} / Step {e.GetProperty("stepName").GetString()} [{stepType}] {e.GetProperty("result").GetString()} | HTTP {status} | assertions passed: {e.GetProperty("assertionsPassed").GetInt32()}, failed: {e.GetProperty("assertionsFailed").GetInt32()} | error: {error} | template: {template} | url: {targetUrl}";
+            UiLog($"Runner event applied. type=request-completed; instance={item.Name}; runId={item.CurrentRunId}; dataId={e.GetProperty("dataId").GetString()}; step={e.GetProperty("stepName").GetString()}; result={e.GetProperty("result").GetString()}; status={status}; assertionsPassed={e.GetProperty("assertionsPassed").GetInt32()}; assertionsFailed={e.GetProperty("assertionsFailed").GetInt32()}");
         }
         if (type == "assertion-completed")
         {
@@ -531,6 +548,7 @@ public sealed class MainWindow : Window
             };
             item.Assertions.Add(assertion);
             if (assertion.Result == "FAIL") item.LastEvent = $"FAILED: {assertion.ResponsePath} expected {assertion.ExpectedValue} actual {assertion.ActualValue}";
+            UiLog($"Runner event applied. type=assertion-completed; instance={item.Name}; runId={item.CurrentRunId}; dataId={assertion.DataId}; step={assertion.StepName}; path={assertion.ResponsePath}; result={assertion.Result}; environment={assertion.Environment}");
         }
         if (type == "run-completed")
         {
@@ -541,12 +559,15 @@ public sealed class MainWindow : Window
                 item.CurrentRunFolder = Path.GetDirectoryName(Path.GetFullPath(historyPath)) ?? item.CurrentRunFolder;
                 item.LastEvent = $"Run completed: {item.Status}; history: {historyPath}";
             }
+            var completedHistory = e.TryGetProperty("historyFile", out var historyEvent) ? historyEvent.GetString() ?? "" : "";
+            UiLog($"Runner event applied. type=run-completed; instance={item.Name}; runId={item.CurrentRunId}; result={item.Status}; history={completedHistory}");
         }
     }
 
     private void ShowDetails(InstanceInfo? item)
     {
         _selectedInstance = item;
+        UiLog($"Details selection changed. instance={item?.Name ?? "<none>"}; assertions={item?.Assertions.Count ?? 0}");
         UpdateEnvironmentFilterOptions();
         UpdateDetailsText();
         RefreshAssertionList();
@@ -560,28 +581,31 @@ public sealed class MainWindow : Window
 
     private void OpenLatestInternalLog()
     {
-        if (_selectedInstance is null) { _details.Text = "Select an instance first."; return; }
+        if (_selectedInstance is null) { _details.Text = "Select an instance first."; UiLog("Open internal.log ignored. reason=no-selected-instance"); return; }
         var path = FindLatestInternalLog(_selectedInstance);
-        if (path is null) { _details.Text = "No internal.log exists for this instance yet. Run it with internal logging enabled."; return; }
+        if (path is null) { _details.Text = "No internal.log exists for this instance yet. Run it with internal logging enabled."; UiLog($"Open internal.log ignored. instance={_selectedInstance.Name}; reason=file-not-found"); return; }
+        UiLog($"Opening latest internal.log. instance={_selectedInstance.Name}; path={path}");
         OpenFile(path, "internal.log");
     }
 
     private void OpenSelectedDataEngine()
     {
-        if (_selectedInstance is null) { _details.Text = "Select an instance first."; return; }
+        if (_selectedInstance is null) { _details.Text = "Select an instance first."; UiLog("Open DataEngine ignored. reason=no-selected-instance"); return; }
+        UiLog($"Opening DataEngine workbook. instance={_selectedInstance.Name}; path={_selectedInstance.WorkbookPath}");
         OpenExcelFile(_selectedInstance.WorkbookPath, "DataEngine workbook");
     }
 
     private void OpenLatestResultWorkbook()
     {
-        if (_selectedInstance is null) { _details.Text = "Select an instance first."; return; }
+        if (_selectedInstance is null) { _details.Text = "Select an instance first."; UiLog("Open result workbook ignored. reason=no-selected-instance"); return; }
         var folder = _selectedInstance.CurrentRunFolder;
         if (Directory.Exists(folder) && Path.GetFileName(folder).Equals("log", StringComparison.OrdinalIgnoreCase))
             folder = Directory.GetParent(folder)?.FullName ?? folder;
         var path = !string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder)
             ? Directory.GetFiles(folder, "*.xlsx", SearchOption.AllDirectories).OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault()
             : null;
-        if (path is null) { _details.Text = "No result Excel workbook exists for the current run yet."; return; }
+        if (path is null) { _details.Text = "No result Excel workbook exists for the current run yet."; UiLog($"Open result workbook ignored. instance={_selectedInstance.Name}; reason=file-not-found"); return; }
+        UiLog($"Opening latest result workbook. instance={_selectedInstance.Name}; path={path}");
         OpenExcelFile(path, "result workbook");
     }
 
@@ -590,6 +614,7 @@ public sealed class MainWindow : Window
         if (_selectedInstance is null)
         {
             _details.Text = "Select an instance first.";
+            UiLog("Assertion comparison ignored. reason=no-selected-instance");
             return;
         }
 
@@ -600,6 +625,7 @@ public sealed class MainWindow : Window
         if (snapshot.Count == 0)
         {
             _details.Text = "No assertions are available for comparison yet.";
+            UiLog($"Assertion comparison ignored. instance={instance.Name}; reason=no-assertions");
             return;
         }
 
@@ -625,6 +651,7 @@ public sealed class MainWindow : Window
         if (_selectedInstance is null)
         {
             _details.Text = "Select an instance first.";
+            UiLog("Open assertion comparison ignored. reason=no-selected-instance");
             return;
         }
 
@@ -635,8 +662,10 @@ public sealed class MainWindow : Window
         if (path is null)
         {
             _details.Text = "No assertion comparison workbook exists yet.";
+            UiLog($"Open assertion comparison ignored. instance={_selectedInstance.Name}; reason=file-not-found");
             return;
         }
+        UiLog($"Opening latest assertion comparison. instance={_selectedInstance.Name}; path={path}");
         OpenExcelFile(path, "assertion comparison workbook");
     }
 
@@ -744,7 +773,8 @@ public sealed class MainWindow : Window
 
     private void OpenTemplatesFolder()
     {
-        if (_selectedInstance is null) { _details.Text = "Select an instance first."; return; }
+        if (_selectedInstance is null) { _details.Text = "Select an instance first."; UiLog("Open Templates folder ignored. reason=no-selected-instance"); return; }
+        UiLog($"Opening Templates folder. instance={_selectedInstance.Name}; path={_selectedInstance.TemplatesFolder}");
         OpenFolder(_selectedInstance.TemplatesFolder, "Templates folder");
     }
 
