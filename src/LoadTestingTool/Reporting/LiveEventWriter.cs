@@ -42,7 +42,10 @@ public sealed class LiveEventWriter : IDisposable
             durationMs = request.DurationMs,
             assertionsPassed = request.Assertions.Count(a => a.Result == "PASS"),
             assertionsFailed = request.Assertions.Count(a => a.Result == "FAIL"),
-            errorMessage = request.ErrorMessage
+            errorMessage = request.ErrorMessage,
+            failureCategory = request.FailureCategory,
+            runtimeReference = request.RuntimeReference,
+            runtimeReferenceKey = request.RuntimeReferenceKey
             ,environment = request.Environment
         };
         Write(message);

@@ -155,6 +155,9 @@ public sealed class RequestResult
     public List<CorrelationRecord> Correlations { get; } = [];
     public List<AssertionResult> Assertions { get; } = [];
     public string ErrorMessage { get; set; } = string.Empty;
+    public string FailureCategory { get; set; } = string.Empty;
+    public string RuntimeReference { get; set; } = string.Empty;
+    public string RuntimeReferenceKey { get; set; } = string.Empty;
     public string Environment { get; init; } = string.Empty;
     public string Result => ErrorMessage.Length > 0 || Assertions.Any(a => a.Result == "FAIL") || (HttpStatus is < 200 or >= 300) ? "FAIL" : "PASS";
 }

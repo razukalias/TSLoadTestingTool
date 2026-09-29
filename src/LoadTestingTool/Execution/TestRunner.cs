@@ -7,6 +7,19 @@ using LoadTestingTool.Reporting;
 
 namespace LoadTestingTool.Execution;
 
+internal sealed class RuntimeReferenceException : Exception
+{
+    public RuntimeReferenceException(string key, string reference)
+        : base($"Missing runtime response value '{key}' for From_ reference '{reference}'.")
+    {
+        Key = key;
+        Reference = reference;
+    }
+
+    public string Key { get; }
+    public string Reference { get; }
+}
+
 public sealed class TestRunner
 {
     private readonly HttpClient _client; private readonly AssertionEngine _assertions; private readonly string _templatesFolder; private readonly int _timeoutSeconds; private readonly Action<RequestResult>? _requestCompleted; private readonly InternalLogger _logger; private readonly FeatureConfig _features; private readonly ExecutionPipeline _pipeline; private int _sequence;
@@ -42,13 +55,28 @@ public sealed class TestRunner
                     if (!request.Enabled) { _logger.Info($"Step disabled. Testcase={testcase.TestcaseIndex}; dataid={data.DataId}; stepName={request.StepName}"); continue; }
                     if (request.Iterations < iteration) { _logger.Info($"Step skipped. Testcase={testcase.TestcaseIndex}; dataid={data.DataId}; stepName={request.StepName}; iteration={iteration}"); continue; }
                     if (request.WaitMs > 0) { _logger.Info($"Waiting {request.WaitMs} ms before dataid={data.DataId}, step {request.StepName}."); await Task.Delay(request.WaitMs, cancellationToken); }
-                    var variables = StepVariables(data, request.StepName); if (!string.IsNullOrWhiteSpace(environment)) variables["env"] = environment; foreach (var pair in correlation) variables[pair.Key] = pair.Value;
-                    foreach (var key in variables.Keys.ToList()) variables[key] = ResolveRuntimeReferences(variables[key], correlation);
+                    Dictionary<string, string> variables;
+                    try
+                    {
+                        variables = StepVariables(data, request.StepName);
+                        if (!string.IsNullOrWhiteSpace(environment)) variables["env"] = environment;
+                        foreach (var pair in correlation) variables[pair.Key] = pair.Value;
+                        foreach (var key in variables.Keys.ToList()) variables[key] = ResolveRuntimeReferences(variables[key], correlation);
+                    }
+                    catch (RuntimeReferenceException ex)
+                    {
+                        var failure = CreateRuntimeReferenceFailure(run, testcase, data.DataId, request, ++stepOrder, threadId, iteration, environment, ex);
+                        testcaseResult.Requests.Add(failure);
+                        _requestCompleted?.Invoke(failure);
+                        _logger.Warn($"Stopping current data row after missing runtime reference. testcase={testcase.TestcaseIndex}; dataid={data.DataId}; stepName={request.StepName}; iteration={iteration}; reference={ex.Reference}");
+                        break;
+                    }
                     foreach (var variable in variables) executionContext.Set(variable.Key, variable.Value, VariableScope.Iteration);
                     foreach (var source in correlationSources.Values) if (string.IsNullOrWhiteSpace(source.UsedByStepName) || !source.UsedByStepName.Split(',', StringSplitOptions.TrimEntries).Contains(request.StepName, StringComparer.OrdinalIgnoreCase)) source.UsedByStepName = string.IsNullOrWhiteSpace(source.UsedByStepName) ? request.StepName : $"{source.UsedByStepName},{request.StepName}";
                     var definitions = workbook.Assertions.GetValueOrDefault((request.TestcaseIndex, data.DataId, request.StepName)) ?? [];
                     var result = await ExecuteRequestAsync(run, testcase, data.DataId, request, variables, definitions, ++stepOrder, threadId, iteration, correlation, correlationSources, executionContext, cancellationToken, environment);
                     testcaseResult.Requests.Add(result);
+                    if (result.FailureCategory.Equals("RuntimeReference", StringComparison.OrdinalIgnoreCase)) { _logger.Warn($"Stopping current data row after missing runtime reference. dataid={data.DataId}; step={request.StepName}; iteration={iteration}; remaining rows will continue."); break; }
                     if (result.Result == "FAIL" && request.StopOnFailure) { _logger.Warn($"Stopping testcase sequence after failed dataid={data.DataId}, step {request.StepName} because stopOnFailure=true."); break; }
                 }
                 testcaseResult.EndedAt = DateTimeOffset.Now; lock (run.Testcases) run.Testcases.Add(testcaseResult);
@@ -59,6 +87,38 @@ public sealed class TestRunner
     }
 
     private static Dictionary<string, string> StepVariables(RequestDataRow data, string stepName) { var prefix = stepName + "."; return new Dictionary<string, string>(data.Variables.Where(x => x.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToDictionary(x => x.Key[prefix.Length..], x => x.Value, StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase); }
+
+    private RequestResult CreateRuntimeReferenceFailure(RunResult run, TestcaseDefinition testcase, string dataId, RequestStep step, int sequence, int thread, int iteration, string environment, RuntimeReferenceException exception)
+    {
+        var now = DateTimeOffset.Now;
+        var requestId = $"REF-{Interlocked.Increment(ref _sequence):D8}";
+        var message = exception.Message;
+        _logger.Error($"RUNTIME REFERENCE FAILURE [{requestId}] testcase={testcase.TestcaseIndex}; testcaseName={testcase.Testcase}; dataid={dataId}; stepName={step.StepName}; thread={thread}; iteration={iteration}; reference={exception.Reference}; key={exception.Key}", exception);
+        return new RequestResult
+        {
+            RunId = run.RunId,
+            RequestId = requestId,
+            TestcaseIndex = step.TestcaseIndex,
+            Testcase = testcase.Testcase,
+            DataId = dataId,
+            StepName = step.StepName,
+            StepType = step.StepType.WireName(),
+            Thread = thread,
+            Iteration = iteration,
+            SequenceOrder = sequence,
+            StartedAt = now,
+            EndedAt = now,
+            Verb = step.StepType.WireName(),
+            TemplateSource = step.TemplateSource,
+            StepConfig = step.StepConfig,
+            HttpStatus = 0,
+            ErrorMessage = message,
+            FailureCategory = "RuntimeReference",
+            RuntimeReference = exception.Reference,
+            RuntimeReferenceKey = exception.Key,
+            Environment = environment
+        };
+    }
 
     private async Task<RequestResult> ExecuteRequestAsync(RunResult run, TestcaseDefinition testcase, string dataId, RequestStep step, Dictionary<string, string> variables, IReadOnlyList<AssertionDefinition> definitions, int sequence, int thread, int iteration, Dictionary<string, string> correlation, Dictionary<string, CorrelationRecord> correlationSources, LoadTestingTool.Domain.ExecutionContext executionContext, CancellationToken cancellationToken, string environment)
     {
@@ -100,6 +160,12 @@ public sealed class TestRunner
         catch (Exception ex)
         {
             result.ErrorMessage = FormatException("HTTP request preparation/execution failed", ex);
+            if (ex is RuntimeReferenceException referenceException)
+            {
+                result.FailureCategory = "RuntimeReference";
+                result.RuntimeReference = referenceException.Reference;
+                result.RuntimeReferenceKey = referenceException.Key;
+            }
             result.HttpStatus = 0;
             _logger.Error($"REQUEST FAILED [{requestId}] testcase={testcase.TestcaseIndex}; testcaseName={testcase.Testcase}; dataid={dataId}; stepName={step.StepName}; stepType={step.StepType.WireName()}; template={templatePath}; templateExists={File.Exists(templatePath)}; url={result.TargetUrl}; verb={step.Verb}; contentType={result.ContentType}; requestBody={result.RequestBody}; requestHeaders={result.RequestHeaders}", ex);
         }
@@ -147,6 +213,12 @@ public sealed class TestRunner
         catch (Exception ex)
         {
             result.ErrorMessage = FormatException("Step preparation/execution failed", ex);
+            if (ex is RuntimeReferenceException referenceException)
+            {
+                result.FailureCategory = "RuntimeReference";
+                result.RuntimeReference = referenceException.Reference;
+                result.RuntimeReferenceKey = referenceException.Key;
+            }
             _logger.Error($"STEP FAILED [{requestId}] testcase={testcase.TestcaseIndex}; testcaseName={testcase.Testcase}; dataid={dataId}; stepName={step.StepName}; stepType={step.StepType.WireName()}; template={templatePath}; templateExists={(!string.IsNullOrWhiteSpace(templatePath) && File.Exists(templatePath))}; targetUrl={step.TargetUrl}; verb={step.Verb}; contentType={step.ContentType}; stepConfig={step.StepConfig}; requestPayload={result.RequestBody}; responsePayload={result.ResponseBody}; status={result.HttpStatus}", ex);
         }
         finally
@@ -164,7 +236,7 @@ public sealed class TestRunner
             var key = match.Groups[1].Value;
             return correlation.TryGetValue(key, out var actual)
                 ? actual
-                : throw new InvalidDataException($"Missing runtime response value '{key}' for From_ reference '{match.Value}'.");
+                : throw new RuntimeReferenceException(key, match.Value);
         }, RegexOptions.IgnoreCase);
     }
     private static IReadOnlyList<AssertionDefinition> ResolveAssertionReferences(IReadOnlyList<AssertionDefinition> definitions, IReadOnlyDictionary<string, string> correlation)
