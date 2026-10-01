@@ -102,8 +102,12 @@ public sealed class WorkbookReader
             foreach (var column in h.OrderBy(x => x.Value))
             {
                 if (column.Key is "testcaseindex" or "testcase" or "dataid" or "extractvariable") continue;
-                var (stepName, path, headerVerb) = ParseAssertionHeader(column.Key); var cell = Compile(row.Cell(column.Value).GetString().Trim(), workbook, sheet, compiledCellCache);
-                if (string.IsNullOrWhiteSpace(cell)) continue;
+                var (stepName, path, headerVerb) = ParseAssertionHeader(column.Key);
+                var cell = Compile(row.Cell(column.Value).GetString().Trim(), workbook, sheet, compiledCellCache);
+                // Empty cells normally mean that no equality/content assertion was configured.
+                // Structural assertions are different: {empty}, {notempty}, {exists}, and
+                // {notexists} intentionally use a blank expected value.
+                if (string.IsNullOrWhiteSpace(cell) && !AllowsBlankExpectedValue(headerVerb)) continue;
                 var (cellVerb, expected) = ParseAssertionCell(cell);
                 assertions.Add(new AssertionDefinition { TestcaseIndex = index, Testcase = testcase, DataId = dataId, StepName = stepName, ResponsePath = path, HeaderAssertionVerb = headerVerb, AssertionVerb = string.IsNullOrWhiteSpace(cellVerb) ? headerVerb : cellVerb, ExpectedValue = expected, ExcelRowNumber = row.RowNumber(), ExpectedValueColumn = column.Value, ResponseColumn = column.Value });
             }
@@ -117,6 +121,10 @@ public sealed class WorkbookReader
                 assertions[assertions.IndexOf(match)] = new AssertionDefinition { TestcaseIndex = match.TestcaseIndex, Testcase = match.Testcase, DataId = match.DataId, StepName = match.StepName, ResponsePath = match.ResponsePath, HeaderAssertionVerb = match.HeaderAssertionVerb, AssertionVerb = match.AssertionVerb, ExpectedValue = match.ExpectedValue, ExtractVariable = parts[1].Trim(), ExcelRowNumber = match.ExcelRowNumber, ExpectedValueColumn = match.ExpectedValueColumn, ResponseColumn = match.ResponseColumn };
             }
             foreach (var group in assertions.GroupBy(a => (a.TestcaseIndex, a.DataId, a.StepName), AssertionKeyComparer.Instance)) result[group.Key] = group.ToList();
+            // Keep the response-row identity even when the row intentionally has no
+            // assertions. Workbook validation must distinguish an empty response row
+            // from a missing response row.
+            if (assertions.Count == 0) result[(index, dataId, string.Empty)] = [];
         }
         return result;
     }
@@ -157,6 +165,10 @@ public sealed class WorkbookReader
     private static IReadOnlyList<string> SplitValues(string value) => string.IsNullOrWhiteSpace(value) ? [] : value.Split(',', '|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     private static string EnvironmentText(Dictionary<string, int> headers, IXLRow row) => new[] { "environments", "environment", "enviromests", "enviromments" }.Select(name => Text(headers, row, name)).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
     private static bool IsVerb(string value) => new[] { "eq", "ne", "lt", "lte", "gt", "gte", "contains", "notcontains", "startswith", "endswith", "regex", "exists", "notexists", "empty", "notempty", "in", "size" }.Contains(value.Trim().ToLowerInvariant());
+    private static bool AllowsBlankExpectedValue(string value) => value.Equals("empty", StringComparison.OrdinalIgnoreCase)
+        || value.Equals("notempty", StringComparison.OrdinalIgnoreCase)
+        || value.Equals("exists", StringComparison.OrdinalIgnoreCase)
+        || value.Equals("notexists", StringComparison.OrdinalIgnoreCase);
     private static string Compile(string value, XLWorkbook workbook, IXLWorksheet currentSheet, Dictionary<string, string> compiledCellCache) => Compile(value, workbook, currentSheet, compiledCellCache, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
     private static string Compile(string value, XLWorkbook workbook, IXLWorksheet currentSheet, Dictionary<string, string> compiledCellCache, HashSet<string> resolving)
     {
