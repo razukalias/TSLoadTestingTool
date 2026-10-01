@@ -56,13 +56,24 @@ public sealed class InternalLogger : IDisposable
     public void Warn(string message) => Write("WARN", message);
     public void Error(string message, Exception? exception = null) => Write("ERROR", exception is null ? message : $"{message} | {exception.GetType().Name}: {exception.Message}{Environment.NewLine}{exception.StackTrace}");
 
+    public void Section(string title)
+    {
+        if (!Enabled || _writers.Count == 0) return;
+        Write("INFO", $"==================== {title.Trim()} ====================");
+    }
+
     private void Write(string level, string message)
     {
         if (!Enabled || _writers.Count == 0) return;
         lock (_sync)
         {
-            var line = $"{DateTimeOffset.Now:O} [{level}] [{_instanceId}] [run={_runId}] {MaskSensitiveData(message)}";
-            foreach (var writer in _writers) writer.WriteLine(line);
+            var timestamp = DateTimeOffset.Now.ToString("O");
+            var lines = (message ?? string.Empty).Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+            foreach (var rawLine in lines)
+            {
+                var line = $"{timestamp} [{level}] [{_instanceId}] [run={_runId}] {MaskSensitiveData(rawLine)}";
+                foreach (var writer in _writers) writer.WriteLine(line);
+            }
         }
     }
 

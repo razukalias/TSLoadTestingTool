@@ -24,7 +24,7 @@ public sealed class WorkbookReader
             var testcase = Text(configHeaders, row, "testcase");
             var stepName = Text(configHeaders, row, "stepname");
             var template = Text(configHeaders, row, "templetsource");
-            var url = Compile(Text(configHeaders, row, "targeturl"), workbook, config, compiledCellCache);
+            var url = Compile(Text(configHeaders, row, "targeturl"), workbook, config, compiledCellCache, row.RowNumber());
             var stepType = StepTypeParser.Parse(Text(configHeaders, row, "steptype", "HTTP"));
             if (string.IsNullOrWhiteSpace(testcase) || string.IsNullOrWhiteSpace(stepName)) throw new InvalidDataException($"config row {row.RowNumber()} is missing testcase or stepname.");
             if ((stepType is StepType.Http or StepType.GraphQL or StepType.CaseQL) && string.IsNullOrWhiteSpace(url)) throw new InvalidDataException($"config row {row.RowNumber()} requires targetUrl for {stepType.WireName()}.");
@@ -78,7 +78,7 @@ public sealed class WorkbookReader
                 var cellKey = $"{sheet.Name}!{column.Key}!{row.RowNumber()}";
                 if (!compiledCellCache.TryGetValue(cellKey, out var compiledValue))
                 {
-                    compiledValue = Compile(Text(h, row, column.Key), workbook, sheet, compiledCellCache);
+                    compiledValue = Compile(Text(h, row, column.Key), workbook, sheet, compiledCellCache, row.RowNumber());
                     compiledCellCache[cellKey] = compiledValue;
                 }
                 vars[column.Key] = compiledValue;
@@ -103,7 +103,7 @@ public sealed class WorkbookReader
             {
                 if (column.Key is "testcaseindex" or "testcase" or "dataid" or "extractvariable") continue;
                 var (stepName, path, headerVerb) = ParseAssertionHeader(column.Key);
-                var cell = Compile(row.Cell(column.Value).GetString().Trim(), workbook, sheet, compiledCellCache);
+                var cell = Compile(row.Cell(column.Value).GetString().Trim(), workbook, sheet, compiledCellCache, row.RowNumber());
                 // Empty cells normally mean that no equality/content assertion was configured.
                 // Structural assertions are different: {empty}, {notempty}, {exists}, and
                 // {notexists} intentionally use a blank expected value.
@@ -169,14 +169,21 @@ public sealed class WorkbookReader
         || value.Equals("notempty", StringComparison.OrdinalIgnoreCase)
         || value.Equals("exists", StringComparison.OrdinalIgnoreCase)
         || value.Equals("notexists", StringComparison.OrdinalIgnoreCase);
-    private static string Compile(string value, XLWorkbook workbook, IXLWorksheet currentSheet, Dictionary<string, string> compiledCellCache) => Compile(value, workbook, currentSheet, compiledCellCache, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
-    private static string Compile(string value, XLWorkbook workbook, IXLWorksheet currentSheet, Dictionary<string, string> compiledCellCache, HashSet<string> resolving)
+    private static string Compile(string value, XLWorkbook workbook, IXLWorksheet currentSheet, Dictionary<string, string> compiledCellCache, int? currentRowNumber = null) => Compile(value, workbook, currentSheet, compiledCellCache, new HashSet<string>(StringComparer.OrdinalIgnoreCase), currentRowNumber);
+    private static string Compile(string value, XLWorkbook workbook, IXLWorksheet currentSheet, Dictionary<string, string> compiledCellCache, HashSet<string> resolving, int? currentRowNumber)
     {
         var result = value ?? string.Empty;
-        result = Regex.Replace(result, @"<From_([^_>]+)_([^_>]+)_(\d+)>", m =>
+        result = Regex.Replace(result, @"<From_([^_>]+)_([^_>]+)_(\d+|r)>", m =>
         {
             var sheetName = m.Groups[1].Value;
             var header = m.Groups[2].Value;
+            if (m.Groups[3].Value.Equals("r", StringComparison.OrdinalIgnoreCase))
+            {
+                if (sheetName.Equals("response", StringComparison.OrdinalIgnoreCase) && header.Contains('.', StringComparison.Ordinal)) return m.Value;
+                if (!currentRowNumber.HasValue) throw new InvalidDataException($"Cannot resolve corresponding row for <From_{sheetName}_{header}_r> without an active workbook row.");
+                var correspondingRow = CorrespondingRow(workbook, currentSheet, currentSheet.Row(currentRowNumber.Value), sheetName);
+                return Cell(workbook, sheetName, header, correspondingRow, compiledCellCache, resolving);
+            }
             return sheetName.Equals("response", StringComparison.OrdinalIgnoreCase) && header.Contains('.', StringComparison.Ordinal)
                 ? m.Value
                 : Cell(workbook, sheetName, header, int.Parse(m.Groups[3].Value), compiledCellCache, resolving);
@@ -220,6 +227,17 @@ public sealed class WorkbookReader
     }
 
     private static string FormatGuidToken(string? format) => Guid.NewGuid().ToString(string.IsNullOrWhiteSpace(format) ? "D" : format.Trim().ToUpperInvariant());
+    private static int CorrespondingRow(XLWorkbook workbook, IXLWorksheet currentSheet, IXLRow currentRow, string sourceSheetName)
+    {
+        var source = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(sourceSheetName, StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidDataException($"Referenced sheet '{sourceSheetName}' was not found.");
+        var currentHeaders = Headers(currentSheet); var sourceHeaders = Headers(source);
+        if (!currentHeaders.TryGetValue("testcaseindex", out var currentIndexColumn) || !currentHeaders.TryGetValue("dataid", out var currentDataIdColumn)
+            || !sourceHeaders.TryGetValue("testcaseindex", out var sourceIndexColumn) || !sourceHeaders.TryGetValue("dataid", out var sourceDataIdColumn))
+            throw new InvalidDataException($"Cannot resolve corresponding row for <From_{sourceSheetName}_..._r>; both sheets must contain testcaseindex and dataid columns.");
+        var testcaseIndex = currentRow.Cell(currentIndexColumn).GetString().Trim(); var dataId = currentRow.Cell(currentDataIdColumn).GetString().Trim();
+        var match = source.RowsUsed().Skip(1).FirstOrDefault(row => row.Cell(sourceIndexColumn).GetString().Trim().Equals(testcaseIndex, StringComparison.OrdinalIgnoreCase) && row.Cell(sourceDataIdColumn).GetString().Trim().Equals(dataId, StringComparison.OrdinalIgnoreCase));
+        return match?.RowNumber() ?? throw new InvalidDataException($"No corresponding row found in sheet '{sourceSheetName}' for testcaseindex '{testcaseIndex}' and dataid '{dataId}'.");
+    }
     private static string Cell(XLWorkbook workbook, string sheetName, string header, int rowNumber, Dictionary<string, string> compiledCellCache, HashSet<string> resolving)
     {
         var sheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(sheetName, StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidDataException($"Referenced sheet '{sheetName}' was not found.");
@@ -229,7 +247,7 @@ public sealed class WorkbookReader
         if (!resolving.Add(key)) throw new InvalidDataException($"Circular workbook reference detected at '{key}'.");
         try
         {
-            var compiledValue = Compile(sheet.Cell(rowNumber, column).GetString(), workbook, sheet, compiledCellCache, resolving);
+            var compiledValue = Compile(sheet.Cell(rowNumber, column).GetString(), workbook, sheet, compiledCellCache, resolving, rowNumber);
             compiledCellCache[key] = compiledValue;
             return compiledValue;
         }

@@ -20,7 +20,13 @@ public sealed class AssertionEngine
         var expectedPaths = activeDefinitions.Select(d => d.ResponsePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var missing in expectedPaths.Where(path => !values.ContainsKey(path)))
             if (!results.Any(r => r.ResponsePath.Equals(missing, StringComparison.OrdinalIgnoreCase))) results.Add(Mismatch(runId, requestId, definitions[0], missing, "<missing>", $"Missing response path '{missing}' in payload."));
-        foreach (var unexpected in values.Keys.Where(path => !assertOnlyResponse && !expectedPaths.Contains(path) && (!ignoreEmptyUnconfigured || !IsEmptyUnconfiguredField(values, path))))
+        // statusCode is runner metadata, not a JSON/XML payload field. It remains
+        // available for an explicit response-sheet assertion, but is not an
+        // unexpected payload field when no such assertion was configured.
+        foreach (var unexpected in values.Keys.Where(path => !assertOnlyResponse
+            && !path.Equals("statusCode", StringComparison.OrdinalIgnoreCase)
+            && !expectedPaths.Contains(path)
+            && (!ignoreEmptyUnconfigured || !IsEmptyUnconfiguredField(values, path))))
             results.Add(Mismatch(runId, requestId, definitions[0], unexpected, values[unexpected], $"Unexpected response path '{unexpected}' returned by payload."));
         return results;
     }
