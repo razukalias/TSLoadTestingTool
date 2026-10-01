@@ -2,6 +2,7 @@ using System.Collections;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using LoadTestingTool.Domain;
 
@@ -9,6 +10,7 @@ namespace LoadTestingTool.Execution;
 
 public sealed class GraphQlStepExecutor : IStepExecutor
 {
+    private static readonly JsonSerializerOptions ReadableJsonOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     private readonly HttpClient _client;
     private readonly bool _flattenCaseQl;
     public GraphQlStepExecutor(HttpClient client, bool flattenCaseQl = false) { _client = client; _flattenCaseQl = flattenCaseQl; }
@@ -29,11 +31,11 @@ public sealed class GraphQlStepExecutor : IStepExecutor
             var payload = new Dictionary<string, object?> { ["query"] = query, ["variables"] = variables };
             if (!string.IsNullOrWhiteSpace(options.OperationName)) payload["operationName"] = request.Context.Resolve(options.OperationName);
             var url = request.Context.ResolveUrl(request.Step.TargetUrl);
-            using var message = new HttpRequestMessage(HttpMethod.Post, url) { Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json") };
+            using var message = new HttpRequestMessage(HttpMethod.Post, url) { Content = new StringContent(JsonSerializer.Serialize(payload, ReadableJsonOptions), Encoding.UTF8, "application/json") };
             foreach (var header in request.Step.Headers) message.Headers.TryAddWithoutValidation(header.Key, request.Context.Resolve(header.Value));
             using var response = await _client.SendAsync(message, request.CancellationToken);
             result.StatusCode = (int)response.StatusCode;
-            result.RequestText = JsonSerializer.Serialize(payload);
+            result.RequestText = JsonSerializer.Serialize(payload, ReadableJsonOptions);
             result.ResponseText = await response.Content.ReadAsStringAsync(request.CancellationToken);
             using var document = JsonDocument.Parse(result.ResponseText);
             if (document.RootElement.TryGetProperty("data", out var data))
@@ -42,7 +44,7 @@ public sealed class GraphQlStepExecutor : IStepExecutor
                 if (_flattenCaseQl)
                 {
                     output = CaseQlTransformer.Flatten(output);
-                    result.ResponseText = JsonSerializer.Serialize(new { data = output });
+                    result.ResponseText = JsonSerializer.Serialize(new { data = output }, ReadableJsonOptions);
                 }
                 result.Outputs["data"] = output;
             }

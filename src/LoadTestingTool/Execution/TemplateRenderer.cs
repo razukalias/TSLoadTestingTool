@@ -1,12 +1,18 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using System.Text.Encodings.Web;
 
 namespace LoadTestingTool.Execution;
 
 public static class TemplateRenderer
 {
     private const string Name = @"[\p{L}\p{N}._\-\[\]]+";
+    private static readonly JsonSerializerOptions ReadableJsonOptions = new()
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        WriteIndented = true
+    };
 
     public static string Render(string raw, string contentType, IReadOnlyDictionary<string, string> variables)
     {
@@ -54,7 +60,7 @@ public static class TemplateRenderer
             var root = JsonNode.Parse(json);
             if (root is null) return json;
             PruneEmptyObjects(root, isRoot: true);
-            return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+            return root.ToJsonString(ReadableJsonOptions);
         }
         catch (JsonException)
         {
