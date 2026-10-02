@@ -64,7 +64,8 @@ public sealed class TestRunner
                         variables = StepVariables(data, request.StepName);
                         if (!string.IsNullOrWhiteSpace(environment)) variables["env"] = environment;
                         foreach (var pair in correlation) variables[pair.Key] = pair.Value;
-                        foreach (var key in variables.Keys.ToList()) variables[key] = ResolveRuntimeReferences(variables[key], correlation, requestReferences);
+                        foreach (var variable in variables) executionContext.Set(variable.Key, variable.Value, VariableScope.Iteration);
+                        foreach (var key in variables.Keys.ToList()) variables[key] = await ResolveDynamicValueAsync(variables[key], correlation, requestReferences, executionContext, cancellationToken);
                     }
                     catch (RuntimeReferenceException ex)
                     {
@@ -138,7 +139,8 @@ public sealed class TestRunner
         var result = new RequestResult { RunId = run.RunId, RequestId = requestId, TestcaseIndex = step.TestcaseIndex, Testcase = testcase.Testcase, DataId = dataId, StepName = step.StepName, StepType = step.StepType.WireName(), Thread = thread, Iteration = iteration, SequenceOrder = sequence, StartedAt = started, WaitMs = step.WaitMs, Verb = step.Verb, TargetUrl = step.TargetUrl, TemplateSource = step.TemplateSource, StepConfig = step.StepConfig, ContentType = ResolveContentType(step), RequestHeaders = string.Join("; ", step.Headers.Select(h => $"{h.Key}={h.Value}")), Variables = new Dictionary<string, string>(variables, StringComparer.OrdinalIgnoreCase), Environment = environment };
         try
         {
-            result.TargetUrl = Substitute(step.TargetUrl.Replace("{env}", environment, StringComparison.OrdinalIgnoreCase), variables); var body = TemplateRenderer.Render(ResolveRuntimeReferences(File.ReadAllText(templatePath), correlation, requestReferences), result.ContentType, variables); result.RequestBody = body;
+            var resolvedUrl = await ResolveDynamicValueAsync(step.TargetUrl.Replace("{env}", environment, StringComparison.OrdinalIgnoreCase), correlation, requestReferences, executionContext, cancellationToken);
+            result.TargetUrl = Substitute(resolvedUrl, variables); var resolvedTemplate = await ResolveDynamicValueAsync(File.ReadAllText(templatePath), correlation, requestReferences, executionContext, cancellationToken); var body = TemplateRenderer.Render(resolvedTemplate, result.ContentType, variables); result.RequestBody = body;
             using var request = new HttpRequestMessage(new HttpMethod(step.Verb), result.TargetUrl); if (!step.Verb.Equals("HEAD", StringComparison.OrdinalIgnoreCase) || !string.IsNullOrWhiteSpace(body)) request.Content = new StringContent(body, Encoding.UTF8, result.ContentType.Equals("xml", StringComparison.OrdinalIgnoreCase) ? "application/xml" : "application/json");
             var resolvedHeaders = step.Headers.ToDictionary(h => h.Key, h => Substitute(h.Value, variables), StringComparer.OrdinalIgnoreCase); result.RequestHeaders = string.Join("; ", resolvedHeaders.Select(h => $"{h.Key}={h.Value}")); foreach (var h in resolvedHeaders) if (!request.Headers.TryAddWithoutValidation(h.Key, h.Value)) request.Content?.Headers.TryAddWithoutValidation(h.Key, h.Value);
             _logger.Info($"REQUEST SENT [{requestId}]\nURL: {result.TargetUrl}\nMETHOD: {step.Verb}\nHEADERS:\n{result.RequestHeaders}\nBODY:\n{body}");
@@ -148,7 +150,7 @@ public sealed class TestRunner
             _logger.Info($"RESPONSE RECEIVED [{requestId}]\nSTATUS: {result.HttpStatus}\nHEADERS:\n{result.ResponseHeaders}\nBODY:\n{result.ResponseBody}");
             if (step.AssertEnabled)
             {
-                var resolvedDefinitions = ResolveAssertionReferences(definitions, correlation, requestReferences);
+                var resolvedDefinitions = await ResolveAssertionReferencesAsync(definitions, correlation, requestReferences, executionContext, cancellationToken);
                 result.Assertions.AddRange(_assertions.Evaluate(result.ResponseBody, result.ContentType, resolvedDefinitions, run.RunId, requestId, result.HttpStatus, step.IgnoreEmpty, step.AssertOnlyResponse));
             }
             var failedAssertions = result.Assertions.Where(a => a.Result == "FAIL").ToList();
@@ -200,7 +202,7 @@ public sealed class TestRunner
             _logger.Info($"STEP TEMPLATE LOAD [{requestId}] testcase={testcase.TestcaseIndex}; testcaseName={testcase.Testcase}; dataid={dataId}; stepName={step.StepName}; stepType={step.StepType.WireName()}; environment={environment}; template={templatePath}; templateExists={(!string.IsNullOrWhiteSpace(templatePath) && File.Exists(templatePath))}; configuredTargetUrl={step.TargetUrl}; resolvedTargetUrl={result.TargetUrl}; ignoreempty={step.IgnoreEmpty}; stepConfig={step.StepConfig}");
             if (!string.IsNullOrWhiteSpace(step.TemplateSource))
             {
-                templateText = context.Resolve(ResolveRuntimeReferences(await File.ReadAllTextAsync(templatePath, timeout.Token), correlation, requestReferences));
+                templateText = await ResolveDynamicValueAsync(await File.ReadAllTextAsync(templatePath, timeout.Token), correlation, requestReferences, context, timeout.Token);
             }
             _logger.Info($"STEP REQUEST [{requestId}]\nTYPE: {step.StepType.WireName()}\nSTEP: {step.StepName}\nENVIRONMENT: {environment}\nCONFIGURED URL: {step.TargetUrl}\nRESOLVED URL: {result.TargetUrl}\nTEMPLATE: {step.TemplateSource}\nREQUEST:\n{templateText}\nMETADATA:\n{step.StepConfig}");
             var execution = await _pipeline.ExecuteAsync(new StepExecutionRequest { Step = step, Context = context, WorkspaceRoot = _features.WorkspaceRoot, TemplateText = templateText, CancellationToken = timeout.Token });
@@ -213,7 +215,7 @@ public sealed class TestRunner
             foreach (var output in execution.Outputs) { var text = output.Value is string s ? s : JsonSerializer.Serialize(output.Value); var record = new CorrelationRecord { DataId = dataId, SourceStepName = step.StepName, ResponsePath = output.Key, Variable = output.Key, ExtractedValue = text }; correlation[output.Key] = text; correlationSources[output.Key] = record; result.Correlations.Add(record); }
             if (step.AssertEnabled)
             {
-                var resolvedDefinitions = ResolveAssertionReferences(definitions, correlation, requestReferences);
+                var resolvedDefinitions = await ResolveAssertionReferencesAsync(definitions, correlation, requestReferences, context, cancellationToken);
                 result.Assertions.AddRange(_assertions.Evaluate(result.ResponseBody, "json", resolvedDefinitions, run.RunId, requestId, result.HttpStatus, step.IgnoreEmpty, step.AssertOnlyResponse));
             }
             foreach (var assertion in result.Assertions.Where(a => a.Result == "FAIL"))
@@ -250,23 +252,26 @@ public sealed class TestRunner
                 : throw new RuntimeReferenceException(key, match.Value);
         }, RegexOptions.IgnoreCase);
     }
-    private static IReadOnlyList<AssertionDefinition> ResolveAssertionReferences(IReadOnlyList<AssertionDefinition> definitions, IReadOnlyDictionary<string, string> correlation, IReadOnlyDictionary<string, string>? requestReferences = null)
+    private async Task<string> ResolveDynamicValueAsync(string value, IReadOnlyDictionary<string, string> correlation, IReadOnlyDictionary<string, string>? requestReferences, LoadTestingTool.Domain.ExecutionContext context, CancellationToken cancellationToken)
     {
-        return definitions.Select(definition => new AssertionDefinition
+        var resolved = ResolveRuntimeReferences(value, correlation, requestReferences);
+        return await InlineScriptRunner.ResolveTokensAsync(resolved, context, _features.WorkspaceRoot, _features, _logger, cancellationToken);
+    }
+    private async Task<IReadOnlyList<AssertionDefinition>> ResolveAssertionReferencesAsync(IReadOnlyList<AssertionDefinition> definitions, IReadOnlyDictionary<string, string> correlation, IReadOnlyDictionary<string, string>? requestReferences, LoadTestingTool.Domain.ExecutionContext context, CancellationToken cancellationToken)
+    {
+        var result = new List<AssertionDefinition>(definitions.Count);
+        foreach (var definition in definitions)
         {
-            TestcaseIndex = definition.TestcaseIndex,
-            Testcase = definition.Testcase,
-            DataId = definition.DataId,
-            StepName = definition.StepName,
-            ResponsePath = definition.ResponsePath,
-            AssertionVerb = definition.AssertionVerb,
-            HeaderAssertionVerb = definition.HeaderAssertionVerb,
-            ExpectedValue = ResolveRuntimeReferences(definition.ExpectedValue, correlation, requestReferences),
-            ExtractVariable = definition.ExtractVariable,
-            ExcelRowNumber = definition.ExcelRowNumber,
-            ExpectedValueColumn = definition.ExpectedValueColumn,
-            ResponseColumn = definition.ResponseColumn
-        }).ToList();
+            result.Add(new AssertionDefinition
+            {
+                TestcaseIndex = definition.TestcaseIndex, Testcase = definition.Testcase, DataId = definition.DataId, StepName = definition.StepName,
+                ResponsePath = definition.ResponsePath, AssertionVerb = definition.AssertionVerb, HeaderAssertionVerb = definition.HeaderAssertionVerb,
+                ExpectedValue = await ResolveDynamicValueAsync(definition.ExpectedValue, correlation, requestReferences, context, cancellationToken),
+                ExtractVariable = definition.ExtractVariable, ExcelRowNumber = definition.ExcelRowNumber, ExpectedValueColumn = definition.ExpectedValueColumn,
+                ResponseColumn = definition.ResponseColumn
+            });
+        }
+        return result;
     }
     private static void PublishResponseValues(string stepName, string body, string contentType, Dictionary<string, string> correlation)
     {
