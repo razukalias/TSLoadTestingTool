@@ -86,7 +86,7 @@ public sealed class CSharpScriptStepExecutor : IStepExecutor
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(request.CancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, _features.ScriptTimeoutSeconds)));
             var scriptOptions = ScriptOptions.Default
-                .AddReferences(typeof(ScriptRuntime).Assembly)
+                .AddReferences(ScriptMetadataReferences.Create(typeof(ScriptRuntime).Assembly))
                 .AddImports("System", "System.Linq", "System.Collections.Generic", "LoadTestingTool.Domain");
             var value = await CSharpScript.EvaluateAsync<object?>(scriptCode, scriptOptions, globals, typeof(ScriptGlobals), timeout.Token);
             result.Outputs["result"] = value;

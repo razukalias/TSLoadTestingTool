@@ -69,7 +69,7 @@ internal static class InlineScriptRunner
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, features.ScriptTimeoutSeconds)));
         var options = ScriptOptions.Default
-            .AddReferences(typeof(ScriptRuntime).Assembly)
+            .AddReferences(ScriptMetadataReferences.Create(typeof(ScriptRuntime).Assembly))
             .AddImports("System", "System.Linq", "System.Collections.Generic", "LoadTestingTool.Domain");
         logger.Info($"INLINE SCRIPT START | template={template}; parameters={string.Join(", ", parameters.Select(x => $"{x.Key}={x.Value}"))}");
         var value = await CSharpScript.EvaluateAsync<object?>(scriptCode, options, globals, typeof(ScriptGlobals), timeout.Token);
