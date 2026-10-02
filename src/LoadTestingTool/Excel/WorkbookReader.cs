@@ -187,11 +187,11 @@ public sealed class WorkbookReader
             return sheetName.Equals("response", StringComparison.OrdinalIgnoreCase) && header.Contains('.', StringComparison.Ordinal)
                 ? m.Value
                 : Cell(workbook, sheetName, header, int.Parse(m.Groups[3].Value), compiledCellCache, resolving);
-        });
+        }, RegexOptions.IgnoreCase);
         result = Regex.Replace(result, @"<From_([^_>]+)_(\d+)>", m =>
             m.Groups[1].Value.StartsWith("response_", StringComparison.OrdinalIgnoreCase)
                 ? m.Value
-                : Cell(workbook, currentSheet.Name, m.Groups[1].Value, int.Parse(m.Groups[2].Value), compiledCellCache, resolving));
+                : Cell(workbook, currentSheet.Name, m.Groups[1].Value, int.Parse(m.Groups[2].Value), compiledCellCache, resolving), RegexOptions.IgnoreCase);
         result = Regex.Replace(result, @"<(datum|currentdatum|currenttime|currentdatetime|currenttimestamp)(?::([^>]+))?>", m => FormatDateToken(m.Groups[1].Value, m.Groups[2].Success ? m.Groups[2].Value : null), RegexOptions.IgnoreCase);
         result = Regex.Replace(result, @"<randomnumber(?::([^>]+))?>", m => FormatRandomNumberToken(m.Groups[1].Success ? m.Groups[1].Value : null), RegexOptions.IgnoreCase);
         result = Regex.Replace(result, @"<guid(?::([NnDdBbPp]))?>", m => FormatGuidToken(m.Groups[1].Success ? m.Groups[1].Value : null), RegexOptions.IgnoreCase);
