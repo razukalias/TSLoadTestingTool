@@ -209,7 +209,7 @@ public sealed class MainWindow : Window
         var run = new Button { Content = "Run selected", Background = Brushes.DarkGreen, Foreground = Brushes.White };
         run.Click += (_, _) => { UiLog("UI action: run selected clicked."); RunSelected(); };
         var manual = new Button { Content = "Open user manual", Margin = new Thickness(8, 0, 0, 0) };
-        manual.Click += (_, _) => { UiLog("UI action: open user manual clicked."); OpenFile(Path.GetFullPath(_config.DocumentationFile), "user manual"); };
+        manual.Click += (_, _) => { UiLog("UI action: open user manual clicked."); OpenConfiguredFile(Path.GetFullPath(_config.DocumentationFile), "user manual", _config.DocumentationApplicationPath); };
         var log = new Button { Content = "Open internal.log", Margin = new Thickness(8, 0, 0, 0) };
         log.Click += (_, _) => { UiLog("UI action: open internal log clicked."); OpenLatestInternalLog(); };
         var dataEngine = new Button { Content = "Open DataEngine", Margin = new Thickness(8, 0, 0, 0) };
@@ -219,7 +219,7 @@ public sealed class MainWindow : Window
         var templates = new Button { Content = "Open Templates Folder", Margin = new Thickness(8, 0, 0, 0) };
         templates.Click += (_, _) => { UiLog("UI action: open Templates folder clicked."); OpenTemplatesFolder(); };
         var uiLog = new Button { Content = "Open UI log", Margin = new Thickness(8, 0, 0, 0) };
-        uiLog.Click += (_, _) => { UiLog("UI action: open UI log clicked."); OpenFile(Path.GetFullPath(_config.UiLogFile), "UI log"); };
+        uiLog.Click += (_, _) => { UiLog("UI action: open UI log clicked."); OpenConfiguredFile(Path.GetFullPath(_config.UiLogFile), "UI log", _config.LogApplicationPath); };
         var compareAssertions = new Button { Content = "Compare failed assertions", Margin = new Thickness(8, 0, 0, 0) };
         compareAssertions.Click += async (_, _) => { UiLog("UI action: compare failed assertions clicked."); await GenerateAssertionComparisonAsync(); };
         var openComparison = new Button { Content = "Open latest comparison", Margin = new Thickness(8, 0, 0, 0) };
@@ -588,7 +588,7 @@ public sealed class MainWindow : Window
         var path = FindLatestInternalLog(_selectedInstance);
         if (path is null) { _details.Text = "No internal.log exists for this instance yet. Run it with internal logging enabled."; UiLog($"Open internal.log ignored. instance={_selectedInstance.Name}; reason=file-not-found"); return; }
         UiLog($"Opening latest internal.log. instance={_selectedInstance.Name}; path={path}");
-        OpenFile(path, "internal.log");
+        OpenConfiguredFile(path, "internal.log", _config.LogApplicationPath);
     }
 
     private void OpenSelectedDataEngine()
@@ -800,6 +800,23 @@ public sealed class MainWindow : Window
         if (!File.Exists(path)) { UiLog($"Cannot open {description}; file not found: {path}"); _details.Text = $"File not found: {path}"; return; }
         try { Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true }); UiLog($"Opened {description}: {path}"); }
         catch (Exception ex) { UiLog($"Could not open {description} '{path}': {ex}"); _details.Text = ex.Message; }
+    }
+    private void OpenConfiguredFile(string path, string description, string? application)
+    {
+        if (!File.Exists(path)) { UiLog($"Cannot open {description}; file not found: {path}"); _details.Text = $"File not found: {path}"; return; }
+        try
+        {
+            if (string.IsNullOrWhiteSpace(application))
+            {
+                OpenFile(path, description);
+                return;
+            }
+            var start = new ProcessStartInfo { FileName = application, UseShellExecute = false };
+            start.ArgumentList.Add(path);
+            Process.Start(start);
+            UiLog($"Opened {description} with '{application}': {path}");
+        }
+        catch (Exception ex) { UiLog($"Could not open {description} with '{application}': {ex}"); _details.Text = $"Could not open {description}: {ex.Message}"; }
     }
 
     private void OpenFolder(string path, string description)

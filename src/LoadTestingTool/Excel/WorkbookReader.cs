@@ -74,7 +74,6 @@ public sealed class WorkbookReader
             foreach (var column in h.OrderBy(x => x.Value))
             {
                 if (column.Key is "testcaseindex" or "testcase" or "dataid" or "dontrun") continue;
-                if (!column.Key.Contains('.', StringComparison.Ordinal)) throw new InvalidDataException($"Request column '{column.Key}' must use stepname.variable format.");
                 var cellKey = $"{sheet.Name}!{column.Key}!{row.RowNumber()}";
                 if (!compiledCellCache.TryGetValue(cellKey, out var compiledValue))
                 {

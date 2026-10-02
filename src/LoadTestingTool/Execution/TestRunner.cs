@@ -89,7 +89,14 @@ public sealed class TestRunner
         await Task.WhenAll(tasks); _logger.Section($"TESTCASE {testcase.TestcaseIndex}: {testcase.Testcase} - END");
     }
 
-    private static Dictionary<string, string> StepVariables(RequestDataRow data, string stepName) { var prefix = stepName + "."; return new Dictionary<string, string>(data.Variables.Where(x => x.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToDictionary(x => x.Key[prefix.Length..], x => x.Value, StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase); }
+    private static Dictionary<string, string> StepVariables(RequestDataRow data, string stepName)
+    {
+        var prefix = stepName + ".";
+        var variables = new Dictionary<string, string>(data.Variables.Where(x => !x.Key.Contains('.', StringComparison.Ordinal)).ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
+        foreach (var variable in data.Variables.Where(x => x.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+            variables[variable.Key[prefix.Length..]] = variable.Value;
+        return variables;
+    }
 
     private RequestResult CreateRuntimeReferenceFailure(RunResult run, TestcaseDefinition testcase, string dataId, RequestStep step, int sequence, int thread, int iteration, string environment, RuntimeReferenceException exception)
     {
