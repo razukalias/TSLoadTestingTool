@@ -2,11 +2,26 @@ using System.Reflection;
 using System.Reflection.Metadata;
 using System.Diagnostics.CodeAnalysis;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Scripting;
+using Microsoft.CodeAnalysis.Scripting;
 
 namespace LoadTestingTool.Execution;
 
 internal static class ScriptMetadataReferences
 {
+    public static ScriptOptions CreateOptions(Assembly runnerAssembly)
+    {
+        var references = new List<MetadataReference>();
+        var trustedPlatformAssemblies = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string;
+        if (!string.IsNullOrWhiteSpace(trustedPlatformAssemblies))
+        {
+            foreach (var path in trustedPlatformAssemblies.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                if (File.Exists(path)) references.Add(MetadataReference.CreateFromFile(path));
+        }
+        references.Add(Create(runnerAssembly));
+        return ScriptOptions.Default.WithReferences(references);
+    }
+
     [UnconditionalSuppressMessage("SingleFile", "IL3000", Justification = "Assembly.Location is used only when available; single-file assemblies use TryGetRawMetadata below.")]
     public static MetadataReference Create(Assembly assembly)
     {
