@@ -144,7 +144,7 @@ public sealed class TestRunner
             using var request = new HttpRequestMessage(new HttpMethod(step.Verb), result.TargetUrl); if (!step.Verb.Equals("HEAD", StringComparison.OrdinalIgnoreCase) || !string.IsNullOrWhiteSpace(body)) request.Content = new StringContent(body, Encoding.UTF8, result.ContentType.Equals("xml", StringComparison.OrdinalIgnoreCase) ? "application/xml" : "application/json");
             var resolvedHeaders = step.Headers.ToDictionary(h => h.Key, h => Substitute(h.Value, variables), StringComparer.OrdinalIgnoreCase); result.RequestHeaders = string.Join("; ", resolvedHeaders.Select(h => $"{h.Key}={h.Value}")); foreach (var h in resolvedHeaders) if (!request.Headers.TryAddWithoutValidation(h.Key, h.Value)) request.Content?.Headers.TryAddWithoutValidation(h.Key, h.Value);
             _logger.Info($"REQUEST SENT [{requestId}]\nURL: {result.TargetUrl}\nMETHOD: {step.Verb}\nHEADERS:\n{result.RequestHeaders}\nBODY:\n{body}");
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken); timeout.CancelAfter(TimeSpan.FromSeconds(_timeoutSeconds)); using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseContentRead, timeout.Token);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken); timeout.CancelAfter(TimeSpan.FromSeconds(step.TimeoutSeconds > 0 ? step.TimeoutSeconds : _timeoutSeconds)); using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseContentRead, timeout.Token);
             result.HttpStatus = (int)response.StatusCode; result.ResponseHeaders = string.Join("; ", response.Headers.Concat(response.Content.Headers).Select(h => $"{h.Key}={string.Join(",", h.Value)}")); result.ResponseBody = await response.Content.ReadAsStringAsync(timeout.Token);
             PublishResponseValues(step.StepName, result.ResponseBody, result.ContentType, correlation);
             _logger.Info($"RESPONSE RECEIVED [{requestId}]\nSTATUS: {result.HttpStatus}\nHEADERS:\n{result.ResponseHeaders}\nBODY:\n{result.ResponseBody}");
@@ -154,6 +154,7 @@ public sealed class TestRunner
                 result.Assertions.AddRange(_assertions.Evaluate(result.ResponseBody, result.ContentType, resolvedDefinitions, run.RunId, requestId, result.HttpStatus, step.IgnoreEmpty, step.AssertOnlyResponse));
             }
             var failedAssertions = result.Assertions.Where(a => a.Result == "FAIL").ToList();
+            if (failedAssertions.Count > 0) result.FailureCategory = FailureCategories.Assertion;
             _logger.Info($"ASSERTIONS COMPLETED [{requestId}]\nPASSED: {result.Assertions.Count(a => a.Result == "PASS")}\nFAILED: {failedAssertions.Count}");
             foreach (var assertion in failedAssertions)
                 _logger.Warn($"ASSERTION FAILED [{requestId}] testcase={testcase.TestcaseIndex}; testcaseName={testcase.Testcase}; dataid={dataId}; stepName={step.StepName}; responsePath={assertion.ResponsePath}; operator={assertion.AssertionVerb}; expected={assertion.ExpectedValue}; actual={assertion.ActualValue}; message={assertion.FailureMessage}");
@@ -165,6 +166,7 @@ public sealed class TestRunner
                 result.ErrorMessage = hasExpectedStatus
                     ? $"Expected status '{step.ExpectedStatus}' but received '{result.HttpStatus}'."
                     : $"Unexpected HTTP status {(int)response.StatusCode} {response.StatusCode}.";
+                result.FailureCategory = FailureCategories.HttpStatus;
                 _logger.Error($"HTTP STATUS FAILURE [{requestId}] | testcase={testcase.TestcaseIndex} | dataid={dataId} | step={step.StepName} | actual={result.HttpStatus} | expected={(hasExpectedStatus ? step.ExpectedStatus : "2xx/3xx")}");
             }
         }
@@ -173,10 +175,11 @@ public sealed class TestRunner
             result.ErrorMessage = FormatException("HTTP request preparation/execution failed", ex);
             if (ex is RuntimeReferenceException referenceException)
             {
-                result.FailureCategory = "RuntimeReference";
+                result.FailureCategory = FailureCategories.RuntimeReference;
                 result.RuntimeReference = referenceException.Reference;
                 result.RuntimeReferenceKey = referenceException.Key;
             }
+            else result.FailureCategory = ClassifyException(ex, FailureCategories.Network, cancellationToken);
             result.HttpStatus = 0;
             _logger.Error($"REQUEST FAILED [{requestId}] testcase={testcase.TestcaseIndex}; testcaseName={testcase.Testcase}; dataid={dataId}; stepName={step.StepName}; stepType={step.StepType.WireName()}; template={templatePath}; templateExists={File.Exists(templatePath)}; url={result.TargetUrl}; verb={step.Verb}; contentType={result.ContentType}; requestBody={result.RequestBody}; requestHeaders={result.RequestHeaders}", ex);
         }
@@ -219,17 +222,27 @@ public sealed class TestRunner
                 result.Assertions.AddRange(_assertions.Evaluate(result.ResponseBody, "json", resolvedDefinitions, run.RunId, requestId, result.HttpStatus, step.IgnoreEmpty, step.AssertOnlyResponse));
             }
             foreach (var assertion in result.Assertions.Where(a => a.Result == "FAIL"))
+            {
+                result.FailureCategory = FailureCategories.Assertion;
                 _logger.Warn($"ASSERTION FAILED [{requestId}] testcase={testcase.TestcaseIndex}; testcaseName={testcase.Testcase}; dataid={dataId}; stepName={step.StepName}; stepType={step.StepType.WireName()}; responsePath={assertion.ResponsePath}; operator={assertion.AssertionVerb}; expected={assertion.ExpectedValue}; actual={assertion.ActualValue}; message={assertion.FailureMessage}");
+            }
         }
         catch (Exception ex)
         {
             result.ErrorMessage = FormatException("Step preparation/execution failed", ex);
             if (ex is RuntimeReferenceException referenceException)
             {
-                result.FailureCategory = "RuntimeReference";
+                result.FailureCategory = FailureCategories.RuntimeReference;
                 result.RuntimeReference = referenceException.Reference;
                 result.RuntimeReferenceKey = referenceException.Key;
             }
+            else result.FailureCategory = ClassifyException(ex, step.StepType switch
+            {
+                StepType.Sql => FailureCategories.Sql,
+                StepType.File => FailureCategories.FileSystem,
+                StepType.Script => FailureCategories.Script,
+                _ => FailureCategories.Infrastructure
+            }, cancellationToken);
             _logger.Error($"STEP FAILED [{requestId}] testcase={testcase.TestcaseIndex}; testcaseName={testcase.Testcase}; dataid={dataId}; stepName={step.StepName}; stepType={step.StepType.WireName()}; template={templatePath}; templateExists={(!string.IsNullOrWhiteSpace(templatePath) && File.Exists(templatePath))}; targetUrl={step.TargetUrl}; verb={step.Verb}; contentType={step.ContentType}; stepConfig={step.StepConfig}; requestPayload={result.RequestBody}; responsePayload={result.ResponseBody}; status={result.HttpStatus}", ex);
         }
         finally
@@ -240,6 +253,15 @@ public sealed class TestRunner
         _requestCompleted?.Invoke(result); return result;
     }
     private static string FormatException(string context, Exception exception) => $"{context}: {exception.GetType().Name}: {exception.Message}";
+    private static string ClassifyException(Exception exception, string fallback, CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested) return FailureCategories.Cancelled;
+        if (exception is TimeoutException or TaskCanceledException) return FailureCategories.Timeout;
+        if (exception is HttpRequestException) return FailureCategories.Network;
+        if (exception is JsonException) return FailureCategories.ResponseParse;
+        if (exception is InvalidDataException) return FailureCategories.VariableResolution;
+        return fallback;
+    }
     private static string ResolveRuntimeReferences(string value, IReadOnlyDictionary<string, string> correlation, IReadOnlyDictionary<string, string>? requestReferences = null)
     {
         return Regex.Replace(value ?? string.Empty, @"<From_(?:(request|response)_)?([^_>]+)_(r|\d+)>", match =>

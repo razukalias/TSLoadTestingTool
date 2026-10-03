@@ -15,10 +15,25 @@ public sealed class HistoryWriter
         var path = Path.Combine(folder, fileName ?? $"Execution_History_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx");
         using var workbook = new XLWorkbook();
         var summary = workbook.AddWorksheet("RunSummary");
-        WriteTable(summary, "runid", "starttime", "endtime", "durationms", "selectionSource", "selectionInput", "selectedIndexes", "totalTestcases", "totalRequests", "passedRequests", "failedRequests", "overallResult");
+        WriteTable(summary, "runid", "starttime", "endtime", "durationms", "selectionSource", "selectionInput", "selectedIndexes", "totalTestcases", "totalRequests", "passedRequests", "failedRequests", "p95DurationMs", "p99DurationMs", "requestsPerSecond", "overallResult");
         var requests = run.Testcases.SelectMany(t => t.Requests).ToList();
+        var metrics = run.Metrics;
         var passed = requests.Count(r => r.Result == "PASS"); var failed = requests.Count(r => r.Result == "FAIL");
-        summary.AddRow(run.RunId, run.StartedAt, run.EndedAt, (run.EndedAt - run.StartedAt).TotalMilliseconds, run.Selection.Source, run.Selection.Input, string.Join(",", run.Selection.Indexes), run.Testcases.Count, requests.Count, passed, failed, failed == 0 ? "PASSED" : "FAILED");
+        summary.AddRow(run.RunId, run.StartedAt, run.EndedAt, (run.EndedAt - run.StartedAt).TotalMilliseconds, run.Selection.Source, run.Selection.Input, string.Join(",", run.Selection.Indexes), run.Testcases.Count, requests.Count, passed, failed, metrics.P95DurationMs, metrics.P99DurationMs, metrics.RequestsPerSecond, run.Cancelled ? "CANCELLED" : failed == 0 ? "PASSED" : "FAILED");
+
+        var metricsSheet = workbook.AddWorksheet("Metrics");
+        WriteTable(metricsSheet, "metric", "value");
+        metricsSheet.AddRow("totalRequests", metrics.TotalRequests);
+        metricsSheet.AddRow("passedRequests", metrics.PassedRequests);
+        metricsSheet.AddRow("failedRequests", metrics.FailedRequests);
+        metricsSheet.AddRow("cancelledRequests", metrics.CancelledRequests);
+        metricsSheet.AddRow("assertionFailures", metrics.AssertionFailures);
+        metricsSheet.AddRow("averageDurationMs", metrics.AverageDurationMs);
+        metricsSheet.AddRow("p50DurationMs", metrics.P50DurationMs);
+        metricsSheet.AddRow("p95DurationMs", metrics.P95DurationMs);
+        metricsSheet.AddRow("p99DurationMs", metrics.P99DurationMs);
+        metricsSheet.AddRow("maxDurationMs", metrics.MaxDurationMs);
+        metricsSheet.AddRow("requestsPerSecond", metrics.RequestsPerSecond);
 
         var tc = workbook.AddWorksheet("TestcaseSummary");
         WriteTable(tc, "runid", "testcaseindex", "testcase", "dataid", "thread", "iteration", "starttime", "endtime", "durationms", "totalsteps", "passedsteps", "failedsteps", "skippedsteps", "result");

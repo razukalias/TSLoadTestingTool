@@ -73,6 +73,8 @@ public sealed class CSharpScriptStepExecutor : IStepExecutor
         var result = new StepResult { StepType = StepType, StepName = request.Step.StepName };
         try
         {
+            if (!_features.AllowTrustedScripts)
+                throw new UnauthorizedAccessException("C# scripts are disabled. Set AllowTrustedScripts=true only for trusted workbooks.");
             var options = StepConfig.Read<ScriptStepOptions>(request.Step);
             var code = string.IsNullOrWhiteSpace(request.TemplateText) ? options.Inline : request.TemplateText;
             if (!string.IsNullOrWhiteSpace(options.Source)) code = await File.ReadAllTextAsync(WorkspaceGuard.Resolve(request.WorkspaceRoot, options.Source), request.CancellationToken);

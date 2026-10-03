@@ -60,6 +60,8 @@ internal static class InlineScriptRunner
 
     private static async Task<string> ExecuteAsync(string template, IReadOnlyDictionary<string, string> parameters, RunnerExecutionContext context, string workspaceRoot, FeatureConfig features, InternalLogger logger, CancellationToken cancellationToken)
     {
+        if (!features.AllowTrustedScripts)
+            throw new UnauthorizedAccessException("Inline scripts are disabled. Set AllowTrustedScripts=true only for trusted workbooks.");
         var path = ResolveScriptPath(template, workspaceRoot);
         var code = await File.ReadAllTextAsync(path, cancellationToken);
         foreach (var parameter in parameters) context.Set(parameter.Key, parameter.Value, VariableScope.Iteration);

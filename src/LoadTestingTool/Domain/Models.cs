@@ -108,6 +108,70 @@ public sealed class RunResult
     public DateTimeOffset EndedAt { get; set; }
     public string Environment { get; init; } = string.Empty;
     public List<TestcaseResult> Testcases { get; } = [];
+    public bool Cancelled { get; set; }
+    public RunMetrics Metrics => RunMetrics.From(Testcases.SelectMany(t => t.Requests));
+}
+
+public sealed class RunMetrics
+{
+    public int TotalRequests { get; init; }
+    public int PassedRequests { get; init; }
+    public int FailedRequests { get; init; }
+    public int CancelledRequests { get; init; }
+    public int AssertionFailures { get; init; }
+    public double AverageDurationMs { get; init; }
+    public long P50DurationMs { get; init; }
+    public long P95DurationMs { get; init; }
+    public long P99DurationMs { get; init; }
+    public long MaxDurationMs { get; init; }
+    public double RequestsPerSecond { get; init; }
+
+    public static RunMetrics From(IEnumerable<RequestResult> source)
+    {
+        var requests = source.ToList();
+        var durations = requests.Select(r => Math.Max(0, r.DurationMs)).OrderBy(x => x).ToList();
+        var elapsedMs = requests.Count == 0 ? 0 : (requests.Max(r => r.EndedAt) - requests.Min(r => r.StartedAt)).TotalMilliseconds;
+        return new RunMetrics
+        {
+            TotalRequests = requests.Count,
+            PassedRequests = requests.Count(r => r.Result == "PASS"),
+            FailedRequests = requests.Count(r => r.Result == "FAIL"),
+            CancelledRequests = requests.Count(r => r.FailureCategory == FailureCategories.Cancelled),
+            AssertionFailures = requests.Sum(r => r.Assertions.Count(a => a.Result == "FAIL")),
+            AverageDurationMs = durations.Count == 0 ? 0 : durations.Average(),
+            P50DurationMs = Percentile(durations, 0.50),
+            P95DurationMs = Percentile(durations, 0.95),
+            P99DurationMs = Percentile(durations, 0.99),
+            MaxDurationMs = durations.Count == 0 ? 0 : durations[^1],
+            RequestsPerSecond = elapsedMs <= 0 ? 0 : requests.Count / (elapsedMs / 1000d)
+        };
+    }
+
+    private static long Percentile(IReadOnlyList<long> values, double percentile)
+    {
+        if (values.Count == 0) return 0;
+        var index = Math.Clamp((int)Math.Ceiling(values.Count * percentile) - 1, 0, values.Count - 1);
+        return values[index];
+    }
+}
+
+public static class FailureCategories
+{
+    public const string Configuration = "Configuration";
+    public const string WorkbookValidation = "WorkbookValidation";
+    public const string Template = "Template";
+    public const string VariableResolution = "VariableResolution";
+    public const string RuntimeReference = "RuntimeReference";
+    public const string Network = "Network";
+    public const string Timeout = "Timeout";
+    public const string HttpStatus = "HttpStatus";
+    public const string ResponseParse = "ResponseParse";
+    public const string Assertion = "Assertion";
+    public const string Sql = "Sql";
+    public const string FileSystem = "FileSystem";
+    public const string Script = "Script";
+    public const string Cancelled = "Cancelled";
+    public const string Infrastructure = "Infrastructure";
 }
 
 public sealed class TestcaseResult

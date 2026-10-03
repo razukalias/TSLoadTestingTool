@@ -77,16 +77,40 @@ public sealed class LiveEventWriter : IDisposable
 
     public void WriteRunCompleted(RunResult run, string historyFile)
     {
+        var metrics = run.Metrics;
         Write(new
         {
             eventType = "run-completed",
             instanceId = _instanceId,
             runId = run.RunId,
-            result = run.Testcases.Any(t => t.Result == "FAILED") ? "FAILED" : "PASSED",
+            result = run.Cancelled ? "CANCELLED" : run.Testcases.Any(t => t.Result == "FAILED") ? "FAILED" : "PASSED",
+            totalTestcases = run.Testcases.Count,
+            totalRequests = metrics.TotalRequests,
+            failedRequests = metrics.FailedRequests,
+            assertionFailures = metrics.AssertionFailures,
+            averageDurationMs = metrics.AverageDurationMs,
+            p50DurationMs = metrics.P50DurationMs,
+            p95DurationMs = metrics.P95DurationMs,
+            p99DurationMs = metrics.P99DurationMs,
+            requestsPerSecond = metrics.RequestsPerSecond,
+            historyFile,
+            cancelled = run.Cancelled
+            ,environment = run.Environment
+        });
+    }
+
+    public void WriteTestcaseCompleted(RunResult run, string? historyFile = null)
+    {
+        Write(new
+        {
+            eventType = "testcase-completed",
+            instanceId = _instanceId,
+            runId = run.RunId,
+            result = run.Cancelled ? "CANCELLED" : run.Testcases.Any(t => t.Result == "FAILED") ? "FAILED" : "PASSED",
             totalTestcases = run.Testcases.Count,
             totalRequests = run.Testcases.Sum(t => t.Requests.Count),
-            historyFile
-            ,environment = run.Environment
+            historyFile,
+            environment = run.Environment
         });
     }
 

@@ -23,6 +23,7 @@ public sealed class InstanceInfo
     public string LastEvent { get; set; } = "No results yet";
     public string TestcaseSelection { get; set; } = "0";
     public string ExecutionMode { get; set; } = "threaded";
+    public bool RunScenariosInParallel { get; set; }
     public string EnvironmentSelection { get; set; } = "";
     public string DataIdSelection { get; set; } = "";
     public Dictionary<int, List<string>> DataIdOptions { get; } = [];
@@ -86,6 +87,7 @@ internal sealed class InstanceRow : Border
     private readonly TextBlock _last;
     private readonly TextBox _testcases;
     private readonly ComboBox _executionMode;
+    private readonly ComboBox _scenarioOrder;
     private readonly Button _dataIdsButton;
     private readonly WrapPanel _environmentChecks = new() { Orientation = Orientation.Horizontal, MinWidth = 180, MaxWidth = 320 };
     private readonly Action<InstanceInfo> _select;
@@ -109,12 +111,14 @@ internal sealed class InstanceRow : Border
         _testcases.KeyDown += (_, e) => { if (e.Key == Avalonia.Input.Key.Enter) { item.TestcaseSelection = string.IsNullOrWhiteSpace(_testcases.Text) ? "0" : _testcases.Text.Trim(); _log($"Testcase selection changed. instance={item.Name}; selection={item.TestcaseSelection}; source=enter"); e.Handled = true; } };
         _executionMode = new ComboBox { Width = 135, ItemsSource = new[] { "Threaded", "Sequential loop" }, SelectedIndex = item.ExecutionMode.Equals("loop", StringComparison.OrdinalIgnoreCase) ? 1 : 0, Margin = new Thickness(8, 0), VerticalContentAlignment = VerticalAlignment.Center };
         _executionMode.SelectionChanged += (_, _) => { item.ExecutionMode = _executionMode.SelectedIndex == 1 ? "loop" : "threaded"; _log($"Execution mode changed. instance={item.Name}; mode={item.ExecutionMode}"); };
+        _scenarioOrder = new ComboBox { Width = 125, ItemsSource = new[] { "Sequential testcases", "Parallel testcases" }, SelectedIndex = item.RunScenariosInParallel ? 1 : 0, Margin = new Thickness(8, 0), VerticalContentAlignment = VerticalAlignment.Center };
+        _scenarioOrder.SelectionChanged += (_, _) => { item.RunScenariosInParallel = _scenarioOrder.SelectedIndex == 1; _log($"Testcase order changed. instance={item.Name}; parallel={item.RunScenariosInParallel}"); };
         _dataIdsButton = new Button { Content = string.IsNullOrWhiteSpace(item.DataIdSelection) ? "Configure data IDs..." : "Data IDs selected", Margin = new Thickness(8, 0), VerticalContentAlignment = VerticalAlignment.Center };
         _dataIdsButton.Click += async (_, _) => await ConfigureDataIdsAsync();
         _status = new TextBlock { Text = item.Status, Width = 100, VerticalAlignment = VerticalAlignment.Center };
         _last = new TextBlock { Text = item.LastEvent, Width = 370, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
 
-        var topLine = new StackPanel { Orientation = Orientation.Horizontal, Children = { _check, name, path, new TextBlock { Text = "Testcases:", VerticalAlignment = VerticalAlignment.Center }, _testcases, new TextBlock { Text = "Mode:", VerticalAlignment = VerticalAlignment.Center }, _executionMode, _dataIdsButton, _status } };
+        var topLine = new StackPanel { Orientation = Orientation.Horizontal, Children = { _check, name, path, new TextBlock { Text = "Testcases:", VerticalAlignment = VerticalAlignment.Center }, _testcases, new TextBlock { Text = "Mode:", VerticalAlignment = VerticalAlignment.Center }, _executionMode, new TextBlock { Text = "Order:", VerticalAlignment = VerticalAlignment.Center }, _scenarioOrder, _dataIdsButton, _status } };
         var environmentLine = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(28, 6, 0, 0), Children = { new TextBlock { Text = "Environments:", Width = 95, VerticalAlignment = VerticalAlignment.Center }, _environmentChecks } };
         Child = new StackPanel { Orientation = Orientation.Vertical, Children = { topLine, environmentLine, _last } };
         PointerPressed += (_, _) => _select(_item);
@@ -126,6 +130,7 @@ internal sealed class InstanceRow : Border
         _check.IsChecked = _item.Selected;
         if (_testcases.IsFocused is false) _testcases.Text = _item.TestcaseSelection;
         if (_executionMode.IsFocused is false) _executionMode.SelectedIndex = _item.ExecutionMode.Equals("loop", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        if (_scenarioOrder.IsFocused is false) _scenarioOrder.SelectedIndex = _item.RunScenariosInParallel ? 1 : 0;
         _status.Text = _item.Status;
         _last.Text = _item.LastEvent;
         _dataIdsButton.Content = string.IsNullOrWhiteSpace(_item.DataIdSelection) ? "Configure data IDs..." : "Data IDs selected";
@@ -133,7 +138,7 @@ internal sealed class InstanceRow : Border
             ? Brushes.LightGreen
             : _item.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase)
                 ? Brushes.MistyRose
-                : _item.Status.Equals("Running", StringComparison.OrdinalIgnoreCase)
+                : _item.Status.Equals("Running", StringComparison.OrdinalIgnoreCase) || _item.Status.Equals("Stopping", StringComparison.OrdinalIgnoreCase)
                     ? Brushes.LightYellow
                     : Brushes.Transparent;
         _status.Foreground = _item.Status.Equals("Passed", StringComparison.OrdinalIgnoreCase)
@@ -208,6 +213,10 @@ public sealed class MainWindow : Window
         clear.Click += (_, _) => { UiLog($"UI action: clear selection clicked. instances={_instances.Count}"); foreach (var item in _instances) item.Selected = false; RefreshRows(); };
         var run = new Button { Content = "Run selected", Background = Brushes.DarkGreen, Foreground = Brushes.White };
         run.Click += (_, _) => { UiLog("UI action: run selected clicked."); RunSelected(); };
+        var stop = new Button { Content = "Stop selected", Margin = new Thickness(8, 0, 0, 0) };
+        stop.Click += (_, _) => { UiLog("UI action: stop selected clicked."); StopSelected(false); };
+        var forceStop = new Button { Content = "Force stop", Margin = new Thickness(8, 0, 0, 0), Background = Brushes.DarkRed, Foreground = Brushes.White };
+        forceStop.Click += (_, _) => { UiLog("UI action: force stop clicked."); StopSelected(true); };
         var manual = new Button { Content = "Open user manual", Margin = new Thickness(8, 0, 0, 0) };
         manual.Click += (_, _) => { UiLog("UI action: open user manual clicked."); OpenConfiguredFile(Path.GetFullPath(_config.DocumentationFile), "user manual", _config.DocumentationApplicationPath); };
         var log = new Button { Content = "Open internal.log", Margin = new Thickness(8, 0, 0, 0) };
@@ -225,7 +234,7 @@ public sealed class MainWindow : Window
         var openComparison = new Button { Content = "Open latest comparison", Margin = new Thickness(8, 0, 0, 0) };
         openComparison.Click += (_, _) => { UiLog("UI action: open latest comparison clicked."); OpenLatestAssertionComparison(); };
         var top = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(12) };
-        top.Children.Add(refresh); top.Children.Add(selectAll); top.Children.Add(clear); top.Children.Add(_enableInternalLog); top.Children.Add(run); top.Children.Add(manual); top.Children.Add(log); top.Children.Add(dataEngine); top.Children.Add(resultExcel); top.Children.Add(templates); top.Children.Add(uiLog); top.Children.Add(compareAssertions); top.Children.Add(openComparison);
+        top.Children.Add(refresh); top.Children.Add(selectAll); top.Children.Add(clear); top.Children.Add(_enableInternalLog); top.Children.Add(run); top.Children.Add(stop); top.Children.Add(forceStop); top.Children.Add(manual); top.Children.Add(log); top.Children.Add(dataEngine); top.Children.Add(resultExcel); top.Children.Add(templates); top.Children.Add(uiLog); top.Children.Add(compareAssertions); top.Children.Add(openComparison);
 
         _instanceList.Margin = new Thickness(12, 0, 12, 12);
         _instanceList.ItemTemplate = new FuncDataTemplate<InstanceInfo>((item, _) => item is null ? new Border { Height = 1 } : GetOrCreateRow(item));
@@ -454,7 +463,7 @@ public sealed class MainWindow : Window
                 var dataIdArg = string.IsNullOrWhiteSpace(item.DataIdSelection) ? "" : $" --dataids \"{item.DataIdSelection}\"";
                 var uiLaunchId = $"ui-{Guid.NewGuid():N}";
                 var uiLaunchAt = DateTimeOffset.Now;
-                var runnerArgs = $"--excel \"{item.WorkbookPath}\" --templates \"{item.TemplatesFolder}\" --history \"{item.HistoryFolder}\" --logs \"{item.LogsFolder}\" --results \"{item.ResultsFolder}\" --instance-id \"{item.InstanceId}\" --run-id \"{item.CurrentRunId}\" --ui-launch-id \"{uiLaunchId}\" --ui-launch-at \"{uiLaunchAt:O}\" --internal-log \"{_enableInternalLog.IsChecked == true}\" --execution-mode \"{item.ExecutionMode}\" --testcases \"{selection}\"{environmentArg}{dataIdArg}";
+                var runnerArgs = $"--excel \"{item.WorkbookPath}\" --templates \"{item.TemplatesFolder}\" --history \"{item.HistoryFolder}\" --logs \"{item.LogsFolder}\" --results \"{item.ResultsFolder}\" --instance-id \"{item.InstanceId}\" --run-id \"{item.CurrentRunId}\" --ui-launch-id \"{uiLaunchId}\" --ui-launch-at \"{uiLaunchAt:O}\" --internal-log \"{_enableInternalLog.IsChecked == true}\" --scenarios-parallel \"{item.RunScenariosInParallel}\" --execution-mode \"{item.ExecutionMode}\" --testcases \"{selection}\"{environmentArg}{dataIdArg}";
                 var runnerIsDll = runner.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
                 UiLog($"Runner launch requested. instance={item.Name}; runId={item.CurrentRunId}; uiLaunchId={uiLaunchId}; uiLaunchAt={uiLaunchAt:O}; runner={runner}; args={runnerArgs}");
                 item.Process = Process.Start(new ProcessStartInfo(runnerIsDll ? "dotnet" : runner, runnerIsDll ? $"\"{runner}\" {runnerArgs}" : runnerArgs) { WorkingDirectory = item.FolderPath, UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = false, RedirectStandardError = false });
@@ -472,6 +481,38 @@ public sealed class MainWindow : Window
         foreach (var item in selected.Where(x => x.Process is { HasExited: false })) UiLog($"Run skipped for already-running instance. instance={item.Name}; processId={item.Process?.Id}");
         RefreshRows();
         UiLog("Run selected completed.");
+    }
+
+    private void StopSelected(bool force)
+    {
+        foreach (var item in _instances.Where(x => x.Selected && x.Process is { HasExited: false }))
+        {
+            try
+            {
+                if (force)
+                {
+                    item.Process!.Kill(entireProcessTree: true);
+                    item.Status = "Force stopped";
+                    item.LastEvent = "Process terminated by user";
+                }
+                else
+                {
+                    Directory.CreateDirectory(item.ResultsFolder);
+                    var stopFile = Path.Combine(item.ResultsFolder, $"run_{item.CurrentRunId}.stop");
+                    File.WriteAllText(stopFile, "stop requested by UI");
+                    item.Status = "Stopping";
+                    item.LastEvent = "Graceful stop requested";
+                }
+                UiLog($"Runner stop requested. instance={item.Name}; runId={item.CurrentRunId}; force={force}; processId={item.Process?.Id}");
+            }
+            catch (Exception ex)
+            {
+                item.Status = "Stop failed";
+                item.LastEvent = ex.Message;
+                UiLog($"Runner stop failed. instance={item.Name}; runId={item.CurrentRunId}; force={force}; error={ex}");
+            }
+        }
+        RefreshRows();
     }
 
     private void PollEvents()
@@ -556,11 +597,13 @@ public sealed class MainWindow : Window
         if (type == "run-completed")
         {
             item.Status = e.GetProperty("result").GetString() ?? "Completed";
+            var p95 = e.TryGetProperty("p95DurationMs", out var p95Property) ? p95Property.GetInt64() : 0;
+            var rps = e.TryGetProperty("requestsPerSecond", out var rpsProperty) ? rpsProperty.GetDouble() : 0;
             if (e.TryGetProperty("historyFile", out var history) && !string.IsNullOrWhiteSpace(history.GetString()))
             {
                 var historyPath = history.GetString()!;
                 item.CurrentRunFolder = Path.GetDirectoryName(Path.GetFullPath(historyPath)) ?? item.CurrentRunFolder;
-                item.LastEvent = $"Run completed: {item.Status}; history: {historyPath}";
+                item.LastEvent = $"Run completed: {item.Status}; p95: {p95} ms; RPS: {rps:F2}; history: {historyPath}";
             }
             var completedHistory = e.TryGetProperty("historyFile", out var historyEvent) ? historyEvent.GetString() ?? "" : "";
             UiLog($"Runner event applied. type=run-completed; instance={item.Name}; runId={item.CurrentRunId}; result={item.Status}; history={completedHistory}");
