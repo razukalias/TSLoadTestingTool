@@ -84,6 +84,7 @@ internal sealed class InstanceRow : Border
     private readonly InstanceInfo _item;
     private readonly CheckBox _check;
     private readonly TextBlock _status;
+    private readonly Border _statusBadge;
     private readonly TextBlock _last;
     private readonly TextBox _testcases;
     private readonly ComboBox _executionMode;
@@ -98,29 +99,40 @@ internal sealed class InstanceRow : Border
         _item = item;
         _select = select;
         _log = log;
-        Padding = new Thickness(8);
-        BorderBrush = Brushes.LightGray;
+        Padding = new Thickness(8, 10);
+        BorderBrush = new SolidColorBrush(Color.Parse("#EAECF0"));
         BorderThickness = new Thickness(0, 0, 0, 1);
 
         _check = new CheckBox { IsChecked = item.Selected, VerticalAlignment = VerticalAlignment.Center };
         _check.IsCheckedChanged += (_, _) => { item.Selected = _check.IsChecked == true; _log($"Instance selection changed. instance={item.Name}; selected={item.Selected}"); };
-        var name = new TextBlock { Text = item.Name, Width = 220, Margin = new Thickness(8, 0, 8, 0), FontWeight = FontWeight.Bold, VerticalAlignment = VerticalAlignment.Center };
-        var path = new TextBlock { Text = item.WorkbookPath, Width = 300, Foreground = Brushes.Gray, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
-        _testcases = new TextBox { Text = item.TestcaseSelection, Width = 110, Watermark = "0 or 1,3", Margin = new Thickness(8, 0), VerticalContentAlignment = VerticalAlignment.Center };
+        var name = new TextBlock { Text = item.Name, FontWeight = FontWeight.Bold, Foreground = new SolidColorBrush(Color.Parse("#172B4D")), TextTrimming = TextTrimming.CharacterEllipsis };
+        var path = new TextBlock { Text = item.WorkbookPath, FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#667085")), TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 3, 0, 0) };
+        var description = new TextBlock { Text = "Workbook-backed load test instance", FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#98A2B3")), TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 2, 0, 0) };
+        var namePanel = new StackPanel { Children = { name, description, path } };
+        _testcases = new TextBox { Text = item.TestcaseSelection, Width = 92, Watermark = "0 or 1,3", VerticalContentAlignment = VerticalAlignment.Center };
         _testcases.LostFocus += (_, _) => { item.TestcaseSelection = string.IsNullOrWhiteSpace(_testcases.Text) ? "0" : _testcases.Text.Trim(); _log($"Testcase selection changed. instance={item.Name}; selection={item.TestcaseSelection}"); };
         _testcases.KeyDown += (_, e) => { if (e.Key == Avalonia.Input.Key.Enter) { item.TestcaseSelection = string.IsNullOrWhiteSpace(_testcases.Text) ? "0" : _testcases.Text.Trim(); _log($"Testcase selection changed. instance={item.Name}; selection={item.TestcaseSelection}; source=enter"); e.Handled = true; } };
-        _executionMode = new ComboBox { Width = 135, ItemsSource = new[] { "Threaded", "Sequential loop" }, SelectedIndex = item.ExecutionMode.Equals("loop", StringComparison.OrdinalIgnoreCase) ? 1 : 0, Margin = new Thickness(8, 0), VerticalContentAlignment = VerticalAlignment.Center };
+        _executionMode = new ComboBox { Width = 112, ItemsSource = new[] { "Threaded", "Sequential loop" }, SelectedIndex = item.ExecutionMode.Equals("loop", StringComparison.OrdinalIgnoreCase) ? 1 : 0, VerticalContentAlignment = VerticalAlignment.Center };
         _executionMode.SelectionChanged += (_, _) => { item.ExecutionMode = _executionMode.SelectedIndex == 1 ? "loop" : "threaded"; _log($"Execution mode changed. instance={item.Name}; mode={item.ExecutionMode}"); };
-        _scenarioOrder = new ComboBox { Width = 125, ItemsSource = new[] { "Sequential testcases", "Parallel testcases" }, SelectedIndex = item.RunScenariosInParallel ? 1 : 0, Margin = new Thickness(8, 0), VerticalContentAlignment = VerticalAlignment.Center };
+        _scenarioOrder = new ComboBox { Width = 140, ItemsSource = new[] { "Sequential testcases", "Parallel testcases" }, SelectedIndex = item.RunScenariosInParallel ? 1 : 0, VerticalContentAlignment = VerticalAlignment.Center };
         _scenarioOrder.SelectionChanged += (_, _) => { item.RunScenariosInParallel = _scenarioOrder.SelectedIndex == 1; _log($"Testcase order changed. instance={item.Name}; parallel={item.RunScenariosInParallel}"); };
-        _dataIdsButton = new Button { Content = string.IsNullOrWhiteSpace(item.DataIdSelection) ? "Configure data IDs..." : "Data IDs selected", Margin = new Thickness(8, 0), VerticalContentAlignment = VerticalAlignment.Center };
+        _dataIdsButton = new Button { Content = string.IsNullOrWhiteSpace(item.DataIdSelection) ? "Data IDs" : "Data IDs ✓", VerticalContentAlignment = VerticalAlignment.Center };
         _dataIdsButton.Click += async (_, _) => await ConfigureDataIdsAsync();
-        _status = new TextBlock { Text = item.Status, Width = 100, VerticalAlignment = VerticalAlignment.Center };
-        _last = new TextBlock { Text = item.LastEvent, Width = 370, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+        namePanel.Children.Add(_dataIdsButton);
+        _status = new TextBlock { Text = item.Status, FontWeight = FontWeight.Bold, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center };
+        _last = new TextBlock { Text = item.LastEvent, FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#667085")), TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(30, 7, 0, 0) };
 
-        var topLine = new StackPanel { Orientation = Orientation.Horizontal, Children = { _check, name, path, new TextBlock { Text = "Testcases:", VerticalAlignment = VerticalAlignment.Center }, _testcases, new TextBlock { Text = "Mode:", VerticalAlignment = VerticalAlignment.Center }, _executionMode, new TextBlock { Text = "Order:", VerticalAlignment = VerticalAlignment.Center }, _scenarioOrder, _dataIdsButton, _status } };
-        var environmentLine = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(28, 6, 0, 0), Children = { new TextBlock { Text = "Environments:", Width = 95, VerticalAlignment = VerticalAlignment.Center }, _environmentChecks } };
-        Child = new StackPanel { Orientation = Orientation.Vertical, Children = { topLine, environmentLine, _last } };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,2.4*,Auto,Auto,Auto,Auto,Auto"), RowDefinitions = new RowDefinitions("Auto,Auto") };
+        _statusBadge = new Border { Padding = new Thickness(8, 4), CornerRadius = new CornerRadius(12), Child = _status, HorizontalAlignment = HorizontalAlignment.Left };
+        grid.Children.Add(_check); Grid.SetColumn(_check, 0);
+        grid.Children.Add(namePanel); Grid.SetColumn(namePanel, 1);
+        grid.Children.Add(_testcases); Grid.SetColumn(_testcases, 2);
+        grid.Children.Add(_executionMode); Grid.SetColumn(_executionMode, 3);
+        grid.Children.Add(_scenarioOrder); Grid.SetColumn(_scenarioOrder, 4);
+        grid.Children.Add(_environmentChecks); Grid.SetColumn(_environmentChecks, 5);
+        grid.Children.Add(_statusBadge); Grid.SetColumn(_statusBadge, 6);
+        grid.Children.Add(_last); Grid.SetRow(_last, 1); Grid.SetColumn(_last, 1); Grid.SetColumnSpan(_last, 6);
+        Child = grid;
         PointerPressed += (_, _) => _select(_item);
         Refresh();
     }
@@ -133,19 +145,22 @@ internal sealed class InstanceRow : Border
         if (_scenarioOrder.IsFocused is false) _scenarioOrder.SelectedIndex = _item.RunScenariosInParallel ? 1 : 0;
         _status.Text = _item.Status;
         _last.Text = _item.LastEvent;
-        _dataIdsButton.Content = string.IsNullOrWhiteSpace(_item.DataIdSelection) ? "Configure data IDs..." : "Data IDs selected";
-        Background = _item.Status.Equals("Passed", StringComparison.OrdinalIgnoreCase)
-            ? Brushes.LightGreen
-            : _item.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase)
-                ? Brushes.MistyRose
-                : _item.Status.Equals("Running", StringComparison.OrdinalIgnoreCase) || _item.Status.Equals("Stopping", StringComparison.OrdinalIgnoreCase)
-                    ? Brushes.LightYellow
-                    : Brushes.Transparent;
+        _dataIdsButton.Content = string.IsNullOrWhiteSpace(_item.DataIdSelection) ? "Data IDs" : "Data IDs ✓";
+        Background = _item.Selected ? new SolidColorBrush(Color.Parse("#EEF4FF")) : Brushes.White;
         _status.Foreground = _item.Status.Equals("Passed", StringComparison.OrdinalIgnoreCase)
-            ? Brushes.DarkGreen
+            ? new SolidColorBrush(Color.Parse("#067647"))
             : _item.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase)
-                ? Brushes.DarkRed
-                : Brushes.Black;
+                ? new SolidColorBrush(Color.Parse("#B42318"))
+                : _item.Status.Equals("Running", StringComparison.OrdinalIgnoreCase) || _item.Status.Equals("Stopping", StringComparison.OrdinalIgnoreCase)
+                    ? new SolidColorBrush(Color.Parse("#315BD8"))
+                    : new SolidColorBrush(Color.Parse("#667085"));
+        _statusBadge.Background = _item.Status.Equals("Passed", StringComparison.OrdinalIgnoreCase)
+            ? new SolidColorBrush(Color.Parse("#ECFDF3"))
+            : _item.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase)
+                ? new SolidColorBrush(Color.Parse("#FEF3F2"))
+                : _item.Status.Equals("Running", StringComparison.OrdinalIgnoreCase) || _item.Status.Equals("Stopping", StringComparison.OrdinalIgnoreCase)
+                    ? new SolidColorBrush(Color.Parse("#EEF4FF"))
+                    : new SolidColorBrush(Color.Parse("#F2F4F7"));
     }
 
     private async Task ConfigureDataIdsAsync()
@@ -186,6 +201,11 @@ public sealed class MainWindow : Window
     private readonly CheckBox _failedOnly = new() { Content = "Show failed only", IsChecked = true };
     private readonly ComboBox _environmentFilter = new() { Width = 150, Margin = new Thickness(8, 6, 6, 0) };
     private readonly CheckBox _enableInternalLog = new() { Content = "Enable internal log", IsChecked = true, Margin = new Thickness(12, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock _readyValue = new();
+    private readonly TextBlock _runningValue = new();
+    private readonly TextBlock _passedValue = new();
+    private readonly TextBlock _failedValue = new();
+    private readonly TextBlock _rpsValue = new();
     private InstanceInfo? _selectedInstance;
     private readonly DispatcherTimer _timer;
 
@@ -247,11 +267,11 @@ public sealed class MainWindow : Window
         top.Children.Add(heading); top.Children.Add(commands);
 
         var stats = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(20, 0, 20, 14) };
-        stats.Children.Add(CreateSummaryCard("READY", "Instances available", "#667085"));
-        stats.Children.Add(CreateSummaryCard("RUNNING", "Active now", "#315BD8"));
-        stats.Children.Add(CreateSummaryCard("PASSED", "Last completed", "#067647"));
-        stats.Children.Add(CreateSummaryCard("FAILED", "Needs attention", "#B42318"));
-        stats.Children.Add(CreateSummaryCard("REQUESTS / SEC", "Average last run", "#7A5AF8"));
+        stats.Children.Add(CreateSummaryCard("READY", "Instances available", "#667085", _readyValue));
+        stats.Children.Add(CreateSummaryCard("RUNNING", "Active now", "#315BD8", _runningValue));
+        stats.Children.Add(CreateSummaryCard("PASSED", "Last completed", "#067647", _passedValue));
+        stats.Children.Add(CreateSummaryCard("FAILED", "Needs attention", "#B42318", _failedValue));
+        stats.Children.Add(CreateSummaryCard("REQUESTS / SEC", "Average last run", "#7A5AF8", _rpsValue));
 
         var instanceHeader = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(14, 12, 14, 8) };
         var instanceTitle = new TextBlock { Text = "Test instances", FontSize = 17, FontWeight = FontWeight.Bold, Foreground = new SolidColorBrush(Color.Parse("#172B4D")) };
@@ -322,13 +342,17 @@ public sealed class MainWindow : Window
         Content = root;
     }
 
-    private static Border CreateSummaryCard(string value, string label, string color)
+    private static Border CreateSummaryCard(string value, string label, string color, TextBlock valueText)
     {
+        valueText.Text = value;
+        valueText.FontSize = 18;
+        valueText.FontWeight = FontWeight.Bold;
+        valueText.Foreground = new SolidColorBrush(Color.Parse(color));
         return new Border
         {
             Width = 145, Height = 76, Margin = new Thickness(0, 0, 10, 0), Padding = new Thickness(12),
             Background = Brushes.White, BorderBrush = new SolidColorBrush(Color.Parse("#E4E7EC")), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8),
-            Child = new StackPanel { Children = { new TextBlock { Text = value, FontSize = 18, FontWeight = FontWeight.Bold, Foreground = new SolidColorBrush(Color.Parse(color)) }, new TextBlock { Text = label, FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#667085")), Margin = new Thickness(0, 5, 0, 0) } } }
+            Child = new StackPanel { Children = { valueText, new TextBlock { Text = label, FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#667085")), Margin = new Thickness(0, 5, 0, 0) } } }
         };
     }
 
@@ -513,6 +537,11 @@ public sealed class MainWindow : Window
     {
         foreach (var item in _instances)
             if (_rows.TryGetValue(item.FolderPath, out var row)) row.Refresh();
+        _readyValue.Text = _instances.Count(item => item.Status.Equals("Ready", StringComparison.OrdinalIgnoreCase)).ToString();
+        _runningValue.Text = _instances.Count(item => item.Status.Equals("Running", StringComparison.OrdinalIgnoreCase) || item.Status.Equals("Stopping", StringComparison.OrdinalIgnoreCase)).ToString();
+        _passedValue.Text = _instances.Count(item => item.Status.Equals("Passed", StringComparison.OrdinalIgnoreCase)).ToString();
+        _failedValue.Text = _instances.Count(item => item.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase) || item.Status.Equals("Launch failed", StringComparison.OrdinalIgnoreCase)).ToString();
+        _rpsValue.Text = "—";
     }
 
     private void RunSelected()
