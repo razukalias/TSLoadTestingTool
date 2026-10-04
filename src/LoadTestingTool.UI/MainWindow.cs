@@ -181,6 +181,7 @@ public sealed class MainWindow : Window
     private readonly Dictionary<string, InstanceRow> _rows = new(StringComparer.OrdinalIgnoreCase);
     private readonly ListBox _instanceList = new();
     private readonly TextBlock _details = new();
+    private readonly TextBlock _overviewDetails = new();
     private readonly StackPanel _assertionItems = new() { Orientation = Orientation.Vertical };
     private readonly CheckBox _failedOnly = new() { Content = "Show failed only", IsChecked = true };
     private readonly ComboBox _environmentFilter = new() { Width = 150, Margin = new Thickness(8, 6, 6, 0) };
@@ -205,17 +206,19 @@ public sealed class MainWindow : Window
 
     private void BuildLayout()
     {
-        var refresh = new Button { Content = "Refresh instances", Margin = new Thickness(0, 0, 8, 0) };
+        Background = new SolidColorBrush(Color.Parse("#F4F7FB"));
+
+        var refresh = new Button { Content = "Refresh", Margin = new Thickness(0, 0, 8, 0), HorizontalContentAlignment = HorizontalAlignment.Left };
         refresh.Click += (_, _) => { UiLog("UI action: refresh instances clicked."); RefreshInstances(); };
         var selectAll = new Button { Content = "Select all", Margin = new Thickness(0, 0, 8, 0) };
         selectAll.Click += (_, _) => { UiLog($"UI action: select all clicked. instances={_instances.Count}"); foreach (var item in _instances) item.Selected = true; RefreshRows(); };
         var clear = new Button { Content = "Clear selection", Margin = new Thickness(0, 0, 8, 0) };
         clear.Click += (_, _) => { UiLog($"UI action: clear selection clicked. instances={_instances.Count}"); foreach (var item in _instances) item.Selected = false; RefreshRows(); };
-        var run = new Button { Content = "Run selected", Background = Brushes.DarkGreen, Foreground = Brushes.White };
+        var run = new Button { Content = "▶  Run selected", Background = new SolidColorBrush(Color.Parse("#315BD8")), Foreground = Brushes.White, Padding = new Thickness(14, 8), FontWeight = FontWeight.Bold };
         run.Click += (_, _) => { UiLog("UI action: run selected clicked."); RunSelected(); };
-        var stop = new Button { Content = "Stop selected", Margin = new Thickness(8, 0, 0, 0) };
+        var stop = new Button { Content = "■  Stop selected", Margin = new Thickness(8, 0, 0, 0), Padding = new Thickness(12, 8) };
         stop.Click += (_, _) => { UiLog("UI action: stop selected clicked."); StopSelected(false); };
-        var forceStop = new Button { Content = "Force stop", Margin = new Thickness(8, 0, 0, 0), Background = Brushes.DarkRed, Foreground = Brushes.White };
+        var forceStop = new Button { Content = "⚠  Force stop", Margin = new Thickness(8, 0, 0, 0), Background = new SolidColorBrush(Color.Parse("#FFF1F2")), Foreground = new SolidColorBrush(Color.Parse("#B42318")), Padding = new Thickness(12, 8) };
         forceStop.Click += (_, _) => { UiLog("UI action: force stop clicked."); StopSelected(true); };
         var manual = new Button { Content = "Open user manual", Margin = new Thickness(8, 0, 0, 0) };
         manual.Click += (_, _) => { UiLog("UI action: open user manual clicked."); OpenConfiguredFile(Path.GetFullPath(_config.DocumentationFile), "user manual", _config.DocumentationApplicationPath); };
@@ -233,13 +236,34 @@ public sealed class MainWindow : Window
         compareAssertions.Click += async (_, _) => { UiLog("UI action: compare failed assertions clicked."); await GenerateAssertionComparisonAsync(); };
         var openComparison = new Button { Content = "Open latest comparison", Margin = new Thickness(8, 0, 0, 0) };
         openComparison.Click += (_, _) => { UiLog("UI action: open latest comparison clicked."); OpenLatestAssertionComparison(); };
-        var top = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(12) };
-        top.Children.Add(refresh); top.Children.Add(selectAll); top.Children.Add(clear); top.Children.Add(_enableInternalLog); top.Children.Add(run); top.Children.Add(stop); top.Children.Add(forceStop); top.Children.Add(manual); top.Children.Add(log); top.Children.Add(dataEngine); top.Children.Add(resultExcel); top.Children.Add(templates); top.Children.Add(uiLog); top.Children.Add(compareAssertions); top.Children.Add(openComparison);
+        var title = new TextBlock { Text = "Run management", FontSize = 24, FontWeight = FontWeight.Bold, Foreground = new SolidColorBrush(Color.Parse("#172B4D")) };
+        var subtitle = new TextBlock { Text = "Select instances, configure test cases and run load tests.", Foreground = new SolidColorBrush(Color.Parse("#667085")), Margin = new Thickness(0, 4, 0, 0) };
+        var heading = new StackPanel { Children = { title, subtitle } };
+        var search = new TextBox { Watermark = "Search instances…", Width = 210, Margin = new Thickness(16, 0, 8, 0), VerticalContentAlignment = VerticalAlignment.Center };
+        var top = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(20, 18, 20, 12) };
+        Grid.SetColumn(heading, 0);
+        var commands = new StackPanel { Orientation = Orientation.Horizontal, Children = { search, run, stop, forceStop } };
+        Grid.SetColumn(commands, 1);
+        top.Children.Add(heading); top.Children.Add(commands);
 
-        _instanceList.Margin = new Thickness(12, 0, 12, 12);
+        var stats = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(20, 0, 20, 14) };
+        stats.Children.Add(CreateSummaryCard("READY", "Instances available", "#667085"));
+        stats.Children.Add(CreateSummaryCard("RUNNING", "Active now", "#315BD8"));
+        stats.Children.Add(CreateSummaryCard("PASSED", "Last completed", "#067647"));
+        stats.Children.Add(CreateSummaryCard("FAILED", "Needs attention", "#B42318"));
+        stats.Children.Add(CreateSummaryCard("REQUESTS / SEC", "Average last run", "#7A5AF8"));
+
+        var instanceHeader = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(14, 12, 14, 8) };
+        var instanceTitle = new TextBlock { Text = "Test instances", FontSize = 17, FontWeight = FontWeight.Bold, Foreground = new SolidColorBrush(Color.Parse("#172B4D")) };
+        Grid.SetColumn(instanceTitle, 0);
+        var instanceActions = new StackPanel { Orientation = Orientation.Horizontal, Children = { refresh, selectAll, clear } };
+        Grid.SetColumn(instanceActions, 1);
+        instanceHeader.Children.Add(instanceTitle); instanceHeader.Children.Add(instanceActions);
+
+        _instanceList.Margin = new Thickness(10, 0, 10, 10);
         _instanceList.ItemTemplate = new FuncDataTemplate<InstanceInfo>((item, _) => item is null ? new Border { Height = 1 } : GetOrCreateRow(item));
         _instanceList.SelectionChanged += (_, _) => { UiLog($"UI action: instance selection changed. instance={(_instanceList.SelectedItem as InstanceInfo)?.Name ?? "<none>"}"); ShowDetails(_instanceList.SelectedItem as InstanceInfo); };
-        _details.Margin = new Thickness(12); _details.TextWrapping = TextWrapping.Wrap;
+        _details.Margin = new Thickness(14); _details.TextWrapping = TextWrapping.Wrap;
         _failedOnly.IsCheckedChanged += (_, _) => { UiLog($"Assertion filter changed. failedOnly={_failedOnly.IsChecked == true}"); RefreshAssertionList(); };
         _environmentFilter.SelectionChanged += (_, _) => { UiLog($"Assertion environment filter changed. environment={_environmentFilter.SelectedItem ?? "<none>"}"); RefreshAssertionList(); };
         _environmentFilter.ItemsSource = new[] { "All environments" };
@@ -266,10 +290,56 @@ public sealed class MainWindow : Window
         };
         var assertionPanel = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,Auto,*"), Children = { _details, _failedOnly, assertionActions, assertionScroll } };
         Grid.SetRow(_details, 0); Grid.SetRow(_failedOnly, 1); Grid.SetRow(assertionActions, 2); Grid.SetRow(assertionScroll, 3);
-        var body = new Grid { ColumnDefinitions = new ColumnDefinitions("3*,2*") };
-        Grid.SetColumn(_instanceList, 0); Grid.SetColumn(assertionPanel, 1); body.Children.Add(_instanceList); body.Children.Add(assertionPanel);
-        Content = new DockPanel { Children = { top, body } };
-        DockPanel.SetDock(top, Dock.Top);
+
+        var overviewActions = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(14, 0, 14, 14), Children = { manual, log, dataEngine, resultExcel, templates, uiLog, compareAssertions, openComparison } };
+        _overviewDetails.Margin = new Thickness(14); _overviewDetails.TextWrapping = TextWrapping.Wrap;
+        var overview = new ScrollViewer { Content = new StackPanel { Children = { _overviewDetails, overviewActions } }, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        var tabs = new TabControl { Margin = new Thickness(0, 0, 14, 10), ItemsSource = new[]
+        {
+            new TabItem { Header = "Overview", Content = overview },
+            new TabItem { Header = "Assertions", Content = assertionPanel },
+            new TabItem { Header = "Logs", Content = new TextBlock { Text = "Use Open internal.log or Open UI log to inspect structured runner events.", Margin = new Thickness(16), TextWrapping = TextWrapping.Wrap } },
+            new TabItem { Header = "Artifacts", Content = new TextBlock { Text = "Use Open result Excel, Open Templates Folder, or Open latest comparison for run artifacts.", Margin = new Thickness(16), TextWrapping = TextWrapping.Wrap } }
+        } };
+
+        var listCard = new Border { Background = Brushes.White, BorderBrush = new SolidColorBrush(Color.Parse("#E4E7EC")), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Child = new DockPanel { Children = { instanceHeader, _instanceList } } };
+        DockPanel.SetDock(instanceHeader, Dock.Top);
+        var detailsCard = new Border { Background = Brushes.White, BorderBrush = new SolidColorBrush(Color.Parse("#E4E7EC")), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Child = tabs };
+        var body = new Grid { ColumnDefinitions = new ColumnDefinitions("3*,2*"), Margin = new Thickness(20, 0, 20, 12) };
+        Grid.SetColumn(listCard, 0); Grid.SetColumn(detailsCard, 1); body.Children.Add(listCard); body.Children.Add(detailsCard);
+
+        var navTitle = new TextBlock { Text = "▥  Load Testing Tool", FontSize = 17, FontWeight = FontWeight.Bold, Foreground = Brushes.White, Margin = new Thickness(18, 20, 12, 24) };
+        var nav = new StackPanel { Background = new SolidColorBrush(Color.Parse("#102A43")), Width = 190, Children = { navTitle,
+            CreateNavItem("▣  Instances", true), CreateNavItem("▶  Runs", false), CreateNavItem("◷  History", false), CreateNavItem("⚙  Settings", false),
+            new Border { Height = 1, Background = new SolidColorBrush(Color.Parse("#274C77")), Margin = new Thickness(16, 22, 16, 14) },
+            new TextBlock { Text = "●  Connected", Foreground = new SolidColorBrush(Color.Parse("#6EE7B7")), Margin = new Thickness(18, 0, 12, 4) },
+            new TextBlock { Text = "Instance manager", Foreground = new SolidColorBrush(Color.Parse("#9FB3C8")), Margin = new Thickness(18, 0, 12, 12), FontSize = 12 } } };
+        var content = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto") };
+        Grid.SetRow(top, 0); Grid.SetRow(stats, 1); Grid.SetRow(body, 2); Grid.SetRow(_enableInternalLog, 3);
+        content.Children.Add(top); content.Children.Add(stats); content.Children.Add(body); _enableInternalLog.Margin = new Thickness(22, 0, 0, 12); content.Children.Add(_enableInternalLog);
+        var root = new Grid { ColumnDefinitions = new ColumnDefinitions("190,*") };
+        Grid.SetColumn(nav, 0); Grid.SetColumn(content, 1); root.Children.Add(nav); root.Children.Add(content);
+        Content = root;
+    }
+
+    private static Border CreateSummaryCard(string value, string label, string color)
+    {
+        return new Border
+        {
+            Width = 145, Height = 76, Margin = new Thickness(0, 0, 10, 0), Padding = new Thickness(12),
+            Background = Brushes.White, BorderBrush = new SolidColorBrush(Color.Parse("#E4E7EC")), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8),
+            Child = new StackPanel { Children = { new TextBlock { Text = value, FontSize = 18, FontWeight = FontWeight.Bold, Foreground = new SolidColorBrush(Color.Parse(color)) }, new TextBlock { Text = label, FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#667085")), Margin = new Thickness(0, 5, 0, 0) } } }
+        };
+    }
+
+    private static Border CreateNavItem(string text, bool selected)
+    {
+        return new Border
+        {
+            Background = selected ? new SolidColorBrush(Color.Parse("#1D4ED8")) : Brushes.Transparent,
+            CornerRadius = new CornerRadius(5), Margin = new Thickness(8, 2), Padding = new Thickness(10, 10),
+            Child = new TextBlock { Text = text, Foreground = Brushes.White, FontWeight = selected ? FontWeight.Bold : FontWeight.Normal }
+        };
     }
 
     private InstanceRow GetOrCreateRow(InstanceInfo item)
@@ -622,7 +692,9 @@ public sealed class MainWindow : Window
     private void UpdateDetailsText()
     {
         var item = _selectedInstance;
-        _details.Text = item is null ? "" : $"Instance: {item.Name}\nWorkbook: {item.WorkbookPath}\nStatus: {item.Status}\nTestcases: {item.TestcaseSelection}\nLatest: {item.LastEvent}\nAssertions: {item.Assertions.Count(a => a.Result == "PASS")} passed / {item.Assertions.Count(a => a.Result == "FAIL")} failed\nResults: {item.ResultsFolder}\nCurrent run: {item.CurrentRunFolder}\nLatest internal.log: {FindLatestInternalLog(item) ?? "not created yet"}";
+        var text = item is null ? "" : $"Instance: {item.Name}\nWorkbook: {item.WorkbookPath}\nStatus: {item.Status}\nTestcases: {item.TestcaseSelection}\nLatest: {item.LastEvent}\nAssertions: {item.Assertions.Count(a => a.Result == "PASS")} passed / {item.Assertions.Count(a => a.Result == "FAIL")} failed\nResults: {item.ResultsFolder}\nCurrent run: {item.CurrentRunFolder}\nLatest internal.log: {FindLatestInternalLog(item) ?? "not created yet"}";
+        _details.Text = text;
+        _overviewDetails.Text = text;
     }
 
     private void OpenLatestInternalLog()
