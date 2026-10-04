@@ -6,8 +6,8 @@ namespace LoadTestingTool.UI;
 
 public sealed class UiConfig
 {
-    public string InstancesRoot { get; set; } = "Instances";
-    public string RunnerDll { get; set; } = "../runner/LoadTestingTool.dll";
+    public string InstancesRoot { get; set; } = "../Instances";
+    public string RunnerDll { get; set; } = "../Runner/LoadTestingTool.exe";
     public string InstancePrefix { get; set; } = "DataEngine_";
     public string DocumentationFile { get; set; } = "../APPLICATION_GUIDE.pdf";
     public string UiLogFile { get; set; } = "Logs/ui-internal.log";

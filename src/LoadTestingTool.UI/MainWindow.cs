@@ -35,6 +35,14 @@ public sealed class InstanceInfo
     public string CurrentRunFolder { get; set; } = string.Empty;
     public string CurrentRunId { get; set; } = string.Empty;
     public List<AssertionInfo> Assertions { get; } = [];
+    public List<DashboardRequest> Requests { get; } = [];
+    public List<string> EventMessages { get; } = [];
+    public DateTimeOffset? StartedAt { get; set; }
+    public DateTimeOffset? CompletedAt { get; set; }
+    public int? CompletedRequests { get; set; }
+    public double? AverageMs { get; set; }
+    public long? P95Ms { get; set; }
+    public double? RequestsPerSecond { get; set; }
     public string ResultsFolder => Path.Combine(FolderPath, "Results");
     public string HistoryFolder => Path.Combine(FolderPath, "History");
     public string TemplatesFolder => Path.Combine(FolderPath, "Templates");
@@ -79,124 +87,13 @@ internal sealed record AssertionComparisonKey(
     string ResponsePath,
     string AssertionVerb);
 
-internal sealed class InstanceRow : Border
-{
-    private readonly InstanceInfo _item;
-    private readonly CheckBox _check;
-    private readonly TextBlock _status;
-    private readonly Border _statusBadge;
-    private readonly TextBlock _last;
-    private readonly TextBox _testcases;
-    private readonly ComboBox _executionMode;
-    private readonly ComboBox _scenarioOrder;
-    private readonly Button _dataIdsButton;
-    private readonly WrapPanel _environmentChecks = new() { Orientation = Orientation.Horizontal, MinWidth = 180, MaxWidth = 320 };
-    private readonly Action<InstanceInfo> _select;
-    private readonly Action<string> _log;
-
-    public InstanceRow(InstanceInfo item, Action<InstanceInfo> select, Action<string> log)
-    {
-        _item = item;
-        _select = select;
-        _log = log;
-        Padding = new Thickness(8, 10);
-        BorderBrush = new SolidColorBrush(Color.Parse("#EAECF0"));
-        BorderThickness = new Thickness(0, 0, 0, 1);
-
-        _check = new CheckBox { IsChecked = item.Selected, VerticalAlignment = VerticalAlignment.Center };
-        _check.IsCheckedChanged += (_, _) => { item.Selected = _check.IsChecked == true; _log($"Instance selection changed. instance={item.Name}; selected={item.Selected}"); };
-        var name = new TextBlock { Text = item.Name, FontWeight = FontWeight.Bold, Foreground = new SolidColorBrush(Color.Parse("#172B4D")), TextTrimming = TextTrimming.CharacterEllipsis };
-        var path = new TextBlock { Text = item.WorkbookPath, FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#667085")), TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 3, 0, 0) };
-        var description = new TextBlock { Text = "Workbook-backed load test instance", FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#98A2B3")), TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 2, 0, 0) };
-        var namePanel = new StackPanel { Children = { name, description, path } };
-        _testcases = new TextBox { Text = item.TestcaseSelection, Width = 92, Watermark = "0 or 1,3", VerticalContentAlignment = VerticalAlignment.Center };
-        _testcases.LostFocus += (_, _) => { item.TestcaseSelection = string.IsNullOrWhiteSpace(_testcases.Text) ? "0" : _testcases.Text.Trim(); _log($"Testcase selection changed. instance={item.Name}; selection={item.TestcaseSelection}"); };
-        _testcases.KeyDown += (_, e) => { if (e.Key == Avalonia.Input.Key.Enter) { item.TestcaseSelection = string.IsNullOrWhiteSpace(_testcases.Text) ? "0" : _testcases.Text.Trim(); _log($"Testcase selection changed. instance={item.Name}; selection={item.TestcaseSelection}; source=enter"); e.Handled = true; } };
-        _executionMode = new ComboBox { Width = 112, ItemsSource = new[] { "Threaded", "Sequential loop" }, SelectedIndex = item.ExecutionMode.Equals("loop", StringComparison.OrdinalIgnoreCase) ? 1 : 0, VerticalContentAlignment = VerticalAlignment.Center };
-        _executionMode.SelectionChanged += (_, _) => { item.ExecutionMode = _executionMode.SelectedIndex == 1 ? "loop" : "threaded"; _log($"Execution mode changed. instance={item.Name}; mode={item.ExecutionMode}"); };
-        _scenarioOrder = new ComboBox { Width = 140, ItemsSource = new[] { "Sequential testcases", "Parallel testcases" }, SelectedIndex = item.RunScenariosInParallel ? 1 : 0, VerticalContentAlignment = VerticalAlignment.Center };
-        _scenarioOrder.SelectionChanged += (_, _) => { item.RunScenariosInParallel = _scenarioOrder.SelectedIndex == 1; _log($"Testcase order changed. instance={item.Name}; parallel={item.RunScenariosInParallel}"); };
-        _dataIdsButton = new Button { Content = string.IsNullOrWhiteSpace(item.DataIdSelection) ? "Data IDs" : "Data IDs ✓", VerticalContentAlignment = VerticalAlignment.Center };
-        _dataIdsButton.Click += async (_, _) => await ConfigureDataIdsAsync();
-        namePanel.Children.Add(_dataIdsButton);
-        _status = new TextBlock { Text = item.Status, FontWeight = FontWeight.Bold, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center };
-        _last = new TextBlock { Text = item.LastEvent, FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#667085")), TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(30, 7, 0, 0) };
-
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,2.4*,Auto,Auto,Auto,Auto,Auto"), RowDefinitions = new RowDefinitions("Auto,Auto") };
-        _statusBadge = new Border { Padding = new Thickness(8, 4), CornerRadius = new CornerRadius(12), Child = _status, HorizontalAlignment = HorizontalAlignment.Left };
-        grid.Children.Add(_check); Grid.SetColumn(_check, 0);
-        grid.Children.Add(namePanel); Grid.SetColumn(namePanel, 1);
-        grid.Children.Add(_testcases); Grid.SetColumn(_testcases, 2);
-        grid.Children.Add(_executionMode); Grid.SetColumn(_executionMode, 3);
-        grid.Children.Add(_scenarioOrder); Grid.SetColumn(_scenarioOrder, 4);
-        grid.Children.Add(_environmentChecks); Grid.SetColumn(_environmentChecks, 5);
-        grid.Children.Add(_statusBadge); Grid.SetColumn(_statusBadge, 6);
-        grid.Children.Add(_last); Grid.SetRow(_last, 1); Grid.SetColumn(_last, 1); Grid.SetColumnSpan(_last, 6);
-        Child = grid;
-        PointerPressed += (_, _) => _select(_item);
-        Refresh();
-    }
-
-    public void Refresh()
-    {
-        _check.IsChecked = _item.Selected;
-        if (_testcases.IsFocused is false) _testcases.Text = _item.TestcaseSelection;
-        if (_executionMode.IsFocused is false) _executionMode.SelectedIndex = _item.ExecutionMode.Equals("loop", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
-        if (_scenarioOrder.IsFocused is false) _scenarioOrder.SelectedIndex = _item.RunScenariosInParallel ? 1 : 0;
-        _status.Text = _item.Status;
-        _last.Text = _item.LastEvent;
-        _dataIdsButton.Content = string.IsNullOrWhiteSpace(_item.DataIdSelection) ? "Data IDs" : "Data IDs ✓";
-        Background = _item.Selected ? new SolidColorBrush(Color.Parse("#EEF4FF")) : Brushes.White;
-        _status.Foreground = _item.Status.Equals("Passed", StringComparison.OrdinalIgnoreCase)
-            ? new SolidColorBrush(Color.Parse("#067647"))
-            : _item.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase)
-                ? new SolidColorBrush(Color.Parse("#B42318"))
-                : _item.Status.Equals("Running", StringComparison.OrdinalIgnoreCase) || _item.Status.Equals("Stopping", StringComparison.OrdinalIgnoreCase)
-                    ? new SolidColorBrush(Color.Parse("#315BD8"))
-                    : new SolidColorBrush(Color.Parse("#667085"));
-        _statusBadge.Background = _item.Status.Equals("Passed", StringComparison.OrdinalIgnoreCase)
-            ? new SolidColorBrush(Color.Parse("#ECFDF3"))
-            : _item.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase)
-                ? new SolidColorBrush(Color.Parse("#FEF3F2"))
-                : _item.Status.Equals("Running", StringComparison.OrdinalIgnoreCase) || _item.Status.Equals("Stopping", StringComparison.OrdinalIgnoreCase)
-                    ? new SolidColorBrush(Color.Parse("#EEF4FF"))
-                    : new SolidColorBrush(Color.Parse("#F2F4F7"));
-    }
-
-    private async Task ConfigureDataIdsAsync()
-    {
-        var owner = VisualRoot as Window;
-        if (owner is null) { _log($"Data-ID dialog could not open. instance={_item.Name}; reason=no-owner-window"); return; }
-        _log($"Data-ID dialog opened. instance={_item.Name}; currentSelection={_item.DataIdSelection}");
-        var dialog = new DataIdSelectionWindow(_item.DataIdOptions, _item.DataIdSelection, _log);
-        var selected = await dialog.ShowDialog<string?>(owner);
-        if (selected is null) { _log($"Data-ID dialog cancelled. instance={_item.Name}"); return; }
-        _item.DataIdSelection = selected;
-        _dataIdsButton.Content = string.IsNullOrWhiteSpace(selected) ? "Configure data IDs..." : "Data IDs selected";
-        _log($"Data-ID selection applied. instance={_item.Name}; selection={selected}");
-    }
-
-    public void SetEnvironmentOptions(IEnumerable<string> options)
-    {
-        _environmentChecks.Children.Clear();
-        var selected = _item.EnvironmentSelection.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        foreach (var environment in options.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            var check = new CheckBox { Content = environment, IsChecked = selected.Contains(environment, StringComparer.OrdinalIgnoreCase), Margin = new Thickness(3, 0) };
-            check.IsCheckedChanged += (_, _) => { _item.EnvironmentSelection = string.Join(",", _environmentChecks.Children.OfType<CheckBox>().Where(x => x.IsChecked == true).Select(x => x.Content?.ToString())); _log($"Environment selection changed. instance={_item.Name}; environments={_item.EnvironmentSelection}"); };
-            _environmentChecks.Children.Add(check);
-        }
-    }
-}
-
-public sealed class MainWindow : Window
+public sealed partial class MainWindow : Window
 {
     private readonly UiConfig _config;
     private readonly ObservableCollection<InstanceInfo> _instances = [];
     private readonly Dictionary<string, InstanceRow> _rows = new(StringComparer.OrdinalIgnoreCase);
     private readonly ListBox _instanceList = new();
     private readonly TextBlock _details = new();
-    private readonly TextBlock _overviewDetails = new();
     private readonly StackPanel _assertionItems = new() { Orientation = Orientation.Vertical };
     private readonly CheckBox _failedOnly = new() { Content = "Show failed only", IsChecked = true };
     private readonly ComboBox _environmentFilter = new() { Width = 150, Margin = new Thickness(8, 6, 6, 0) };
@@ -224,148 +121,6 @@ public sealed class MainWindow : Window
         UiLog($"UI initialized. instancesRoot={Path.GetFullPath(_config.InstancesRoot)}; uiLog={Path.GetFullPath(_config.UiLogFile)}; pollIntervalMs=500");
     }
 
-    private void BuildLayout()
-    {
-        Background = new SolidColorBrush(Color.Parse("#F4F7FB"));
-
-        var refresh = new Button { Content = "Refresh", Margin = new Thickness(0, 0, 8, 0), HorizontalContentAlignment = HorizontalAlignment.Left };
-        refresh.Click += (_, _) => { UiLog("UI action: refresh instances clicked."); RefreshInstances(); };
-        var selectAll = new Button { Content = "Select all", Margin = new Thickness(0, 0, 8, 0) };
-        selectAll.Click += (_, _) => { UiLog($"UI action: select all clicked. instances={_instances.Count}"); foreach (var item in _instances) item.Selected = true; RefreshRows(); };
-        var clear = new Button { Content = "Clear selection", Margin = new Thickness(0, 0, 8, 0) };
-        clear.Click += (_, _) => { UiLog($"UI action: clear selection clicked. instances={_instances.Count}"); foreach (var item in _instances) item.Selected = false; RefreshRows(); };
-        var run = new Button { Content = "▶  Run selected", Background = new SolidColorBrush(Color.Parse("#315BD8")), Foreground = Brushes.White, Padding = new Thickness(14, 8), FontWeight = FontWeight.Bold };
-        run.Click += (_, _) => { UiLog("UI action: run selected clicked."); RunSelected(); };
-        var stop = new Button { Content = "■  Stop selected", Margin = new Thickness(8, 0, 0, 0), Padding = new Thickness(12, 8) };
-        stop.Click += (_, _) => { UiLog("UI action: stop selected clicked."); StopSelected(false); };
-        var forceStop = new Button { Content = "⚠  Force stop", Margin = new Thickness(8, 0, 0, 0), Background = new SolidColorBrush(Color.Parse("#FFF1F2")), Foreground = new SolidColorBrush(Color.Parse("#B42318")), Padding = new Thickness(12, 8) };
-        forceStop.Click += (_, _) => { UiLog("UI action: force stop clicked."); StopSelected(true); };
-        var manual = new Button { Content = "Open user manual", Margin = new Thickness(8, 0, 0, 0) };
-        manual.Click += (_, _) => { UiLog("UI action: open user manual clicked."); OpenConfiguredFile(Path.GetFullPath(_config.DocumentationFile), "user manual", _config.DocumentationApplicationPath); };
-        var log = new Button { Content = "Open internal.log", Margin = new Thickness(8, 0, 0, 0) };
-        log.Click += (_, _) => { UiLog("UI action: open internal log clicked."); OpenLatestInternalLog(); };
-        var dataEngine = new Button { Content = "Open DataEngine", Margin = new Thickness(8, 0, 0, 0) };
-        dataEngine.Click += (_, _) => { UiLog("UI action: open DataEngine clicked."); OpenSelectedDataEngine(); };
-        var resultExcel = new Button { Content = "Open result Excel", Margin = new Thickness(8, 0, 0, 0) };
-        resultExcel.Click += (_, _) => { UiLog("UI action: open result Excel clicked."); OpenLatestResultWorkbook(); };
-        var templates = new Button { Content = "Open Templates Folder", Margin = new Thickness(8, 0, 0, 0) };
-        templates.Click += (_, _) => { UiLog("UI action: open Templates folder clicked."); OpenTemplatesFolder(); };
-        var uiLog = new Button { Content = "Open UI log", Margin = new Thickness(8, 0, 0, 0) };
-        uiLog.Click += (_, _) => { UiLog("UI action: open UI log clicked."); OpenConfiguredFile(Path.GetFullPath(_config.UiLogFile), "UI log", _config.LogApplicationPath); };
-        var compareAssertions = new Button { Content = "Compare failed assertions", Margin = new Thickness(8, 0, 0, 0) };
-        compareAssertions.Click += async (_, _) => { UiLog("UI action: compare failed assertions clicked."); await GenerateAssertionComparisonAsync(); };
-        var openComparison = new Button { Content = "Open latest comparison", Margin = new Thickness(8, 0, 0, 0) };
-        openComparison.Click += (_, _) => { UiLog("UI action: open latest comparison clicked."); OpenLatestAssertionComparison(); };
-        var title = new TextBlock { Text = "Run management", FontSize = 24, FontWeight = FontWeight.Bold, Foreground = new SolidColorBrush(Color.Parse("#172B4D")) };
-        var subtitle = new TextBlock { Text = "Select instances, configure test cases and run load tests.", Foreground = new SolidColorBrush(Color.Parse("#667085")), Margin = new Thickness(0, 4, 0, 0) };
-        var heading = new StackPanel { Children = { title, subtitle } };
-        var search = new TextBox { Watermark = "Search instances…", Width = 210, Margin = new Thickness(16, 0, 8, 0), VerticalContentAlignment = VerticalAlignment.Center };
-        var top = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(20, 18, 20, 12) };
-        Grid.SetColumn(heading, 0);
-        var commands = new StackPanel { Orientation = Orientation.Horizontal, Children = { search, run, stop, forceStop } };
-        Grid.SetColumn(commands, 1);
-        top.Children.Add(heading); top.Children.Add(commands);
-
-        var stats = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(20, 0, 20, 14) };
-        stats.Children.Add(CreateSummaryCard("READY", "Instances available", "#667085", _readyValue));
-        stats.Children.Add(CreateSummaryCard("RUNNING", "Active now", "#315BD8", _runningValue));
-        stats.Children.Add(CreateSummaryCard("PASSED", "Last completed", "#067647", _passedValue));
-        stats.Children.Add(CreateSummaryCard("FAILED", "Needs attention", "#B42318", _failedValue));
-        stats.Children.Add(CreateSummaryCard("REQUESTS / SEC", "Average last run", "#7A5AF8", _rpsValue));
-
-        var instanceHeader = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(14, 12, 14, 8) };
-        var instanceTitle = new TextBlock { Text = "Test instances", FontSize = 17, FontWeight = FontWeight.Bold, Foreground = new SolidColorBrush(Color.Parse("#172B4D")) };
-        Grid.SetColumn(instanceTitle, 0);
-        var instanceActions = new StackPanel { Orientation = Orientation.Horizontal, Children = { refresh, selectAll, clear } };
-        Grid.SetColumn(instanceActions, 1);
-        instanceHeader.Children.Add(instanceTitle); instanceHeader.Children.Add(instanceActions);
-
-        _instanceList.Margin = new Thickness(10, 0, 10, 10);
-        _instanceList.ItemTemplate = new FuncDataTemplate<InstanceInfo>((item, _) => item is null ? new Border { Height = 1 } : GetOrCreateRow(item));
-        _instanceList.SelectionChanged += (_, _) => { UiLog($"UI action: instance selection changed. instance={(_instanceList.SelectedItem as InstanceInfo)?.Name ?? "<none>"}"); ShowDetails(_instanceList.SelectedItem as InstanceInfo); };
-        _details.Margin = new Thickness(14); _details.TextWrapping = TextWrapping.Wrap;
-        _failedOnly.IsCheckedChanged += (_, _) => { UiLog($"Assertion filter changed. failedOnly={_failedOnly.IsChecked == true}"); RefreshAssertionList(); };
-        _environmentFilter.SelectionChanged += (_, _) => { UiLog($"Assertion environment filter changed. environment={_environmentFilter.SelectedItem ?? "<none>"}"); RefreshAssertionList(); };
-        _environmentFilter.ItemsSource = new[] { "All environments" };
-        _environmentFilter.SelectedIndex = 0;
-        var refreshAssertions = new Button { Content = "Refresh assertions", Margin = new Thickness(0, 6, 6, 0) };
-        refreshAssertions.Click += (_, _) => { UiLog($"UI action: refresh assertions clicked. instance={_selectedInstance?.Name ?? "<none>"}; assertionsBefore={_selectedInstance?.Assertions.Count ?? 0}"); UpdateEnvironmentFilterOptions(); RefreshAssertionList(); };
-        var selectFailed = new Button { Content = "Select failed", Margin = new Thickness(0, 6, 6, 0) };
-        selectFailed.Click += (_, _) => { var count = _selectedInstance?.Assertions.Count(a => a.Result == "FAIL") ?? 0; UiLog($"UI action: select failed assertions clicked. instance={_selectedInstance?.Name ?? "<none>"}; failedCount={count}"); if (_selectedInstance is not null) foreach (var a in _selectedInstance.Assertions.Where(a => a.Result == "FAIL")) a.Selected = true; RefreshAssertionList(); };
-        var clearAssertions = new Button { Content = "Clear selection", Margin = new Thickness(0, 6, 6, 0) };
-        clearAssertions.Click += (_, _) => { UiLog($"UI action: clear assertion selection clicked. instance={_selectedInstance?.Name ?? "<none>"}"); if (_selectedInstance is not null) foreach (var a in _selectedInstance.Assertions) a.Selected = false; RefreshAssertionList(); };
-        var applyFixes = new Button { Content = "Apply selected actual values", Margin = new Thickness(0, 6, 0, 0) };
-        applyFixes.Click += (_, _) => { UiLog($"UI action: apply selected actual values clicked. instance={_selectedInstance?.Name ?? "<none>"}"); ApplySelectedFixes(); };
-        var filterLabel = new TextBlock { Text = "Environment:", Margin = new Thickness(0, 10, 0, 0), VerticalAlignment = VerticalAlignment.Top };
-        var assertionActions = new StackPanel { Orientation = Orientation.Horizontal, Children = { refreshAssertions, filterLabel, _environmentFilter, selectFailed, clearAssertions, applyFixes } };
-        _assertionItems.MinWidth = 900;
-        var assertionScroll = new ScrollViewer
-        {
-            Content = _assertionItems,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Visible,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Visible,
-            MinHeight = 250,
-            HorizontalContentAlignment = HorizontalAlignment.Left,
-            VerticalContentAlignment = VerticalAlignment.Top
-        };
-        var assertionPanel = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,Auto,*"), Children = { _details, _failedOnly, assertionActions, assertionScroll } };
-        Grid.SetRow(_details, 0); Grid.SetRow(_failedOnly, 1); Grid.SetRow(assertionActions, 2); Grid.SetRow(assertionScroll, 3);
-
-        var overviewActions = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(14, 0, 14, 14), Children = { manual, log, dataEngine, resultExcel, templates, uiLog, compareAssertions, openComparison } };
-        _overviewDetails.Margin = new Thickness(14); _overviewDetails.TextWrapping = TextWrapping.Wrap;
-        var overview = new ScrollViewer { Content = new StackPanel { Children = { _overviewDetails, overviewActions } }, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-        var tabs = new TabControl { Margin = new Thickness(0, 0, 14, 10), ItemsSource = new[]
-        {
-            new TabItem { Header = "Overview", Content = overview },
-            new TabItem { Header = "Assertions", Content = assertionPanel },
-            new TabItem { Header = "Logs", Content = new TextBlock { Text = "Use Open internal.log or Open UI log to inspect structured runner events.", Margin = new Thickness(16), TextWrapping = TextWrapping.Wrap } },
-            new TabItem { Header = "Artifacts", Content = new TextBlock { Text = "Use Open result Excel, Open Templates Folder, or Open latest comparison for run artifacts.", Margin = new Thickness(16), TextWrapping = TextWrapping.Wrap } }
-        } };
-
-        var listCard = new Border { Background = Brushes.White, BorderBrush = new SolidColorBrush(Color.Parse("#E4E7EC")), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Child = new DockPanel { Children = { instanceHeader, _instanceList } } };
-        DockPanel.SetDock(instanceHeader, Dock.Top);
-        var detailsCard = new Border { Background = Brushes.White, BorderBrush = new SolidColorBrush(Color.Parse("#E4E7EC")), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Child = tabs };
-        var body = new Grid { ColumnDefinitions = new ColumnDefinitions("3*,2*"), Margin = new Thickness(20, 0, 20, 12) };
-        Grid.SetColumn(listCard, 0); Grid.SetColumn(detailsCard, 1); body.Children.Add(listCard); body.Children.Add(detailsCard);
-
-        var navTitle = new TextBlock { Text = "▥  Load Testing Tool", FontSize = 17, FontWeight = FontWeight.Bold, Foreground = Brushes.White, Margin = new Thickness(18, 20, 12, 24) };
-        var nav = new StackPanel { Background = new SolidColorBrush(Color.Parse("#102A43")), Width = 190, Children = { navTitle,
-            CreateNavItem("▣  Instances", true), CreateNavItem("▶  Runs", false), CreateNavItem("◷  History", false), CreateNavItem("⚙  Settings", false),
-            new Border { Height = 1, Background = new SolidColorBrush(Color.Parse("#274C77")), Margin = new Thickness(16, 22, 16, 14) },
-            new TextBlock { Text = "●  Connected", Foreground = new SolidColorBrush(Color.Parse("#6EE7B7")), Margin = new Thickness(18, 0, 12, 4) },
-            new TextBlock { Text = "Instance manager", Foreground = new SolidColorBrush(Color.Parse("#9FB3C8")), Margin = new Thickness(18, 0, 12, 12), FontSize = 12 } } };
-        var content = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto") };
-        Grid.SetRow(top, 0); Grid.SetRow(stats, 1); Grid.SetRow(body, 2); Grid.SetRow(_enableInternalLog, 3);
-        content.Children.Add(top); content.Children.Add(stats); content.Children.Add(body); _enableInternalLog.Margin = new Thickness(22, 0, 0, 12); content.Children.Add(_enableInternalLog);
-        var root = new Grid { ColumnDefinitions = new ColumnDefinitions("190,*") };
-        Grid.SetColumn(nav, 0); Grid.SetColumn(content, 1); root.Children.Add(nav); root.Children.Add(content);
-        Content = root;
-    }
-
-    private static Border CreateSummaryCard(string value, string label, string color, TextBlock valueText)
-    {
-        valueText.Text = value;
-        valueText.FontSize = 18;
-        valueText.FontWeight = FontWeight.Bold;
-        valueText.Foreground = new SolidColorBrush(Color.Parse(color));
-        return new Border
-        {
-            Width = 145, Height = 76, Margin = new Thickness(0, 0, 10, 0), Padding = new Thickness(12),
-            Background = Brushes.White, BorderBrush = new SolidColorBrush(Color.Parse("#E4E7EC")), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8),
-            Child = new StackPanel { Children = { valueText, new TextBlock { Text = label, FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#667085")), Margin = new Thickness(0, 5, 0, 0) } } }
-        };
-    }
-
-    private static Border CreateNavItem(string text, bool selected)
-    {
-        return new Border
-        {
-            Background = selected ? new SolidColorBrush(Color.Parse("#1D4ED8")) : Brushes.Transparent,
-            CornerRadius = new CornerRadius(5), Margin = new Thickness(8, 2), Padding = new Thickness(10, 10),
-            Child = new TextBlock { Text = text, Foreground = Brushes.White, FontWeight = selected ? FontWeight.Bold : FontWeight.Normal }
-        };
-    }
-
     private InstanceRow GetOrCreateRow(InstanceInfo item)
     {
         if (_rows.TryGetValue(item.FolderPath, out var existing)) return existing;
@@ -379,9 +134,12 @@ public sealed class MainWindow : Window
     {
         var check = new CheckBox { IsChecked = assertion.Selected, VerticalAlignment = VerticalAlignment.Top };
         check.IsCheckedChanged += (_, _) => assertion.Selected = check.IsChecked == true;
-        var result = new TextBlock { Text = assertion.Result, Width = 48, Foreground = assertion.Result == "PASS" ? Brushes.DarkGreen : Brushes.DarkRed, FontWeight = FontWeight.Bold };
-        var text = new TextBlock { Text = $"[{assertion.Environment}] {assertion.Testcase} / DataId {assertion.DataId} / Step {assertion.StepName} / {assertion.ResponsePath} {assertion.AssertionVerb}\nExpected: {assertion.ExpectedValue}\nActual: {assertion.ActualValue}", TextWrapping = TextWrapping.NoWrap, MinWidth = 820 };
-        return new Border { Padding = new Thickness(4), Margin = new Thickness(0, 2), Background = assertion.Result == "PASS" ? Brushes.Honeydew : Brushes.MistyRose, Child = new StackPanel { Orientation = Orientation.Horizontal, Children = { check, result, text } } };
+        var text = DashboardStyle.Text($"[{assertion.Environment}] {assertion.Testcase} / Data {assertion.DataId}\n{assertion.StepName} / {assertion.ResponsePath} {assertion.AssertionVerb}\nExpected: {assertion.ExpectedValue}\nActual: {assertion.ActualValue}", 12);
+        text.TextWrapping = TextWrapping.Wrap;
+        var content = new StackPanel { Spacing = 6, Children = { DashboardStyle.Badge(assertion.Result == "PASS" ? "Passed" : "Failed"), text } };
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("30,*") };
+        row.Children.Add(check); Grid.SetColumn(content, 1); row.Children.Add(content);
+        var card = DashboardStyle.Card(row, new Thickness(10)); card.Margin = new Thickness(0, 0, 0, 8); return card;
     }
 
     private void RefreshAssertionList()
@@ -528,8 +286,9 @@ public sealed class MainWindow : Window
             _instances.Add(item);
             if (_rows.TryGetValue(folder, out var existingRow)) existingRow.SetEnvironmentOptions(item.EnvironmentOptions);
         }
-        _instanceList.ItemsSource = _instances;
-        _details.Text = $"Detected {_instances.Count} instance(s) under {root}. Select an instance to see its log. Set Testcases in each row, then select instances and press Run selected.";
+        FilterInstances();
+        RefreshRows();
+        _details.Text = $"Found {_instances.Count} instance(s). Configure in the Config tab; tick the instance and press Run selected.";
         UiLog($"Instance refresh completed. root={root}; instances={_instances.Count}; elapsedNotMeasured=true");
     }
 
@@ -541,7 +300,16 @@ public sealed class MainWindow : Window
         _runningValue.Text = _instances.Count(item => item.Status.Equals("Running", StringComparison.OrdinalIgnoreCase) || item.Status.Equals("Stopping", StringComparison.OrdinalIgnoreCase)).ToString();
         _passedValue.Text = _instances.Count(item => item.Status.Equals("Passed", StringComparison.OrdinalIgnoreCase)).ToString();
         _failedValue.Text = _instances.Count(item => item.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase) || item.Status.Equals("Launch failed", StringComparison.OrdinalIgnoreCase)).ToString();
-        _rpsValue.Text = "—";
+        var latest = _instances.Where(x => x.RequestsPerSecond.HasValue).OrderByDescending(x => x.CompletedAt).FirstOrDefault();
+        _rpsValue.Text = latest?.RequestsPerSecond?.ToString("F2") ?? "—";
+        _footer.Text = $"{_instances.Count} instances  /  {_instances.Count(x => x.Selected)} selected  /  {DashboardStyle.Build}";
+        _runButton.IsEnabled = _instances.Any(x => x.Selected && (x.Process is null || x.Process.HasExited));
+        _stopButton.IsEnabled = _forceButton.IsEnabled = _instances.Any(x => x.Selected && x.Process is { HasExited: false });
+        if (_page == "Active runs")
+        {
+            var visible = (_instanceList.ItemsSource as IEnumerable<InstanceInfo>)?.ToList() ?? [];
+            if (!visible.SequenceEqual(_instances.Where(x => x.Process is { HasExited: false } && x.Name.Contains(_search.Text ?? "", StringComparison.OrdinalIgnoreCase)))) FilterInstances();
+        }
     }
 
     private void RunSelected()
@@ -568,6 +336,9 @@ public sealed class MainWindow : Window
                 item.Process = Process.Start(new ProcessStartInfo(runnerIsDll ? "dotnet" : runner, runnerIsDll ? $"\"{runner}\" {runnerArgs}" : runnerArgs) { WorkingDirectory = item.FolderPath, UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = false, RedirectStandardError = false });
                 UiLog($"Runner launch returned. instance={item.Name}; runId={item.CurrentRunId}; uiLaunchId={uiLaunchId}; processId={item.Process?.Id}; returnedAt={DateTimeOffset.Now:O}");
                 item.Status = "Running"; item.LastEvent = $"Started with testcases {selection}"; item.EventPosition = 0; item.EventLineIndex = 0; item.EventLinePositions.Clear(); item.Assertions.Clear();
+                item.Requests.Clear(); item.EventMessages.Clear(); item.CompletedRequests = null; item.AverageMs = null;
+                item.P95Ms = null; item.RequestsPerSecond = null; item.StartedAt = DateTimeOffset.Now; item.CompletedAt = null;
+                item.EventMessages.Add($"{DateTime.Now:HH:mm:ss}  RUN started / testcases {selection}");
                 UiLog($"Run state initialized. instance={item.Name}; runId={item.CurrentRunId}; testcases={selection}; mode={item.ExecutionMode}; environments={environments}; dataIds={item.DataIdSelection}; internalLog={_enableInternalLog.IsChecked == true}");
             }
             catch (Exception ex)
@@ -602,6 +373,7 @@ public sealed class MainWindow : Window
                     item.Status = "Stopping";
                     item.LastEvent = "Graceful stop requested";
                 }
+                item.EventMessages.Add($"{DateTime.Now:HH:mm:ss}  {(force ? "FORCE STOP" : "STOP")} requested by user");
                 UiLog($"Runner stop requested. instance={item.Name}; runId={item.CurrentRunId}; force={force}; processId={item.Process?.Id}");
             }
             catch (Exception ex)
@@ -632,24 +404,25 @@ public sealed class MainWindow : Window
                     using var reader = new StreamReader(stream);
                     var text = reader.ReadToEnd();
                     var lines = text.Split('\n');
-                    var completeLineCount = text.EndsWith('\n') ? lines.Length : Math.Max(0, lines.Length - 1);
+                    // Only consume newline-terminated records. The final split entry is empty or incomplete.
+                    var completeLineCount = Math.Max(0, lines.Length - 1);
                     var eventKey = Path.GetFileName(file);
                     var lineIndex = item.EventLinePositions.GetValueOrDefault(eventKey);
                     while (lineIndex < completeLineCount)
                     {
                         var line = lines[lineIndex++].TrimEnd('\r');
                         if (string.IsNullOrWhiteSpace(line)) continue;
-                        try { ApplyEvent(item, JsonDocument.Parse(line).RootElement); eventsApplied++; } catch (Exception ex) { UiLog($"Invalid event received for '{item.Name}': {ex}"); item.LastEvent = "Invalid event received"; }
+                        try { using var parsed = JsonDocument.Parse(line); ApplyEvent(item, parsed.RootElement); eventsApplied++; } catch (Exception ex) { UiLog($"Invalid event received for '{item.Name}': {ex}"); item.LastEvent = "Invalid event received"; }
                     }
                     item.EventLinePositions[eventKey] = lineIndex;
                 }
             }
             catch (IOException) { /* The runner may be rotating or opening the event file; retry on the next tick. */ }
             catch (UnauthorizedAccessException) { /* The file may be temporarily locked; retry on the next tick. */ }
-            if (item.Process is { HasExited: true } && item.Status == "Running")
+            if (item.Process is { HasExited: true } && (item.Status == "Running" || item.Status == "Stopping"))
             {
                 item.CurrentRunFolder = FindRunFolder(item, item.CurrentRunId) ?? item.CurrentRunFolder;
-                item.Status = item.Process.ExitCode == 0 ? "Passed" : "Failed";
+                item.Status = item.Process.ExitCode == 0 ? "Passed" : item.Process.ExitCode == 2 ? "Cancelled" : "Failed";
                 UiLog($"Runner process exited. instance={item.Name}; runId={item.CurrentRunId}; processId={item.Process.Id}; exitCode={item.Process.ExitCode}; observedAt={DateTimeOffset.Now:O}");
             }
         }
@@ -666,6 +439,7 @@ public sealed class MainWindow : Window
 
     private void ApplyEvent(InstanceInfo item, JsonElement e)
     {
+        RecordDashboardEvent(item, e);
         var type = e.GetProperty("eventType").GetString();
         if (type == "request-completed")
         {
@@ -695,7 +469,7 @@ public sealed class MainWindow : Window
         }
         if (type == "run-completed")
         {
-            item.Status = e.GetProperty("result").GetString() ?? "Completed";
+            item.Status = DashboardStyle.Status(e.GetProperty("result").GetString() ?? "Completed");
             var p95 = e.TryGetProperty("p95DurationMs", out var p95Property) ? p95Property.GetInt64() : 0;
             var rps = e.TryGetProperty("requestsPerSecond", out var rpsProperty) ? rpsProperty.GetDouble() : 0;
             if (e.TryGetProperty("historyFile", out var history) && !string.IsNullOrWhiteSpace(history.GetString()))
@@ -716,14 +490,13 @@ public sealed class MainWindow : Window
         UpdateEnvironmentFilterOptions();
         UpdateDetailsText();
         RefreshAssertionList();
+        BuildConfiguration();
+        RefreshDashboardDetails(true);
     }
 
     private void UpdateDetailsText()
     {
-        var item = _selectedInstance;
-        var text = item is null ? "" : $"Instance: {item.Name}\nWorkbook: {item.WorkbookPath}\nStatus: {item.Status}\nTestcases: {item.TestcaseSelection}\nLatest: {item.LastEvent}\nAssertions: {item.Assertions.Count(a => a.Result == "PASS")} passed / {item.Assertions.Count(a => a.Result == "FAIL")} failed\nResults: {item.ResultsFolder}\nCurrent run: {item.CurrentRunFolder}\nLatest internal.log: {FindLatestInternalLog(item) ?? "not created yet"}";
-        _details.Text = text;
-        _overviewDetails.Text = text;
+        RefreshDashboardDetails();
     }
 
     private void OpenLatestInternalLog()
@@ -750,6 +523,9 @@ public sealed class MainWindow : Window
             folder = Directory.GetParent(folder)?.FullName ?? folder;
         var path = !string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder)
             ? Directory.GetFiles(folder, "*.xlsx", SearchOption.AllDirectories).OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault()
+            : null;
+        path ??= Directory.Exists(_selectedInstance.HistoryFolder)
+            ? Directory.GetFiles(_selectedInstance.HistoryFolder, "*.xlsx", SearchOption.AllDirectories).OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault()
             : null;
         if (path is null) { _details.Text = "No result Excel workbook exists for the current run yet."; UiLog($"Open result workbook ignored. instance={_selectedInstance.Name}; reason=file-not-found"); return; }
         UiLog($"Opening latest result workbook. instance={_selectedInstance.Name}; path={path}");
@@ -983,17 +759,12 @@ public sealed class MainWindow : Window
 
     private static string? FindLatestInternalLog(InstanceInfo item)
     {
-        if (!Directory.Exists(item.ResultsFolder)) return null;
-        if (!string.IsNullOrWhiteSpace(item.CurrentRunFolder) && Directory.Exists(item.CurrentRunFolder))
-        {
-            var current = Directory.GetFiles(item.CurrentRunFolder, "internal.log", SearchOption.AllDirectories).FirstOrDefault();
-            if (current is not null) return current;
-        }
-        return Directory.GetFiles(item.ResultsFolder, "internal.log", SearchOption.AllDirectories)
-            .Where(path => !path.Contains(Path.DirectorySeparatorChar + ".runner" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
-                        && !path.Contains(Path.DirectorySeparatorChar + ".running" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
-                        && !path.Contains("runner_startup_", StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(File.GetLastWriteTimeUtc)
+        return new[] { item.CurrentRunFolder, item.LogsFolder, item.ResultsFolder }
+            .Where(path => !string.IsNullOrWhiteSpace(path) && Directory.Exists(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .SelectMany(path => Directory.GetFiles(path, "internal.log", SearchOption.AllDirectories))
+            .OrderByDescending(path => !string.IsNullOrWhiteSpace(item.CurrentRunId) && path.Contains(item.CurrentRunId, StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(File.GetLastWriteTimeUtc)
             .FirstOrDefault();
     }
 
@@ -1014,7 +785,13 @@ public sealed class MainWindow : Window
 
     private static UiConfig LoadConfig()
     {
-        var root = new ConfigurationBuilder().SetBasePath(Directory.GetCurrentDirectory()).AddJsonFile("appsettings.json", optional: true).Build();
-        var config = new UiConfig(); root.Bind(config); return config;
+        var basePath = AppContext.BaseDirectory;
+        var root = new ConfigurationBuilder().SetBasePath(basePath).AddJsonFile("appsettings.json", optional: true).Build();
+        var config = new UiConfig(); root.Bind(config);
+        config.InstancesRoot = Path.GetFullPath(config.InstancesRoot, basePath);
+        config.RunnerDll = Path.GetFullPath(config.RunnerDll, basePath);
+        config.DocumentationFile = Path.GetFullPath(config.DocumentationFile, basePath);
+        config.UiLogFile = Path.GetFullPath(config.UiLogFile, basePath);
+        return config;
     }
 }

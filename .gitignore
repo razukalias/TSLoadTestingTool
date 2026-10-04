@@ -21,3 +21,8 @@ Logs/
 
 # Local runtime configuration overrides
 appsettings.local.json
+
+# Generated distributions and local visual checks
+/dist/
+/verification/
+/ui-design-*.png
