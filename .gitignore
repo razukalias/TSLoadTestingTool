@@ -26,3 +26,7 @@ appsettings.local.json
 /dist/
 /verification/
 /ui-design-*.png
+
+# Per-instance local run-selection preferences
+**/.run-selection.json
+**/.run-selection.json.tmp

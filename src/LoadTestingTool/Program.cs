@@ -37,6 +37,7 @@ internal static class Program
             config.EnvironmentSelection = GetCommandLineValue(args, "--environments") ?? config.EnvironmentSelection;
             config.ExecutionMode = GetCommandLineValue(args, "--execution-mode") ?? config.ExecutionMode;
             var dataIdSelection = GetCommandLineValue(args, "--dataids");
+            var stepSelection = GetCommandLineValue(args, "--steps") ?? config.StepSelection;
             if (!config.ExecutionMode.Equals("threaded", StringComparison.OrdinalIgnoreCase) && !config.ExecutionMode.Equals("loop", StringComparison.OrdinalIgnoreCase) && !config.ExecutionMode.Equals("sequential", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("execution-mode must be 'threaded', 'loop', or 'sequential'.");
             var runId = string.IsNullOrWhiteSpace(config.RunId) ? $"{DateTime.Now:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}"[..25] : config.RunId;
             loadedRunId = runId;
@@ -71,18 +72,16 @@ internal static class Program
             Console.WriteLine($"Testcase execution order: {(config.RunScenariosInParallel ? "parallel" : "sequential")}");
             var selection = new RuntimeSelection { Input = string.IsNullOrWhiteSpace(expression) ? "0" : expression!, Indexes = indexes, Source = GetCommandLineValue(args, "--testcases") is not null ? "command-line" : "appsettings.json" };
             var overall = new RunResult { RunId = runId, Selection = selection, StartedAt = DateTimeOffset.Now };
-            var selected = workbook.Testcases.Where(t => indexes.Contains(t.TestcaseIndex)).OrderBy(t => t.TestcaseIndex).ToList();
-            var availableEnvironments = selected.SelectMany(t => t.Steps).SelectMany(s => s.Environments).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            var environments = string.IsNullOrWhiteSpace(config.EnvironmentSelection) ? (availableEnvironments.Count == 0 ? new[] { "" } : availableEnvironments.ToArray()) : config.EnvironmentSelection.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var work = new RunSelectionPlanner().Build(workbook, indexes, stepSelection, config.EnvironmentSelection, GetCommandLineValue(args, "--environments-json"));
+            Console.WriteLine("Selected work: " + string.Join("; ", work.Select(x => $"{x.Testcase.TestcaseIndex} [{(string.IsNullOrEmpty(x.Environment) ? "default" : x.Environment)}]: {string.Join(", ", x.Testcase.Steps.Select(s => s.StepName))}")));
             var filters = ParseDataIdSelection(dataIdSelection);
-            var work = environments.SelectMany(environment => selected.Select(testcase => (testcase, environment))).ToList();
             try
             {
-                if (config.RunScenariosInParallel) await Task.WhenAll(work.Select(x => RunTestcaseAsync(x.testcase, x.environment, workbook, overall, http, config, runId, selection, filters, uiLaunchId, uiLaunchAt, cancellation.Token)));
+                if (config.RunScenariosInParallel) await Task.WhenAll(work.Select(x => RunTestcaseAsync(x.Testcase, x.Environment, workbook, overall, http, config, runId, selection, filters, uiLaunchId, uiLaunchAt, cancellation.Token)));
                 else foreach (var item in work)
                 {
                     cancellation.Token.ThrowIfCancellationRequested();
-                    await RunTestcaseAsync(item.testcase, item.environment, workbook, overall, http, config, runId, selection, filters, uiLaunchId, uiLaunchAt, cancellation.Token);
+                    await RunTestcaseAsync(item.Testcase, item.Environment, workbook, overall, http, config, runId, selection, filters, uiLaunchId, uiLaunchAt, cancellation.Token);
                 }
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
@@ -229,5 +228,15 @@ internal static class Program
     }
 
     private static AppConfig LoadConfig() { var root = new ConfigurationBuilder().SetBasePath(Directory.GetCurrentDirectory()).AddJsonFile("appsettings.json", optional: true, reloadOnChange: false).Build(); var config = new AppConfig(); root.Bind(config); return config; }
-    private static string? GetCommandLineValue(string[] args, params string[] names) { for (var i = 0; i < args.Length - 1; i++) if (names.Any(name => args[i].Equals(name, StringComparison.OrdinalIgnoreCase))) return args[i + 1]; return null; }
+    private static string? GetCommandLineValue(string[] args, params string[] names)
+    {
+        for (var i = 0; i < args.Length; i++)
+            if (names.Any(name => args[i].Equals(name, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (i + 1 >= args.Length || args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                    throw new ArgumentException($"Missing value for {args[i]}.");
+                return args[i + 1];
+            }
+        return null;
+    }
 }

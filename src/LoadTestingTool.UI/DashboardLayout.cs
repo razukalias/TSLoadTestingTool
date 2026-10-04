@@ -13,7 +13,7 @@ namespace LoadTestingTool.UI;
 
 internal static class DashboardStyle
 {
-    public const string Build = "Dashboard 2026.10.04.2";
+    public const string Build = "Dashboard 2026.10.04.3";
     public static IBrush Brush(string color) => new SolidColorBrush(Color.Parse(color));
     public static IBrush Panel => Brush("#101E2E");
     public static IBrush Muted => Brush("#8EA4BC");
@@ -118,6 +118,7 @@ public sealed partial class MainWindow
     private readonly Grid _workspace = new() { RowDefinitions = new RowDefinitions("Auto,*") };
     private readonly TabControl _detailTabs = new();
     private Button _runButton = null!;
+    private Button _chooseButton = null!;
     private Button _stopButton = null!;
     private Button _forceButton = null!;
     private string _page = "Instances";
@@ -150,10 +151,11 @@ public sealed partial class MainWindow
         sidebar.Children.Add(links);
 
         var heading = new StackPanel { Spacing = 5, Children = { _pageTitle, DashboardStyle.Text("Manage test instances and inspect execution results", 12, false, DashboardStyle.Muted) } };
+        _chooseButton = DashboardStyle.Action("Choose what to run", () => _ = ChooseRunSelectionAsync());
         _runButton = DashboardStyle.Action("▶  Run selected", RunSelected, "primary");
         _stopButton = DashboardStyle.Action("Stop selected", () => StopSelected(false));
         _forceButton = DashboardStyle.Action("Force stop", () => StopSelected(true), "danger");
-        var commands = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Children = { _runButton, _stopButton, _forceButton } };
+        var commands = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Children = { _chooseButton, _runButton, _stopButton, _forceButton } };
         var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(18, 16) };
         header.Children.Add(heading); Grid.SetColumn(commands, 1); header.Children.Add(commands);
 
@@ -263,9 +265,10 @@ public sealed partial class MainWindow
         panel.Children.Add(DashboardStyle.Text("Paths are resolved relative to the UI executable, not your current folder.", 12, false, DashboardStyle.Muted));
         foreach (var (label, value) in new[] { ("Instances root", _config.InstancesRoot), ("Runner", _config.RunnerDll), ("UI log", _config.UiLogFile), ("Documentation", _config.DocumentationFile) })
             panel.Children.Add(KeyValue(label, Path.GetFullPath(value)));
+        panel.Children.Add(DashboardStyle.Text("Files and folders open with your system default applications. Set file associations in your OS settings.", 12, false, DashboardStyle.Muted));
         panel.Children.Add(_enableInternalLog);
-        panel.Children.Add(DashboardStyle.Action("Open UI log", () => OpenConfiguredFile(Path.GetFullPath(_config.UiLogFile), "UI log", _config.LogApplicationPath)));
-        panel.Children.Add(DashboardStyle.Action("Open user manual", () => OpenConfiguredFile(Path.GetFullPath(_config.DocumentationFile), "user manual", _config.DocumentationApplicationPath)));
+        panel.Children.Add(DashboardStyle.Action("Open UI log", () => OpenFile(Path.GetFullPath(_config.UiLogFile), "UI log")));
+        panel.Children.Add(DashboardStyle.Action("Open user manual", () => OpenFile(Path.GetFullPath(_config.DocumentationFile), "user manual")));
         panel.Children.Add(DashboardStyle.Text("Edit UI/appsettings.json to change configured paths, then restart the app.", 12, false, DashboardStyle.Muted));
         return Scroll(panel);
     }
@@ -281,25 +284,23 @@ public sealed partial class MainWindow
         _configurationPanel.Children.Clear(); var item = _selectedInstance;
         if (item is null) { _configurationPanel.Children.Add(DashboardStyle.Text("No instance selected", color: DashboardStyle.Muted)); return; }
         _configurationPanel.Children.Add(DashboardStyle.Text("Run configuration", 16, true));
-        _configurationPanel.Children.Add(DashboardStyle.Text("Applies to the next run. 0 selects all testcases.", 11, false, DashboardStyle.Muted));
-        var cases = new TextBox { Text = item.TestcaseSelection, Watermark = "0 or 1,2,3" };
-        cases.PropertyChanged += (_, e) => { if (e.Property == TextBox.TextProperty) item.TestcaseSelection = string.IsNullOrWhiteSpace(cases.Text) ? "0" : cases.Text.Trim(); };
-        _configurationPanel.Children.Add(Field("Testcase indexes", cases));
+        if (!string.IsNullOrWhiteSpace(item.SelectionReadError))
+        {
+            var error = DashboardStyle.Text("Cannot read run choices: " + item.SelectionReadError, 12, false, DashboardStyle.Red);
+            error.TextWrapping = TextWrapping.Wrap; _configurationPanel.Children.Add(error); return;
+        }
+        _configurationPanel.Children.Add(DashboardStyle.Text("Choose named testcases, steps and environments using the picker below.", 12, false, DashboardStyle.Muted));
+        _configurationPanel.Children.Add(DashboardStyle.Action("Choose tests, steps, environments…", () => _ = ChooseRunSelectionAsync(), "primary"));
+        var draft = new RunSelectionDraft(item.TestcaseOptions, item.TestcaseSelection, item.StepSelectionJson, item.EnvironmentSelection, item.EnvironmentSelectionJson);
+        _configurationPanel.Children.Add(KeyValue("Testcases", string.Join(", ", item.TestcaseOptions.Where(c => draft.Cases.Contains(c.Index)).Select(c => $"{c.Index}: {c.Name}"))));
+        _configurationPanel.Children.Add(KeyValue("Test steps", string.IsNullOrWhiteSpace(item.StepSelectionJson) ? "All enabled steps" : string.Join(", ", item.TestcaseOptions.Where(c => draft.Cases.Contains(c.Index)).SelectMany(c => c.Steps.Where(s => draft.Steps[c.Index].Contains(s.Name)).Select(s => $"{c.Index}: {s.Name}")))));
+        _configurationPanel.Children.Add(KeyValue("Environments", string.IsNullOrWhiteSpace(item.EnvironmentSelection) ? "All available for selected steps" : item.EnvironmentSelection));
         var mode = new ComboBox { ItemsSource = new[] { "Threaded", "Sequential loop" }, SelectedIndex = item.ExecutionMode == "loop" ? 1 : 0, HorizontalAlignment = HorizontalAlignment.Stretch };
         mode.SelectionChanged += (_, _) => item.ExecutionMode = mode.SelectedIndex == 1 ? "loop" : "threaded";
         _configurationPanel.Children.Add(Field("Execution mode", mode));
         var order = new ComboBox { ItemsSource = new[] { "Sequential testcases", "Parallel testcases" }, SelectedIndex = item.RunScenariosInParallel ? 1 : 0, HorizontalAlignment = HorizontalAlignment.Stretch };
         order.SelectionChanged += (_, _) => item.RunScenariosInParallel = order.SelectedIndex == 1;
         _configurationPanel.Children.Add(Field("Testcase order", order));
-        var environments = new StackPanel { Spacing = 4 };
-        var selected = item.EnvironmentSelection.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        foreach (var environment in item.EnvironmentOptions)
-        {
-            var check = new CheckBox { Content = environment, IsChecked = selected.Contains(environment, StringComparer.OrdinalIgnoreCase) };
-            check.IsCheckedChanged += (_, _) => item.EnvironmentSelection = string.Join(",", environments.Children.OfType<CheckBox>().Where(x => x.IsChecked == true).Select(x => x.Content));
-            environments.Children.Add(check);
-        }
-        _configurationPanel.Children.Add(Field("Environments (none checked = all)", environments));
         _configurationPanel.Children.Add(DashboardStyle.Action("Configure data IDs", async () =>
         {
             var dialog = new DataIdSelectionWindow(item.DataIdOptions, item.DataIdSelection, UiLog);
@@ -308,12 +309,39 @@ public sealed partial class MainWindow
         _configurationPanel.Children.Add(KeyValue("Data IDs", string.IsNullOrWhiteSpace(item.DataIdSelection) ? "All data rows" : item.DataIdSelection));
         _configurationPanel.Children.Add(DashboardStyle.Action("Open DataEngine workbook", OpenSelectedDataEngine));
     }
+    private async Task<bool> ChooseRunSelectionAsync(InstanceInfo? target = null)
+    {
+        var item = target ?? _selectedInstance;
+        if (item is null) { _details.Text = "Select an instance row first."; return false; }
+        if (!string.IsNullOrWhiteSpace(item.SelectionReadError)) { _details.Text = $"Cannot read run choices: {item.SelectionReadError}. Fix the workbook and click Refresh."; return false; }
+        try
+        {
+            var result = await new RunSelectionWindow(item).ShowDialog<RunSelectionResult?>(this);
+            if (result is null) return false;
+            item.TestcaseSelection = result.Testcases; item.StepSelectionJson = result.StepsJson; item.EnvironmentSelection = result.Environments;
+            item.EnvironmentSelectionJson = result.EnvironmentsJson; item.HasAppliedSelection = true;
+            item.Selected = true;
+            UiLog($"Run selection applied. instance={item.Name}; testcases={result.Testcases}; steps={result.StepsJson}; environments={result.Environments}");
+            _details.Text = "Selection applied. Click Run selected to execute the checked choices.";
+            try
+            {
+                var profile = Path.Combine(item.FolderPath, ".run-selection.json");
+                var temporary = profile + ".tmp";
+                File.WriteAllText(temporary, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+                File.Move(temporary, profile, overwrite: true);
+            }
+            catch (Exception ex) { _details.Text = $"Selection applied, but could not save it for the next app start: {ex.Message}"; UiLog($"Could not save selection profile: {ex}"); }
+            BuildConfiguration(); RefreshRows(); RefreshDashboardDetails(true); return true;
+        }
+        catch (Exception ex) { _details.Text = $"Could not show run choices: {ex.Message}"; UiLog($"Run selection dialog failed: {ex}"); return false; }
+    }
+
     private static Control Field(string label, Control control) => new StackPanel { Spacing = 6, Children = { DashboardStyle.Text(label, 12, false, DashboardStyle.Muted), control } };
 
     private void RefreshDashboardDetails(bool force = false)
     {
         var item = _selectedInstance;
-        var signature = item is null ? "empty" : $"{item.Name}|{item.Status}|{item.Requests.Count}|{item.Assertions.Count}|{item.LastEvent}|{item.P95Ms}|{item.TestcaseSelection}|{item.EnvironmentSelection}|{item.ExecutionMode}|{item.RunScenariosInParallel}";
+        var signature = item is null ? "empty" : $"{item.Name}|{item.Status}|{item.Requests.Count}|{item.Assertions.Count}|{item.LastEvent}|{item.P95Ms}|{item.TestcaseSelection}|{item.EnvironmentSelection}|{item.ExecutionMode}|{item.RunScenariosInParallel}|{item.StepSelectionJson}";
         if (!force && signature == _detailSignature) return;
         _detailSignature = signature;
         _selectedTitle.Text = item?.Name ?? "Selected instance";

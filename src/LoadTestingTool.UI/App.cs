@@ -11,9 +11,6 @@ public sealed class UiConfig
     public string InstancePrefix { get; set; } = "DataEngine_";
     public string DocumentationFile { get; set; } = "../APPLICATION_GUIDE.pdf";
     public string UiLogFile { get; set; } = "Logs/ui-internal.log";
-    public string ExcelApplicationPath { get; set; } = "excel.exe";
-    public string DocumentationApplicationPath { get; set; } = "";
-    public string LogApplicationPath { get; set; } = "";
 }
 
 public sealed class App : Application

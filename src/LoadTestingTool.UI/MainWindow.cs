@@ -22,9 +22,14 @@ public sealed class InstanceInfo
     public string Status { get; set; } = "Ready";
     public string LastEvent { get; set; } = "No results yet";
     public string TestcaseSelection { get; set; } = "0";
+    public string StepSelectionJson { get; set; } = "";
+    public IReadOnlyList<TestcaseOption> TestcaseOptions { get; set; } = [];
+    public string SelectionReadError { get; set; } = "";
     public string ExecutionMode { get; set; } = "threaded";
     public bool RunScenariosInParallel { get; set; }
     public string EnvironmentSelection { get; set; } = "";
+    public string EnvironmentSelectionJson { get; set; } = "";
+    public bool HasAppliedSelection { get; set; }
     public string DataIdSelection { get; set; } = "";
     public Dictionary<int, List<string>> DataIdOptions { get; } = [];
     public List<string> EnvironmentOptions { get; } = [];
@@ -254,11 +259,31 @@ public sealed partial class MainWindow : Window
                 .OrderBy(x => x).FirstOrDefault();
             if (workbook is null) continue;
             var item = previous.GetValueOrDefault(folder) ?? new InstanceInfo { Name = Path.GetFileName(folder), FolderPath = folder, WorkbookPath = workbook };
+            if (!previous.ContainsKey(folder))
+            {
+                try
+                {
+                    var profile = Path.Combine(folder, ".run-selection.json");
+                    if (File.Exists(profile))
+                    {
+                        var saved = JsonSerializer.Deserialize<RunSelectionResult>(File.ReadAllText(profile));
+                        if (saved is not null && !string.IsNullOrWhiteSpace(saved.Testcases) && !string.IsNullOrWhiteSpace(saved.StepsJson) && !string.IsNullOrWhiteSpace(saved.EnvironmentsJson))
+                        {
+                            item.TestcaseSelection = saved.Testcases; item.StepSelectionJson = saved.StepsJson;
+                            item.EnvironmentSelection = saved.Environments; item.EnvironmentSelectionJson = saved.EnvironmentsJson; item.HasAppliedSelection = true;
+                        }
+                    }
+                }
+                catch (Exception ex) { UiLog($"Could not load run selection profile for {item.Name}: {ex.Message}"); }
+            }
             item.EnvironmentOptions.Clear();
             item.DataIdOptions.Clear();
+            item.SelectionReadError = "";
             try
             {
-                using var book = new XLWorkbook(workbook);
+                using var stream = new FileStream(workbook, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var book = new XLWorkbook(stream);
+                item.TestcaseOptions = WorkbookSelectionCatalog.Read(book);
                 var requestSheet = book.Worksheets.FirstOrDefault(x => x.Name.Equals("request", StringComparison.OrdinalIgnoreCase));
                 var requestHeader = requestSheet?.FirstRowUsed()?.CellsUsed().ToDictionary(x => x.GetString().Trim(), x => x.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase) ?? [];
                 if (requestSheet is not null && requestHeader.TryGetValue("testcaseindex", out var testcaseColumn) && requestHeader.TryGetValue("dataid", out var dataIdColumn))
@@ -272,17 +297,9 @@ public sealed partial class MainWindow : Window
                                 item.DataIdOptions[testcaseIndex].Add(dataId);
                             }
                         }
-                var sheet = book.Worksheets.FirstOrDefault(x => x.Name.Equals("config", StringComparison.OrdinalIgnoreCase));
-                var header = sheet?.FirstRowUsed()?.CellsUsed().FirstOrDefault(x =>
-                    new[] { "environments", "environment", "enviromests", "enviromments" }
-                        .Contains(x.GetString().Trim(), StringComparer.OrdinalIgnoreCase)
-                    || x.GetString().Trim().Contains("env", StringComparison.OrdinalIgnoreCase));
-                if (sheet is not null && header is not null)
-                    foreach (var cell in sheet.Column(header.Address.ColumnNumber).CellsUsed().Skip(1))
-                        foreach (var environment in cell.GetString().Split(',', '|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                            if (!item.EnvironmentOptions.Contains(environment, StringComparer.OrdinalIgnoreCase)) item.EnvironmentOptions.Add(environment);
+                item.EnvironmentOptions.AddRange(item.TestcaseOptions.SelectMany(c => c.Steps.Where(s => s.Enabled)).SelectMany(s => s.Environments).Distinct(StringComparer.OrdinalIgnoreCase));
             }
-            catch (Exception ex) { UiLog($"Instance refresh could not read workbook '{workbook}': {ex}"); }
+            catch (Exception ex) { item.SelectionReadError = ex.Message; UiLog($"Instance refresh could not read workbook '{workbook}': {ex}"); }
             _instances.Add(item);
             if (_rows.TryGetValue(folder, out var existingRow)) existingRow.SetEnvironmentOptions(item.EnvironmentOptions);
         }
@@ -303,6 +320,7 @@ public sealed partial class MainWindow : Window
         var latest = _instances.Where(x => x.RequestsPerSecond.HasValue).OrderByDescending(x => x.CompletedAt).FirstOrDefault();
         _rpsValue.Text = latest?.RequestsPerSecond?.ToString("F2") ?? "—";
         _footer.Text = $"{_instances.Count} instances  /  {_instances.Count(x => x.Selected)} selected  /  {DashboardStyle.Build}";
+        _chooseButton.IsEnabled = _selectedInstance is not null;
         _runButton.IsEnabled = _instances.Any(x => x.Selected && (x.Process is null || x.Process.HasExited));
         _stopButton.IsEnabled = _forceButton.IsEnabled = _instances.Any(x => x.Selected && x.Process is { HasExited: false });
         if (_page == "Active runs")
@@ -312,7 +330,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void RunSelected()
+    private async void RunSelected()
     {
         var selected = _instances.Where(x => x.Selected).ToList();
         UiLog($"Run selected started. selected={selected.Count}; runnable={selected.Count(x => x.Process is null || x.Process.HasExited)}");
@@ -320,20 +338,36 @@ public sealed partial class MainWindow : Window
         {
             try
             {
+                if (!item.HasAppliedSelection && !await ChooseRunSelectionAsync(item)) continue;
                 Directory.CreateDirectory(item.ResultsFolder);
                 var runner = Path.GetFullPath(_config.RunnerDll);
                 var selection = string.IsNullOrWhiteSpace(item.TestcaseSelection) ? "0" : item.TestcaseSelection;
                 item.CurrentRunId = $"{DateTime.Now:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}"[..25];
                 item.CurrentRunFolder = item.ResultsFolder;
                 var environments = item.EnvironmentSelection;
-                var environmentArg = string.IsNullOrWhiteSpace(environments) ? "" : $" --environments \"{environments}\"";
-                var dataIdArg = string.IsNullOrWhiteSpace(item.DataIdSelection) ? "" : $" --dataids \"{item.DataIdSelection}\"";
+                if (!string.IsNullOrWhiteSpace(item.SelectionReadError)) throw new InvalidDataException(item.SelectionReadError);
+                var draft = new RunSelectionDraft(item.TestcaseOptions, selection, item.StepSelectionJson, environments, item.EnvironmentSelectionJson);
+                if (!draft.TryBuild(out _, out var validationError)) throw new InvalidDataException(validationError);
                 var uiLaunchId = $"ui-{Guid.NewGuid():N}";
                 var uiLaunchAt = DateTimeOffset.Now;
-                var runnerArgs = $"--excel \"{item.WorkbookPath}\" --templates \"{item.TemplatesFolder}\" --history \"{item.HistoryFolder}\" --logs \"{item.LogsFolder}\" --results \"{item.ResultsFolder}\" --instance-id \"{item.InstanceId}\" --run-id \"{item.CurrentRunId}\" --ui-launch-id \"{uiLaunchId}\" --ui-launch-at \"{uiLaunchAt:O}\" --internal-log \"{_enableInternalLog.IsChecked == true}\" --scenarios-parallel \"{item.RunScenariosInParallel}\" --execution-mode \"{item.ExecutionMode}\" --testcases \"{selection}\"{environmentArg}{dataIdArg}";
                 var runnerIsDll = runner.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
-                UiLog($"Runner launch requested. instance={item.Name}; runId={item.CurrentRunId}; uiLaunchId={uiLaunchId}; uiLaunchAt={uiLaunchAt:O}; runner={runner}; args={runnerArgs}");
-                item.Process = Process.Start(new ProcessStartInfo(runnerIsDll ? "dotnet" : runner, runnerIsDll ? $"\"{runner}\" {runnerArgs}" : runnerArgs) { WorkingDirectory = item.FolderPath, UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = false, RedirectStandardError = false });
+                var start = new ProcessStartInfo(runnerIsDll ? "dotnet" : runner)
+                { WorkingDirectory = item.FolderPath, UseShellExecute = false, CreateNoWindow = true };
+                if (runnerIsDll) start.ArgumentList.Add(runner);
+                void Arg(string name, string value) { start.ArgumentList.Add(name); start.ArgumentList.Add(value); }
+                Arg("--excel", item.WorkbookPath); Arg("--templates", item.TemplatesFolder);
+                Arg("--history", item.HistoryFolder); Arg("--logs", item.LogsFolder); Arg("--results", item.ResultsFolder);
+                Arg("--instance-id", item.InstanceId); Arg("--run-id", item.CurrentRunId);
+                Arg("--ui-launch-id", uiLaunchId); Arg("--ui-launch-at", uiLaunchAt.ToString("O"));
+                Arg("--internal-log", (_enableInternalLog.IsChecked == true).ToString());
+                Arg("--scenarios-parallel", item.RunScenariosInParallel.ToString()); Arg("--execution-mode", item.ExecutionMode);
+                Arg("--testcases", selection);
+                if (!string.IsNullOrWhiteSpace(item.EnvironmentSelectionJson)) Arg("--environments-json", item.EnvironmentSelectionJson);
+                else if (!string.IsNullOrWhiteSpace(environments)) Arg("--environments", environments);
+                if (!string.IsNullOrWhiteSpace(item.StepSelectionJson)) Arg("--steps", item.StepSelectionJson);
+                if (!string.IsNullOrWhiteSpace(item.DataIdSelection)) Arg("--dataids", item.DataIdSelection);
+                UiLog($"Runner launch requested. instance={item.Name}; runId={item.CurrentRunId}; runner={runner}; args={JsonSerializer.Serialize(start.ArgumentList)}");
+                item.Process = Process.Start(start);
                 UiLog($"Runner launch returned. instance={item.Name}; runId={item.CurrentRunId}; uiLaunchId={uiLaunchId}; processId={item.Process?.Id}; returnedAt={DateTimeOffset.Now:O}");
                 item.Status = "Running"; item.LastEvent = $"Started with testcases {selection}"; item.EventPosition = 0; item.EventLineIndex = 0; item.EventLinePositions.Clear(); item.Assertions.Clear();
                 item.Requests.Clear(); item.EventMessages.Clear(); item.CompletedRequests = null; item.AverageMs = null;
@@ -346,9 +380,10 @@ public sealed partial class MainWindow : Window
                 UiLog($"Runner launch failed for '{item.Name}': {ex}");
                 item.Status = "Launch failed";
                 item.LastEvent = ex.Message;
+                _details.Text = $"Cannot run {item.Name}: {ex.Message}";
             }
         }
-        foreach (var item in selected.Where(x => x.Process is { HasExited: false })) UiLog($"Run skipped for already-running instance. instance={item.Name}; processId={item.Process?.Id}");
+
         RefreshRows();
         UiLog("Run selected completed.");
     }
@@ -422,7 +457,7 @@ public sealed partial class MainWindow : Window
             if (item.Process is { HasExited: true } && (item.Status == "Running" || item.Status == "Stopping"))
             {
                 item.CurrentRunFolder = FindRunFolder(item, item.CurrentRunId) ?? item.CurrentRunFolder;
-                item.Status = item.Process.ExitCode == 0 ? "Passed" : item.Process.ExitCode == 2 ? "Cancelled" : "Failed";
+                item.Status = item.Process.ExitCode == 0 ? "Passed" : item.Process.ExitCode == 3 ? "Cancelled" : "Failed";
                 UiLog($"Runner process exited. instance={item.Name}; runId={item.CurrentRunId}; processId={item.Process.Id}; exitCode={item.Process.ExitCode}; observedAt={DateTimeOffset.Now:O}");
             }
         }
@@ -505,7 +540,7 @@ public sealed partial class MainWindow : Window
         var path = FindLatestInternalLog(_selectedInstance);
         if (path is null) { _details.Text = "No internal.log exists for this instance yet. Run it with internal logging enabled."; UiLog($"Open internal.log ignored. instance={_selectedInstance.Name}; reason=file-not-found"); return; }
         UiLog($"Opening latest internal.log. instance={_selectedInstance.Name}; path={path}");
-        OpenConfiguredFile(path, "internal.log", _config.LogApplicationPath);
+        OpenFile(path, "internal.log");
     }
 
     private void OpenSelectedDataEngine()
@@ -701,48 +736,23 @@ public sealed partial class MainWindow : Window
         OpenFolder(_selectedInstance.TemplatesFolder, "Templates folder");
     }
 
-    private void OpenExcelFile(string path, string description)
-    {
-        if (!File.Exists(path)) { UiLog($"Cannot open {description}; file not found: {path}"); _details.Text = $"File not found: {path}"; return; }
-        try
-        {
-            var application = string.IsNullOrWhiteSpace(_config.ExcelApplicationPath) ? "excel.exe" : _config.ExcelApplicationPath;
-            var start = new ProcessStartInfo { FileName = application, UseShellExecute = false };
-            start.ArgumentList.Add(path);
-            Process.Start(start);
-            UiLog($"Opened {description} with '{application}': {path}");
-        }
-        catch (Exception ex) { UiLog($"Could not open {description} with Excel '{_config.ExcelApplicationPath}': {ex}"); _details.Text = $"Could not open Excel: {ex.Message}"; }
-    }
+    private void OpenExcelFile(string path, string description) => OpenFile(path, description);
 
     private void OpenFile(string path, string description)
     {
         if (!File.Exists(path)) { UiLog($"Cannot open {description}; file not found: {path}"); _details.Text = $"File not found: {path}"; return; }
-        try { Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true }); UiLog($"Opened {description}: {path}"); }
-        catch (Exception ex) { UiLog($"Could not open {description} '{path}': {ex}"); _details.Text = ex.Message; }
-    }
-    private void OpenConfiguredFile(string path, string description, string? application)
-    {
-        if (!File.Exists(path)) { UiLog($"Cannot open {description}; file not found: {path}"); _details.Text = $"File not found: {path}"; return; }
-        try
+        try { SystemDefaultFileOpener.Open(path); UiLog($"Requested system-default app for {description}: {path}"); }
+        catch (Exception ex)
         {
-            if (string.IsNullOrWhiteSpace(application))
-            {
-                OpenFile(path, description);
-                return;
-            }
-            var start = new ProcessStartInfo { FileName = application, UseShellExecute = false };
-            start.ArgumentList.Add(path);
-            Process.Start(start);
-            UiLog($"Opened {description} with '{application}': {path}");
+            UiLog($"Could not open {description} with the system default application: {ex}");
+            _details.Text = $"Could not open {description}: {ex.Message}. Set a default app for this file type in your system settings.";
         }
-        catch (Exception ex) { UiLog($"Could not open {description} with '{application}': {ex}"); _details.Text = $"Could not open {description}: {ex.Message}"; }
     }
 
     private void OpenFolder(string path, string description)
     {
         if (!Directory.Exists(path)) { UiLog($"Cannot open {description}; folder not found: {path}"); _details.Text = $"Folder not found: {path}"; return; }
-        try { Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true }); UiLog($"Opened {description}: {path}"); }
+        try { SystemDefaultFileOpener.Open(path); UiLog($"Requested system-default app for {description}: {path}"); }
         catch (Exception ex) { UiLog($"Could not open {description} '{path}': {ex}"); _details.Text = ex.Message; }
     }
 

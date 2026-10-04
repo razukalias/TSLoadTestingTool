@@ -14,6 +14,7 @@ public sealed class AppConfig
     public bool RunScenariosInParallel { get; set; }
     public string ExecutionMode { get; set; } = "threaded";
     public string TestcaseSelection { get; set; } = "0";
+    public string StepSelection { get; set; } = "";
     public string EnvironmentSelection { get; set; } = "";
     public bool PromptForTestcaseSelection { get; set; }
     public bool SaveRequestBodyToHistory { get; set; } = true;
