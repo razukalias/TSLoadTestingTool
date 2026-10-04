@@ -13,7 +13,7 @@ namespace LoadTestingTool.UI;
 
 internal static class DashboardStyle
 {
-    public const string Build = "Dashboard 2026.10.04.3";
+    public const string Build = "Dashboard 2026.10.04.4";
     public static IBrush Brush(string color) => new SolidColorBrush(Color.Parse(color));
     public static IBrush Panel => Brush("#101E2E");
     public static IBrush Muted => Brush("#8EA4BC");
@@ -79,7 +79,7 @@ internal sealed class InstanceRow : Border
         BorderThickness = new Thickness(0, 0, 0, 1);
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("30,*,62,80,82,90,92"), MinWidth = 630 };
         _check = new CheckBox { IsChecked = item.Selected, VerticalAlignment = VerticalAlignment.Center, MinWidth = 24 };
-        _check.IsCheckedChanged += (_, _) => { item.Selected = _check.IsChecked == true; log($"Instance selection changed. instance={item.Name}; selected={item.Selected}"); Refresh(); };
+        _check.IsCheckedChanged += (_, _) => { item.Selected = _check.IsChecked == true; log($"Instance selection changed. instance={item.Name}; selected={item.Selected}"); select(item); Refresh(); };
         var name = DashboardStyle.Text(item.Name, 12, true);
         ToolTip.SetTip(name, item.WorkbookPath);
         var cells = new Control[] { _check, name, _testcases, _mode, _order, _environment, _badgeHost };
@@ -151,7 +151,7 @@ public sealed partial class MainWindow
         sidebar.Children.Add(links);
 
         var heading = new StackPanel { Spacing = 5, Children = { _pageTitle, DashboardStyle.Text("Manage test instances and inspect execution results", 12, false, DashboardStyle.Muted) } };
-        _chooseButton = DashboardStyle.Action("Choose what to run", () => _ = ChooseRunSelectionAsync());
+        _chooseButton = DashboardStyle.Action("Choose what to run", () => _ = ChooseRunSelectionAsync(_selectedInstance ?? _instances.FirstOrDefault(x => x.Selected)));
         _runButton = DashboardStyle.Action("▶  Run selected", RunSelected, "primary");
         _stopButton = DashboardStyle.Action("Stop selected", () => StopSelected(false));
         _forceButton = DashboardStyle.Action("Force stop", () => StopSelected(true), "danger");

@@ -146,3 +146,7 @@ dotnet run --project tests/SelectionRegression/SelectionRegression.csproj --no-b
 ```
 
 Regression integration tests use temporary workbooks and do not modify repository instances. The package script produces a versioned, validated self-contained Windows ZIP.
+
+## 2026.10.04.4 interaction fix
+
+Clicking an instance checkbox now also activates that instance's details. This means **Choose what to run** works even when the user only clicks the row checkbox; it no longer depends on a separate row-selection event. The top chooser also falls back to the first checked instance.
