@@ -320,7 +320,7 @@ public sealed partial class MainWindow : Window
         var latest = _instances.Where(x => x.RequestsPerSecond.HasValue).OrderByDescending(x => x.CompletedAt).FirstOrDefault();
         _rpsValue.Text = latest?.RequestsPerSecond?.ToString("F2") ?? "—";
         _footer.Text = $"{_instances.Count} instances  /  {_instances.Count(x => x.Selected)} selected  /  {DashboardStyle.Build}";
-        _chooseButton.IsEnabled = _selectedInstance is not null;
+        _chooseButton.IsEnabled = _selectedInstance is not null || _instances.Any(x => x.Selected);
         _runButton.IsEnabled = _instances.Any(x => x.Selected && (x.Process is null || x.Process.HasExited));
         _stopButton.IsEnabled = _forceButton.IsEnabled = _instances.Any(x => x.Selected && x.Process is { HasExited: false });
         if (_page == "Active runs")
