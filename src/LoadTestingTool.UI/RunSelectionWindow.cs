@@ -99,7 +99,7 @@ public sealed class RunSelectionWindow : Window
             foreach (var id in ids.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
             {
                 var selected = string.IsNullOrWhiteSpace(_currentDataSelection) || (ParseDataIds().TryGetValue(testcase.Index, out var chosen) && chosen.Contains(id));
-                var check = Check(id, selected); check.IsCheckedChanged += (_, _) => { if (!_rebuilding) UpdateSummary(); }; checks.Add(check); panel.Children.Add(check);
+                var check = Check(id, selected); check.IsCheckedChanged += (_, _) => { if (!_rebuilding) { _currentDataSelection = SerializeDataIds(); UpdateSummary(); } }; checks.Add(check); panel.Children.Add(check);
             }
             _dataChecks[testcase.Index] = checks; _dataItems.Children.Add(new StackPanel { Spacing = 5, Children = { DashboardStyle.Text($"{testcase.Index}  {testcase.Name}", 12, true, DashboardStyle.Muted), panel } });
         }
@@ -113,7 +113,7 @@ public sealed class RunSelectionWindow : Window
         return result;
     }
     private string _currentDataSelection = "";
-    private void SetAllData(bool value) { foreach (var check in _dataChecks.Values.SelectMany(x => x)) check.IsChecked = value; UpdateSummary(); }
+    private void SetAllData(bool value) { foreach (var check in _dataChecks.Values.SelectMany(x => x)) check.IsChecked = value; _currentDataSelection = SerializeDataIds(); UpdateSummary(); }
     private string SerializeDataIds() => string.Join(';', _dataChecks.OrderBy(x => x.Key).Select(x => $"{x.Key}:{string.Join(',', x.Value.Where(c => c.IsChecked == true).Select(c => c.Content?.ToString()))}").Where(x => !x.EndsWith(":")));
     private void SetCases(bool value) { foreach (var c in _draft.Catalog) _draft.SetCase(c.Index, value && c.Steps.Any(s => s.Enabled)); BuildCases(); BuildSteps(); BuildEnvironments(); BuildDataIds(); UpdateSummary(); }
     private void SetSteps(bool value) { foreach (var c in _draft.Catalog.Where(c => _draft.Cases.Contains(c.Index))) foreach (var s in c.Steps.Where(s => s.Enabled)) _draft.SetStep(c.Index, s.Name, value); BuildSteps(); BuildEnvironments(); UpdateSummary(); }

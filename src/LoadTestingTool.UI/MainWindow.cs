@@ -294,23 +294,20 @@ public sealed partial class MainWindow : Window
                 .OrderBy(x => x).FirstOrDefault();
             if (workbook is null) continue;
             var item = previous.GetValueOrDefault(folder) ?? new InstanceInfo { Name = Path.GetFileName(folder), FolderPath = folder, WorkbookPath = workbook };
-            if (!previous.ContainsKey(folder))
+            try
             {
-                try
+                var profile = Path.Combine(folder, ".run-selection.json");
+                if (File.Exists(profile))
                 {
-                    var profile = Path.Combine(folder, ".run-selection.json");
-                    if (File.Exists(profile))
+                    var saved = JsonSerializer.Deserialize<RunSelectionResult>(File.ReadAllText(profile));
+                    if (saved is not null && !string.IsNullOrWhiteSpace(saved.Testcases) && !string.IsNullOrWhiteSpace(saved.StepsJson) && !string.IsNullOrWhiteSpace(saved.EnvironmentsJson))
                     {
-                        var saved = JsonSerializer.Deserialize<RunSelectionResult>(File.ReadAllText(profile));
-                        if (saved is not null && !string.IsNullOrWhiteSpace(saved.Testcases) && !string.IsNullOrWhiteSpace(saved.StepsJson) && !string.IsNullOrWhiteSpace(saved.EnvironmentsJson))
-                        {
-                            item.TestcaseSelection = saved.Testcases; item.StepSelectionJson = saved.StepsJson;
-                            item.EnvironmentSelection = saved.Environments; item.EnvironmentSelectionJson = saved.EnvironmentsJson; item.DataIdSelection = saved.DataIds; item.HasAppliedSelection = true;
-                        }
+                        item.TestcaseSelection = saved.Testcases; item.StepSelectionJson = saved.StepsJson;
+                        item.EnvironmentSelection = saved.Environments; item.EnvironmentSelectionJson = saved.EnvironmentsJson; item.DataIdSelection = saved.DataIds; item.HasAppliedSelection = true;
                     }
                 }
-                catch (Exception ex) { UiLog($"Could not load run selection profile for {item.Name}: {ex.Message}"); }
             }
+            catch (Exception ex) { UiLog($"Could not load run selection profile for {item.Name}: {ex.Message}"); }
             item.EnvironmentOptions.Clear();
             item.DataIdOptions.Clear();
             item.SelectionReadError = "";
