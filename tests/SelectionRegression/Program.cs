@@ -61,6 +61,13 @@ Check(defaultDraft.TryBuild(out var defaultSelection, out _) && defaultSelection
 Check(planner.Build(model, [1], null, null, "[\"\"]").Single().Testcase.Steps.Single().StepName == "Shared", "Explicit default environment does not expand to tagged environments");
 Reject(() => planner.Build(model, [1], null, null, "[]"), "Empty explicit environment array rejected");
 Reject(() => planner.Build(model, [1], null, null, "[null]"), "Invalid explicit environment values rejected");
+var encodedDataIds = DataIdSelectionCodec.Serialize(new[]
+{
+    new KeyValuePair<int, IEnumerable<string>>(1, ["ROW-A", "ROW-B"]),
+    new KeyValuePair<int, IEnumerable<string>>(2, ["ORDER-7"])
+});
+var decodedDataIds = DataIdSelectionCodec.Parse(encodedDataIds);
+Check(encodedDataIds == "1:ROW-A,ROW-B;2:ORDER-7" && decodedDataIds[1].SetEquals(["ROW-A", "ROW-B"]) && decodedDataIds[2].SetEquals(["ORDER-7"]), "Data-ID selection round-trips with testcase groups and real IDs");
 
 foreach (var extension in new[] { ".xlsx", ".pdf", ".log", ".json", ".txt" })
 {

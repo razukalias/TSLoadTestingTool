@@ -7,6 +7,21 @@ public sealed record TestStepOption(string Name, string Type, bool Enabled, IRea
 public sealed record TestcaseOption(int Index, string Name, IReadOnlyList<TestStepOption> Steps);
 public sealed record RunSelectionResult(string Testcases, string StepsJson, string Environments, string EnvironmentsJson, string DataIds = "");
 
+public static class DataIdSelectionCodec
+{
+    public static string Serialize(IEnumerable<KeyValuePair<int, IEnumerable<string>>> groups) => string.Join(';', groups.OrderBy(x => x.Key).Select(x => $"{x.Key}:{string.Join(',', x.Value.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.OrdinalIgnoreCase))}").Where(x => !x.EndsWith(":")));
+    public static Dictionary<int, HashSet<string>> Parse(string? value)
+    {
+        var result = new Dictionary<int, HashSet<string>>();
+        foreach (var group in (value ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var parts = group.Split(':', 2);
+            if (parts.Length == 2 && int.TryParse(parts[0], out var index)) result[index] = parts[1].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        return result;
+    }
+}
+
 public static class WorkbookSelectionCatalog
 {
     public static IReadOnlyList<TestcaseOption> Read(XLWorkbook workbook)
