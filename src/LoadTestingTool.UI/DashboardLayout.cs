@@ -13,7 +13,7 @@ namespace LoadTestingTool.UI;
 
 internal static class DashboardStyle
 {
-    public const string Build = "Dashboard 2026.10.04.5";
+    public const string Build = "Dashboard 2026.10.04.6";
     public static IBrush Brush(string color) => new SolidColorBrush(Color.Parse(color));
     public static IBrush Panel => Brush("#101E2E");
     public static IBrush Muted => Brush("#8EA4BC");
@@ -301,14 +301,17 @@ public sealed partial class MainWindow
         var order = new ComboBox { ItemsSource = new[] { "Sequential testcases", "Parallel testcases" }, SelectedIndex = item.RunScenariosInParallel ? 1 : 0, HorizontalAlignment = HorizontalAlignment.Stretch };
         order.SelectionChanged += (_, _) => item.RunScenariosInParallel = order.SelectedIndex == 1;
         _configurationPanel.Children.Add(Field("Testcase order", order));
-        _configurationPanel.Children.Add(DashboardStyle.Action("Configure data IDs", async () =>
-        {
-            var dialog = new DataIdSelectionWindow(item.DataIdOptions, item.DataIdSelection, UiLog);
-            var value = await dialog.ShowDialog<string?>(this); if (value is not null) { item.DataIdSelection = value; BuildConfiguration(); }
-        }));
         _configurationPanel.Children.Add(KeyValue("Data IDs", string.IsNullOrWhiteSpace(item.DataIdSelection) ? "All data rows" : item.DataIdSelection));
+        _configurationPanel.Children.Add(DashboardStyle.Action("Edit DataEngine workbook", () => _ = EditWorkbookAsync(), "primary"));
         _configurationPanel.Children.Add(DashboardStyle.Action("Open DataEngine workbook", OpenSelectedDataEngine));
     }
+    private async Task EditWorkbookAsync()
+    {
+        if (_selectedInstance is null) { _details.Text = "Select an instance first."; return; }
+        var backup = await new WorkbookEditorWindow(_selectedInstance.WorkbookPath).ShowDialog<string?>(this);
+        if (!string.IsNullOrWhiteSpace(backup)) { RefreshInstances(); _details.Text = $"Workbook saved. Backup created: {Path.GetFileName(backup)}"; }
+    }
+
     private async Task<bool> ChooseRunSelectionAsync(InstanceInfo? target = null)
     {
         var item = target ?? _selectedInstance;
@@ -319,7 +322,7 @@ public sealed partial class MainWindow
             var result = await new RunSelectionWindow(item).ShowDialog<RunSelectionResult?>(this);
             if (result is null) return false;
             item.TestcaseSelection = result.Testcases; item.StepSelectionJson = result.StepsJson; item.EnvironmentSelection = result.Environments;
-            item.EnvironmentSelectionJson = result.EnvironmentsJson; item.HasAppliedSelection = true;
+            item.EnvironmentSelectionJson = result.EnvironmentsJson; item.DataIdSelection = result.DataIds; item.HasAppliedSelection = true;
             item.Selected = true;
             UiLog($"Run selection applied. instance={item.Name}; testcases={result.Testcases}; steps={result.StepsJson}; environments={result.Environments}");
             _details.Text = "Selection applied. Click Run selected to execute the checked choices.";

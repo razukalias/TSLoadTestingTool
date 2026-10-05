@@ -305,7 +305,7 @@ public sealed partial class MainWindow : Window
                         if (saved is not null && !string.IsNullOrWhiteSpace(saved.Testcases) && !string.IsNullOrWhiteSpace(saved.StepsJson) && !string.IsNullOrWhiteSpace(saved.EnvironmentsJson))
                         {
                             item.TestcaseSelection = saved.Testcases; item.StepSelectionJson = saved.StepsJson;
-                            item.EnvironmentSelection = saved.Environments; item.EnvironmentSelectionJson = saved.EnvironmentsJson; item.HasAppliedSelection = true;
+                            item.EnvironmentSelection = saved.Environments; item.EnvironmentSelectionJson = saved.EnvironmentsJson; item.DataIdSelection = saved.DataIds; item.HasAppliedSelection = true;
                         }
                     }
                 }

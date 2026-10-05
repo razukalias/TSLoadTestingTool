@@ -5,7 +5,7 @@ namespace LoadTestingTool.UI;
 
 public sealed record TestStepOption(string Name, string Type, bool Enabled, IReadOnlyList<string> Environments);
 public sealed record TestcaseOption(int Index, string Name, IReadOnlyList<TestStepOption> Steps);
-public sealed record RunSelectionResult(string Testcases, string StepsJson, string Environments, string EnvironmentsJson);
+public sealed record RunSelectionResult(string Testcases, string StepsJson, string Environments, string EnvironmentsJson, string DataIds = "");
 
 public static class WorkbookSelectionCatalog
 {
