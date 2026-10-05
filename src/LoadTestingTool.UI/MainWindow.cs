@@ -62,12 +62,13 @@ public sealed class AssertionInfo
     public string Testcase { get; init; } = string.Empty;
     public string DataId { get; init; } = string.Empty;
     public string StepName { get; init; } = string.Empty;
-    public string ResponsePath { get; init; } = string.Empty;
-    public string AssertionVerb { get; init; } = string.Empty;
-    public string ExpectedValue { get; init; } = string.Empty;
+    public string ResponsePath { get; set; } = string.Empty;
+    public string AssertionVerb { get; set; } = string.Empty;
+    public string ExpectedValue { get; set; } = string.Empty;
     public string ActualValue { get; init; } = string.Empty;
     public string Result { get; init; } = string.Empty;
     public string FailureMessage { get; init; } = string.Empty;
+    public string ExtractVariable { get; set; } = string.Empty;
     public string Environment { get; init; } = string.Empty;
     public int ExcelRowNumber { get; init; }
     public int ExpectedValueColumn { get; init; }
@@ -144,6 +145,7 @@ public sealed partial class MainWindow : Window
         var content = new StackPanel { Spacing = 6, Children = { DashboardStyle.Badge(assertion.Result == "PASS" ? "Passed" : "Failed"), text } };
         var row = new Grid { ColumnDefinitions = new ColumnDefinitions("30,*") };
         row.Children.Add(check); Grid.SetColumn(content, 1); row.Children.Add(content);
+        text.PointerPressed += (_, _) => _ = EditAssertionAsync(assertion);
         var card = DashboardStyle.Card(row, new Thickness(10)); card.Margin = new Thickness(0, 0, 0, 8); return card;
     }
 
@@ -175,6 +177,39 @@ public sealed partial class MainWindow : Window
         _environmentFilter.ItemsSource = options;
         _environmentFilter.SelectedItem = options.FirstOrDefault(option => option.Equals(current, StringComparison.OrdinalIgnoreCase)) ?? "All environments";
         UiLog($"Assertion environment options updated. instance={_selectedInstance?.Name ?? "<none>"}; options={string.Join(",", options)}; selected={_environmentFilter.SelectedItem}");
+    }
+
+    private async Task EditAssertionAsync(AssertionInfo assertion)
+    {
+        if (_selectedInstance is null) return;
+        var result = await new AssertionEditorWindow(assertion).ShowDialog<AssertionEditResult?>(this);
+        if (result is null) return;
+        try
+        {
+            var workbookPath = _selectedInstance.WorkbookPath;
+            var backup = $"{workbookPath}.backup.{DateTime.Now:yyyyMMdd_HHmmss}.xlsx";
+            File.Copy(workbookPath, backup, overwrite: false);
+            using var workbook = new XLWorkbook(workbookPath);
+            var sheet = workbook.Worksheet("response");
+            var header = sheet.Cell(1, assertion.ExpectedValueColumn);
+            header.Value = $"{assertion.StepName}.{result.ResponsePath}";
+            var cell = sheet.Cell(assertion.ExcelRowNumber, assertion.ExpectedValueColumn);
+            cell.Value = result.AssertionVerb is "exists" or "notexists" or "empty" or "notempty" ? $"{{{result.AssertionVerb}}}" : $"{{{result.AssertionVerb}}}{result.ExpectedValue}";
+            if (!string.IsNullOrWhiteSpace(result.ExtractVariable))
+            {
+                var extractColumn = FindResponseHeaderColumn(sheet, "extractvariable");
+                if (extractColumn <= 0) { extractColumn = (sheet.Row(1).LastCellUsed()?.Address.ColumnNumber ?? 0) + 1; sheet.Cell(1, extractColumn).Value = "extractvariable"; }
+                var mappings = sheet.Cell(assertion.ExcelRowNumber, extractColumn).GetString().Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => !x.StartsWith(assertion.StepName + "." + assertion.ResponsePath + ":", StringComparison.OrdinalIgnoreCase)).ToList();
+                mappings.Add($"{assertion.StepName}.{result.ResponsePath}:{result.ExtractVariable}");
+                sheet.Cell(assertion.ExcelRowNumber, extractColumn).Value = string.Join('|', mappings);
+            }
+            workbook.Save();
+            assertion.ResponsePath = result.ResponsePath; assertion.AssertionVerb = result.AssertionVerb; assertion.ExpectedValue = result.ExpectedValue; assertion.ExtractVariable = result.ExtractVariable;
+            _details.Text = $"Assertion corrected. Backup created: {Path.GetFileName(backup)}. Run the instance again to validate it.";
+            UiLog($"Assertion corrected. instance={_selectedInstance.Name}; testcase={assertion.Testcase}; dataId={assertion.DataId}; step={assertion.StepName}; path={result.ResponsePath}; verb={result.AssertionVerb}; backup={backup}");
+            RefreshAssertionList(); RefreshDashboardDetails(true);
+        }
+        catch (Exception ex) { _details.Text = $"Assertion correction failed: {ex.Message}"; UiLog($"Assertion correction failed: {ex}"); }
     }
 
     private void ApplySelectedFixes()
@@ -307,6 +342,17 @@ public sealed partial class MainWindow : Window
         RefreshRows();
         _details.Text = $"Found {_instances.Count} instance(s). Configure in the Config tab; tick the instance and press Run selected.";
         UiLog($"Instance refresh completed. root={root}; instances={_instances.Count}; elapsedNotMeasured=true");
+    }
+
+    private async Task CreateInstanceAsync()
+    {
+        var root = Path.GetFullPath(_config.InstancesRoot);
+        var createdFolder = await new InstanceBuilderWindow(root).ShowDialog<string?>(this);
+        if (string.IsNullOrWhiteSpace(createdFolder)) return;
+        RefreshInstances();
+        var created = _instances.FirstOrDefault(x => x.FolderPath.Equals(Path.GetFullPath(createdFolder), StringComparison.OrdinalIgnoreCase));
+        if (created is not null) { created.Selected = true; _instanceList.SelectedItem = created; ShowDetails(created); RefreshRows(); }
+        _details.Text = $"Created instance: {created?.Name ?? Path.GetFileName(createdFolder)}. Select Configure to edit its testcase and steps.";
     }
 
     private void RefreshRows()
@@ -494,7 +540,7 @@ public sealed partial class MainWindow : Window
             var assertion = new AssertionInfo
             {
                 TestcaseIndex = e.GetProperty("testcaseIndex").GetInt32(), Testcase = e.GetProperty("testcase").GetString() ?? "", DataId = e.GetProperty("dataId").GetString() ?? "", StepName = e.GetProperty("stepName").GetString() ?? "",
-                ResponsePath = e.GetProperty("responsePath").GetString() ?? "", AssertionVerb = e.GetProperty("assertionVerb").GetString() ?? "", ExpectedValue = e.GetProperty("expectedValue").GetString() ?? "", ActualValue = e.GetProperty("actualValue").GetString() ?? "", Result = e.GetProperty("result").GetString() ?? "", FailureMessage = e.GetProperty("failureMessage").GetString() ?? "",
+                ResponsePath = e.GetProperty("responsePath").GetString() ?? "", AssertionVerb = e.GetProperty("assertionVerb").GetString() ?? "", ExpectedValue = e.GetProperty("expectedValue").GetString() ?? "", ActualValue = e.GetProperty("actualValue").GetString() ?? "", Result = e.GetProperty("result").GetString() ?? "", FailureMessage = e.GetProperty("failureMessage").GetString() ?? "", ExtractVariable = e.TryGetProperty("extractVariable", out var extract) ? extract.GetString() ?? "" : "",
                 Environment = e.TryGetProperty("environment", out var environment) ? environment.GetString() ?? "" : "",
                 ExcelRowNumber = e.TryGetProperty("excelRowNumber", out var row) ? row.GetInt32() : 0, ExpectedValueColumn = e.TryGetProperty("expectedValueColumn", out var col) ? col.GetInt32() : 0
             };
