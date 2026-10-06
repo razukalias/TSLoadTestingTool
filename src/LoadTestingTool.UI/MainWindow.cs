@@ -130,7 +130,7 @@ public sealed partial class MainWindow : Window
     private InstanceRow GetOrCreateRow(InstanceInfo item)
     {
         if (_rows.TryGetValue(item.FolderPath, out var existing)) return existing;
-        var row = new InstanceRow(item, selected => { UiLog($"UI action: instance row clicked. instance={selected.Name}"); _instanceList.SelectedItem = selected; ShowDetails(selected); }, UiLog);
+        var row = new InstanceRow(item, selected => { UiLog($"UI action: instance row clicked. instance={selected.Name}"); _instanceList.SelectedItem = selected; ShowDetails(selected); }, selected => OpenInstanceConfiguration(selected), UiLog);
         row.SetEnvironmentOptions(item.EnvironmentOptions);
         _rows[item.FolderPath] = row;
         return row;
@@ -145,7 +145,7 @@ public sealed partial class MainWindow : Window
         var content = new StackPanel { Spacing = 6, Children = { DashboardStyle.Badge(assertion.Result == "PASS" ? "Passed" : "Failed"), text } };
         var row = new Grid { ColumnDefinitions = new ColumnDefinitions("30,*") };
         row.Children.Add(check); Grid.SetColumn(content, 1); row.Children.Add(content);
-        text.PointerPressed += (_, _) => _ = EditAssertionAsync(assertion);
+        text.PointerPressed += (_, _) => OpenAssertionEditor(assertion);
         var card = DashboardStyle.Card(row, new Thickness(10)); card.Margin = new Thickness(0, 0, 0, 8); return card;
     }
 
@@ -179,11 +179,17 @@ public sealed partial class MainWindow : Window
         UiLog($"Assertion environment options updated. instance={_selectedInstance?.Name ?? "<none>"}; options={string.Join(",", options)}; selected={_environmentFilter.SelectedItem}");
     }
 
-    private async Task EditAssertionAsync(AssertionInfo assertion)
+    private void OpenAssertionEditor(AssertionInfo assertion)
     {
         if (_selectedInstance is null) return;
-        var result = await new AssertionEditorWindow(assertion).ShowDialog<AssertionEditResult?>(this);
-        if (result is null) return;
+        var editor = new AssertionEditorWindow(assertion);
+        editor.Closed += (_, _) => { if (editor.Result is not null) ApplyAssertionEdit(assertion, editor.Result); };
+        editor.Show(this);
+    }
+
+    private void ApplyAssertionEdit(AssertionInfo assertion, AssertionEditResult result)
+    {
+        if (_selectedInstance is null) return;
         try
         {
             var workbookPath = _selectedInstance.WorkbookPath;
@@ -344,12 +350,18 @@ public sealed partial class MainWindow : Window
     private async Task CreateInstanceAsync()
     {
         var root = Path.GetFullPath(_config.InstancesRoot);
-        var createdFolder = await new InstanceBuilderWindow(root).ShowDialog<string?>(this);
-        if (string.IsNullOrWhiteSpace(createdFolder)) return;
-        RefreshInstances();
-        var created = _instances.FirstOrDefault(x => x.FolderPath.Equals(Path.GetFullPath(createdFolder), StringComparison.OrdinalIgnoreCase));
-        if (created is not null) { created.Selected = true; _instanceList.SelectedItem = created; ShowDetails(created); RefreshRows(); }
-        _details.Text = $"Created instance: {created?.Name ?? Path.GetFileName(createdFolder)}. Select Configure to edit its testcase and steps.";
+        var builder = new InstanceBuilderWindow(root);
+        builder.Closed += (_, _) =>
+        {
+            var createdFolder = builder.CreatedFolder;
+            if (string.IsNullOrWhiteSpace(createdFolder)) return;
+            RefreshInstances();
+            var created = _instances.FirstOrDefault(x => x.FolderPath.Equals(Path.GetFullPath(createdFolder), StringComparison.OrdinalIgnoreCase));
+            if (created is not null) { created.Selected = true; _instanceList.SelectedItem = created; ShowDetails(created); RefreshRows(); }
+            _details.Text = $"Created instance: {created?.Name ?? Path.GetFileName(createdFolder)}. Select Configure to edit its testcase and steps.";
+        };
+        builder.Show(this);
+        await Task.CompletedTask;
     }
 
     private void RefreshRows()

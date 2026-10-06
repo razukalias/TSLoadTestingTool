@@ -13,7 +13,7 @@ namespace LoadTestingTool.UI;
 
 internal static class DashboardStyle
 {
-    public const string Build = "Dashboard 2026.10.04.9";
+    public const string Build = "Dashboard 2026.10.04.10";
     public static IBrush Brush(string color) => new SolidColorBrush(Color.Parse(color));
     public static IBrush Panel => Brush("#101E2E");
     public static IBrush Muted => Brush("#8EA4BC");
@@ -25,7 +25,7 @@ internal static class DashboardStyle
     {
         Text = text, FontSize = size, FontWeight = bold ? FontWeight.SemiBold : FontWeight.Normal,
         Foreground = color ?? Brush("#E3EDF9"), VerticalAlignment = VerticalAlignment.Center,
-        TextTrimming = TextTrimming.CharacterEllipsis
+        TextTrimming = TextTrimming.None
     };
     public static Button Action(string label, Action action, string? style = null)
     {
@@ -70,19 +70,20 @@ internal sealed class InstanceRow : Border
     private readonly TextBlock _order = DashboardStyle.Text("");
     private readonly TextBlock _environment = DashboardStyle.Text("");
     private readonly Border _badgeHost = new();
-    public InstanceRow(InstanceInfo item, Action<InstanceInfo> select, Action<string> log)
+    public InstanceRow(InstanceInfo item, Action<InstanceInfo> select, Action<InstanceInfo> configure, Action<string> log)
     {
         _item = item;
         Padding = new Thickness(8, 12);
         HorizontalAlignment = HorizontalAlignment.Stretch;
         BorderBrush = DashboardStyle.Line;
         BorderThickness = new Thickness(0, 0, 0, 1);
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("30,*,62,80,82,90,92"), MinWidth = 630 };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("30,*,62,80,82,90,92,110"), MinWidth = 740 };
         _check = new CheckBox { IsChecked = item.Selected, VerticalAlignment = VerticalAlignment.Center, MinWidth = 24 };
         _check.IsCheckedChanged += (_, _) => { item.Selected = _check.IsChecked == true; log($"Instance selection changed. instance={item.Name}; selected={item.Selected}"); select(item); Refresh(); };
         var name = DashboardStyle.Text(item.Name, 12, true);
         ToolTip.SetTip(name, item.WorkbookPath);
-        var cells = new Control[] { _check, name, _testcases, _mode, _order, _environment, _badgeHost };
+        var configureButton = DashboardStyle.Action("Configure", () => configure(item), "primary"); configureButton.Margin = new Thickness(0, 0, 4, 0); configureButton.Padding = new Thickness(8, 5);
+        var cells = new Control[] { _check, name, _testcases, _mode, _order, _environment, _badgeHost, configureButton };
         for (var i = 0; i < cells.Length; i++) { Grid.SetColumn(cells[i], i); cells[i].Margin = new Thickness(0, 0, 6, 0); grid.Children.Add(cells[i]); }
         Child = grid;
         PointerPressed += (_, _) => select(item);
@@ -177,8 +178,8 @@ public sealed partial class MainWindow
             DashboardStyle.Action("Clear", () => { foreach (var item in _instances) item.Selected = false; RefreshRows(); }) } };
         _search.Margin = new Thickness(0, 0, 8, 6); _search.TextChanged += (_, _) => FilterInstances();
         Grid.SetColumn(tools, 1); toolbar.Children.Add(tools);
-        var columnHeader = new Grid { ColumnDefinitions = new ColumnDefinitions("30,*,62,80,82,90,92"), Margin = new Thickness(8, 8), MinWidth = 630 };
-        var columns = new[] { "", "Instance", "Cases", "Mode", "Order", "Env.", "Status" };
+        var columnHeader = new Grid { ColumnDefinitions = new ColumnDefinitions("30,*,62,80,82,90,92,110"), Margin = new Thickness(8, 8), MinWidth = 740 };
+        var columns = new[] { "", "Instance", "Cases", "Mode", "Order", "Env.", "Status", "Actions" };
         for (var i = 0; i < columns.Length; i++) { var text = DashboardStyle.Text(columns[i], 11, false, DashboardStyle.Muted); Grid.SetColumn(text, i); columnHeader.Children.Add(text); }
         _instanceList.Background = Brushes.Transparent; _instanceList.BorderThickness = new Thickness(0);
         _instanceList.ItemTemplate = new FuncDataTemplate<InstanceInfo>((item, _) => item is null ? new Border() : GetOrCreateRow(item));
@@ -228,7 +229,8 @@ public sealed partial class MainWindow
         _workspace.Margin = new Thickness(18, 0, 18, 0);
         _settingsPage = CreateSettingsPage(); _historyPage = Scroll(_historyPanel);
         _details.TextWrapping = TextWrapping.Wrap; _details.Foreground = DashboardStyle.Muted; _details.FontSize = 11;
-        var bottom = new StackPanel { Margin = new Thickness(18, 10), Spacing = 4, Children = { _footer, _details } };
+        var diagnostics = new ScrollViewer { Content = _details, MaxHeight = 110, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+        var bottom = new StackPanel { Margin = new Thickness(18, 10), Spacing = 4, Children = { _footer, diagnostics } };
         var content = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto") };
         content.Children.Add(header); Grid.SetRow(_workspace, 1); content.Children.Add(_workspace); Grid.SetRow(bottom, 2); content.Children.Add(bottom);
         var root = new Grid { ColumnDefinitions = new ColumnDefinitions("180,*") };
@@ -308,8 +310,35 @@ public sealed partial class MainWindow
     private async Task EditWorkbookAsync()
     {
         if (_selectedInstance is null) { _details.Text = "Select an instance first."; return; }
-        var backup = await new WorkbookEditorWindow(_selectedInstance.WorkbookPath).ShowDialog<string?>(this);
-        if (!string.IsNullOrWhiteSpace(backup)) { RefreshInstances(); _details.Text = $"Workbook saved. Backup created: {Path.GetFileName(backup)}"; }
+        var editor = new WorkbookEditorWindow(_selectedInstance.WorkbookPath);
+        editor.Closed += (_, _) => { if (!string.IsNullOrWhiteSpace(editor.SavedBackup)) { RefreshInstances(); _details.Text = $"Workbook saved. Backup created: {Path.GetFileName(editor.SavedBackup)}"; } };
+        editor.Show(this);
+        await Task.CompletedTask;
+    }
+
+    private void OpenInstanceConfiguration(InstanceInfo item)
+    {
+        if (!string.IsNullOrWhiteSpace(item.SelectionReadError)) { _details.Text = $"Cannot read run choices: {item.SelectionReadError}"; return; }
+        var chooser = new RunSelectionWindow(item);
+        chooser.Closed += (_, _) => { if (chooser.Result is not null) ApplyRunSelection(item, chooser.Result); };
+        chooser.Show(this);
+    }
+
+    private void ApplyRunSelection(InstanceInfo item, RunSelectionResult result)
+    {
+        item.TestcaseSelection = result.Testcases; item.StepSelectionJson = result.StepsJson; item.EnvironmentSelection = result.Environments;
+        item.EnvironmentSelectionJson = result.EnvironmentsJson; item.DataIdSelection = result.DataIds; item.HasAppliedSelection = true; item.Selected = true;
+        try
+        {
+            var profile = Path.Combine(item.FolderPath, ".run-selection.json");
+            var temporary = profile + ".tmp";
+            File.WriteAllText(temporary, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(temporary, profile, overwrite: true);
+            _details.Text = $"Selection saved for {item.Name}. Testcases: {result.Testcases}; Data IDs: {(string.IsNullOrWhiteSpace(result.DataIds) ? "all rows" : result.DataIds)}";
+        }
+        catch (Exception ex) { _details.Text = $"Selection applied, but could not save it: {ex.Message}"; UiLog($"Could not save selection profile for {item.Name}: {ex}"); }
+        UiLog($"Run selection applied. instance={item.Name}; testcases={result.Testcases}; steps={result.StepsJson}; environments={result.Environments}; dataIds={result.DataIds}");
+        BuildConfiguration(); RefreshRows(); RefreshDashboardDetails(true);
     }
 
     private async Task<bool> ChooseRunSelectionAsync(InstanceInfo? target = null)
@@ -321,20 +350,7 @@ public sealed partial class MainWindow
         {
             var result = await new RunSelectionWindow(item).ShowDialog<RunSelectionResult?>(this);
             if (result is null) return false;
-            item.TestcaseSelection = result.Testcases; item.StepSelectionJson = result.StepsJson; item.EnvironmentSelection = result.Environments;
-            item.EnvironmentSelectionJson = result.EnvironmentsJson; item.DataIdSelection = result.DataIds; item.HasAppliedSelection = true;
-            item.Selected = true;
-            UiLog($"Run selection applied. instance={item.Name}; testcases={result.Testcases}; steps={result.StepsJson}; environments={result.Environments}");
-            _details.Text = "Selection applied. Click Run selected to execute the checked choices.";
-            try
-            {
-                var profile = Path.Combine(item.FolderPath, ".run-selection.json");
-                var temporary = profile + ".tmp";
-                File.WriteAllText(temporary, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
-                File.Move(temporary, profile, overwrite: true);
-            }
-            catch (Exception ex) { _details.Text = $"Selection applied, but could not save it for the next app start: {ex.Message}"; UiLog($"Could not save selection profile: {ex}"); }
-            BuildConfiguration(); RefreshRows(); RefreshDashboardDetails(true); return true;
+            ApplyRunSelection(item, result); _details.Text = "Selection applied. Click Run selected to execute the checked choices."; return true;
         }
         catch (Exception ex) { _details.Text = $"Could not show run choices: {ex.Message}"; UiLog($"Run selection dialog failed: {ex}"); return false; }
     }

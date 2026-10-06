@@ -33,15 +33,15 @@ public sealed class WorkbookReader
             steps.Add(new RequestStep
             {
                 TestcaseIndex = index, Testcase = testcase, StepName = stepName, Sequence = row.RowNumber(), TemplateSource = template, TargetUrl = url,
-                StepType = stepType, Stage = ExecutionStageParser.Parse(Text(configHeaders, row, "stage", "Test")), Enabled = Bool(configHeaders, row, "enabled", true), TimeoutSeconds = Math.Max(0, Int(configHeaders, row, "timeout", 0)), StepConfig = Text(configHeaders, row, "stepconfig", "{}"),
+                StepType = stepType, Stage = ExecutionStageParser.Parse(Text(configHeaders, row, "stage", "Test")), Enabled = Bool(configHeaders, row, "enabled", true), TimeoutSeconds = Math.Max(0, Int(configHeaders, row, "timeout", 0)), StepConfig = Compile(Text(configHeaders, row, "stepconfig", "{}"), workbook, config, compiledCellCache, row.RowNumber()),
                 Verb = Text(configHeaders, row, "verb", "POST").ToUpperInvariant(), ContentType = Text(configHeaders, row, "contenttype"),
                 Threads = Math.Max(1, Int(configHeaders, row, "threads", 1)), Iterations = Math.Max(1, Int(configHeaders, row, "iterations", 1)),
                 ThreadIntervalMs = Math.Max(0, Int(configHeaders, row, "threadintervalms", 0)), IterationIntervalMs = Math.Max(0, Int(configHeaders, row, "iterationintervalms", 0)),
-                WaitMs = Math.Max(0, Int(configHeaders, row, "wait", 0)), ExpectedStatus = Text(configHeaders, row, "expectedstatus"),
+                WaitMs = Math.Max(0, Int(configHeaders, row, "wait", 0)), ExpectedStatus = Compile(Text(configHeaders, row, "expectedstatus"), workbook, config, compiledCellCache, row.RowNumber()),
                 StopOnFailure = Bool(configHeaders, row, "stoponfailure", true), IgnoreEmpty = Bool(configHeaders, row, "ignoreempty", false),
                 AssertEnabled = Bool(configHeaders, row, "assert", Bool(configHeaders, row, "assertenabled", true)),
                 AssertOnlyResponse = Bool(configHeaders, row, "assertonlyresponse", Bool(configHeaders, row, "assertonlyinresponse", false)),
-                Environments = SplitValues(EnvironmentText(configHeaders, row)), Headers = ExtractHeaders(configHeaders, row)
+                Environments = SplitValues(Compile(EnvironmentText(configHeaders, row), workbook, config, compiledCellCache, row.RowNumber())), Headers = ExtractHeaders(configHeaders, row, workbook, config, compiledCellCache)
             });
         }
         var duplicate = steps.GroupBy(s => (s.TestcaseIndex, s.StepName), StepTupleComparer.Instance).FirstOrDefault(g => g.Count() > 1);
@@ -252,7 +252,7 @@ public sealed class WorkbookReader
         }
         finally { resolving.Remove(key); }
     }
-    private static Dictionary<string, string> ExtractHeaders(Dictionary<string, int> h, IXLRow row) => h.Where(x => x.Key.StartsWith("header_", StringComparison.OrdinalIgnoreCase)).Select(x => (Name: x.Key[7..], Value: Text(h, row, x.Key))).Where(x => !string.IsNullOrWhiteSpace(x.Value) || x.Value == "\"\"").ToDictionary(x => x.Name, x => x.Value, StringComparer.OrdinalIgnoreCase);
+    private static Dictionary<string, string> ExtractHeaders(Dictionary<string, int> h, IXLRow row, XLWorkbook workbook, IXLWorksheet currentSheet, Dictionary<string, string> compiledCellCache) => h.Where(x => x.Key.StartsWith("header_", StringComparison.OrdinalIgnoreCase)).Select(x => (Name: x.Key[7..], Value: Compile(Text(h, row, x.Key), workbook, currentSheet, compiledCellCache, row.RowNumber()))).Where(x => !string.IsNullOrWhiteSpace(x.Value) || x.Value == "\"\"").ToDictionary(x => x.Name, x => x.Value, StringComparer.OrdinalIgnoreCase);
 
     private sealed class DataKeyComparer : IEqualityComparer<(int, string)> { public static readonly DataKeyComparer Instance = new(); public bool Equals((int, string) x, (int, string) y) => x.Item1 == y.Item1 && string.Equals(x.Item2, y.Item2, StringComparison.OrdinalIgnoreCase); public int GetHashCode((int, string) x) => HashCode.Combine(x.Item1, StringComparer.OrdinalIgnoreCase.GetHashCode(x.Item2)); }
     private sealed class StepTupleComparer : IEqualityComparer<(int, string)> { public static readonly StepTupleComparer Instance = new(); public bool Equals((int, string) x, (int, string) y) => x.Item1 == y.Item1 && string.Equals(x.Item2, y.Item2, StringComparison.OrdinalIgnoreCase); public int GetHashCode((int, string) x) => HashCode.Combine(x.Item1, StringComparer.OrdinalIgnoreCase.GetHashCode(x.Item2)); }

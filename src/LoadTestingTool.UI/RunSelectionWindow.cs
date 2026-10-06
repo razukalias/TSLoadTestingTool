@@ -18,6 +18,7 @@ public sealed class RunSelectionWindow : Window
     private readonly TextBlock _error = new() { TextWrapping = Avalonia.Media.TextWrapping.Wrap, Foreground = DashboardStyle.Red };
     private readonly Button _apply;
     private bool _rebuilding;
+    public RunSelectionResult? Result { get; private set; }
 
     public RunSelectionWindow(InstanceInfo item)
     {
@@ -123,6 +124,6 @@ public sealed class RunSelectionWindow : Window
     }
     private void Apply()
     {
-        if (_draft.TryBuild(out var result, out var error)) Close(result! with { DataIds = SerializeDataIds() }); else _error.Text = error;
+        if (_draft.TryBuild(out var result, out var error)) { Result = result! with { DataIds = SerializeDataIds() }; Close(); } else _error.Text = error;
     }
 }

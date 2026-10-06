@@ -15,6 +15,7 @@ public sealed class WorkbookEditorWindow : Window
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap };
     private readonly Button _save;
     private SheetDraft? _active;
+    public string? SavedBackup { get; private set; }
 
     public WorkbookEditorWindow(string workbookPath)
     {
@@ -62,7 +63,7 @@ public sealed class WorkbookEditorWindow : Window
             using var workbook = new XLWorkbook(_path);
             foreach (var (name, draft) in _sheets) draft.WriteTo(workbook.Worksheet(name));
             var backup = $"{_path}.backup.{DateTime.Now:yyyyMMdd_HHmmss}.xlsx";
-            File.Copy(_path, backup, overwrite: false); workbook.Save(); Close(backup);
+            File.Copy(_path, backup, overwrite: false); workbook.Save(); SavedBackup = backup; Close();
         }
         catch (Exception ex) { _status.Text = ex.Message; }
     }
@@ -81,6 +82,7 @@ public sealed class WorkbookEditorWindow : Window
         private readonly TextBox _expected = new();
         private readonly TextBox _cellValue = new();
         private readonly TextBlock _help = DashboardStyle.Text("Select a cell to see help.", 11, false, DashboardStyle.Muted);
+        private readonly TextBox _tokenSearch = new() { Watermark = "Filter functions, headers, and From_ references…" };
         private readonly Dictionary<int, TextBox> _activeEditors = [];
         public Control View { get; }
         public Action? UpdateWizard { get; set; }
@@ -88,7 +90,7 @@ public sealed class WorkbookEditorWindow : Window
         public int SelectedColumn { get; set; } = -1;
         private string[] Headers => _values.Count == 0 ? [] : _values[0].ToArray();
         private static readonly string[] AssertionVerbs = { "eq", "ne", "contains", "notcontains", "startswith", "endswith", "regex", "exists", "notexists", "empty", "notempty", "gt", "gte", "lt", "lte", "in", "size" };
-        private static readonly string[] Functions = { "<randomnumber>", "<randomnumber(1,100)>", "<From_variable>", "<From_userId>", "<uuid>", "<uuid()>", "<now>", "<now()>", "<jsonpath>" };
+        private static readonly string[] Functions = { "<guid>", "<guid:N>", "<randomnumber:1-100>", "<randomnumber_6>", "<currentdatum>", "<currentdatetime>", "<currenttimestamp>" };
         private static readonly string[] CommonHeaders = { "header_Accept", "header_Content-Type", "header_Authorization", "header_User-Agent", "header_Cookie", "header_Cache-Control", "header_Origin" };
 
         public SheetDraft(IXLWorksheet sheet, string sheetName, Action<SheetDraft, int, int> select)
@@ -121,6 +123,7 @@ public sealed class WorkbookEditorWindow : Window
             _expected.TextChanged += (_, _) => { if (SelectedRow >= 1 && SelectedColumn >= 0 && IsAssertionColumn()) ApplyAssertion(); };
             _wizard.Children.Add(_expected);
             _wizard.Children.Add(DashboardStyle.Text("Insert token / function", 11, false, DashboardStyle.Muted));
+            _tokenSearch.TextChanged += (_, _) => RefreshWizard(); _wizard.Children.Add(_tokenSearch);
             _wizard.Children.Add(_tokenList);
             _wizard.Children.Add(DashboardStyle.Text("Available assertion verbs", 11, false, DashboardStyle.Muted));
             var verbSearch = new TextBox { Watermark = "Search assertion verbs…" }; var verbs = new ListBox { Height = 130, ItemsSource = AssertionVerbs };
@@ -138,13 +141,15 @@ public sealed class WorkbookEditorWindow : Window
             _cellValue.Tag = header; _cellValue.Text = value; _expected.Text = ParseExpected(value); _assertionVerb.SelectedItem = ParseVerb(value);
             _help.Text = GetHelp(header);
             _tokenList.Children.Clear();
-            foreach (var token in CompatibleTokens(header)) _tokenList.Children.Add(DashboardStyle.Action(token, () => InsertToken(token)));
+            foreach (var token in CompatibleTokens(header).Where(x => string.IsNullOrWhiteSpace(_tokenSearch.Text) || x.Contains(_tokenSearch.Text!, StringComparison.OrdinalIgnoreCase))) _tokenList.Children.Add(DashboardStyle.Action(token, () => InsertToken(token)));
         }
         private IEnumerable<string> CompatibleTokens(string header)
         {
-            if (header.StartsWith("header_", StringComparison.OrdinalIgnoreCase)) return CommonHeaders.Where(x => !x.Equals(header, StringComparison.OrdinalIgnoreCase));
-            if (header.Contains("assert", StringComparison.OrdinalIgnoreCase) || header.Contains("response", StringComparison.OrdinalIgnoreCase)) return Functions.Take(5);
-            return Functions;
+            var from = Headers.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => $"<From_{_sheetName}_{x}_r>");
+            var variables = Headers.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => $"_{x}_");
+            if (header.StartsWith("header_", StringComparison.OrdinalIgnoreCase)) return CommonHeaders.Where(x => !x.Equals(header, StringComparison.OrdinalIgnoreCase)).Concat(Functions).Concat(from).Concat(variables);
+            if (header.Contains("assert", StringComparison.OrdinalIgnoreCase) || header.Contains("response", StringComparison.OrdinalIgnoreCase)) return Functions.Concat(from);
+            return Functions.Concat(from).Concat(variables);
         }
         private string GetHelp(string header) => header.ToLowerInvariant() switch
         {
@@ -164,6 +169,7 @@ public sealed class WorkbookEditorWindow : Window
         private void Render(bool refreshWizard = true)
         {
             _rows.Children.Clear(); _activeEditors.Clear(); var filter = _columnSearch.Text?.Trim() ?? ""; var visible = Enumerable.Range(0, Headers.Length).Where(i => string.IsNullOrWhiteSpace(filter) || Headers[i].Contains(filter, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (visible.Count == 0) { _rows.Children.Add(DashboardStyle.Text("No columns match the filter. Clear the filter to restore the grid.", 12, false, DashboardStyle.Muted)); if (refreshWizard) RefreshWizard(); return; }
             AddGridRow(0, visible, true);
             for (var r = 1; r < _values.Count; r++) AddGridRow(r, visible, false);
             if (refreshWizard) RefreshWizard();

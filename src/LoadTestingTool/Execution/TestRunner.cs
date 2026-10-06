@@ -142,7 +142,13 @@ public sealed class TestRunner
             var resolvedUrl = await ResolveDynamicValueAsync(step.TargetUrl.Replace("{env}", environment, StringComparison.OrdinalIgnoreCase), correlation, requestReferences, executionContext, cancellationToken);
             result.TargetUrl = Substitute(resolvedUrl, variables); var resolvedTemplate = await ResolveDynamicValueAsync(File.ReadAllText(templatePath), correlation, requestReferences, executionContext, cancellationToken); var body = TemplateRenderer.Render(resolvedTemplate, result.ContentType, variables); result.RequestBody = body;
             using var request = new HttpRequestMessage(new HttpMethod(step.Verb), result.TargetUrl); if (!step.Verb.Equals("HEAD", StringComparison.OrdinalIgnoreCase) || !string.IsNullOrWhiteSpace(body)) request.Content = new StringContent(body, Encoding.UTF8, result.ContentType.Equals("xml", StringComparison.OrdinalIgnoreCase) ? "application/xml" : "application/json");
-            var resolvedHeaders = step.Headers.ToDictionary(h => h.Key, h => Substitute(h.Value, variables), StringComparer.OrdinalIgnoreCase); result.RequestHeaders = string.Join("; ", resolvedHeaders.Select(h => $"{h.Key}={h.Value}")); foreach (var h in resolvedHeaders) if (!request.Headers.TryAddWithoutValidation(h.Key, h.Value)) request.Content?.Headers.TryAddWithoutValidation(h.Key, h.Value);
+            var resolvedHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var header in step.Headers)
+            {
+                var value = await ResolveDynamicValueAsync(header.Value, correlation, requestReferences, executionContext, cancellationToken);
+                resolvedHeaders[header.Key] = Substitute(value, variables);
+            }
+            result.RequestHeaders = string.Join("; ", resolvedHeaders.Select(h => $"{h.Key}={h.Value}")); foreach (var h in resolvedHeaders) if (!request.Headers.TryAddWithoutValidation(h.Key, h.Value)) request.Content?.Headers.TryAddWithoutValidation(h.Key, h.Value);
             _logger.Info($"REQUEST SENT [{requestId}]\nURL: {result.TargetUrl}\nMETHOD: {step.Verb}\nHEADERS:\n{result.RequestHeaders}\nBODY:\n{body}");
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken); timeout.CancelAfter(TimeSpan.FromSeconds(step.TimeoutSeconds > 0 ? step.TimeoutSeconds : _timeoutSeconds)); using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseContentRead, timeout.Token);
             result.HttpStatus = (int)response.StatusCode; result.ResponseHeaders = string.Join("; ", response.Headers.Concat(response.Content.Headers).Select(h => $"{h.Key}={string.Join(",", h.Value)}")); result.ResponseBody = await response.Content.ReadAsStringAsync(timeout.Token);

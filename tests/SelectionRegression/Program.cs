@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using ClosedXML.Excel;
 using LoadTestingTool.Domain;
+using LoadTestingTool.Excel;
 using LoadTestingTool.UI;
 using LoadTestingTool.Validation;
 
@@ -86,14 +87,14 @@ try
     using (var book = new XLWorkbook())
     {
         var config = book.Worksheets.Add("config");
-        var headers = new[] { "testcaseindex", "testcase", "stepname", "steptype", "enabled", "stepconfig", "environments", "assert" };
+        var headers = new[] { "testcaseindex", "testcase", "stepname", "steptype", "enabled", "stepconfig", "environments", "assert", "header_X-Request-Id" };
         for (var i = 0; i < headers.Length; i++) config.Cell(1, i + 1).Value = headers[i];
         void Row(int row, int index, string name, string filename, string env, bool enabled = true)
         {
             config.Cell(row, 1).Value = index; config.Cell(row, 2).Value = "Case " + index; config.Cell(row, 3).Value = name;
             config.Cell(row, 4).Value = "File"; config.Cell(row, 5).Value = enabled;
             config.Cell(row, 6).Value = JsonSerializer.Serialize(new { action = "write", path = "out/" + filename, content = name });
-            config.Cell(row, 7).Value = env; config.Cell(row, 8).Value = false;
+            config.Cell(row, 7).Value = env; config.Cell(row, 8).Value = false; config.Cell(row, 9).Value = "<guid>";
         }
         Row(2, 1, "Write dev", "dev.txt", "dev"); Row(3, 1, "Write prod", "prod.txt", "prod"); Row(4, 1, "Global", "global.txt", "");
         Row(5, 2, "Write dev", "other-case.txt", "dev"); Row(6, 1, "Disabled", "disabled.txt", "dev", false);
@@ -105,6 +106,9 @@ try
         Check(WorkbookSelectionCatalog.Read(book).Count == 2, "UI catalog reads named testcases and steps from the real workbook");
         book.SaveAs(workbookPath);
     }
+    var compiledConfig = new WorkbookReader().Read(workbookPath);
+    var compiledHeader = compiledConfig.Testcases.Single(x => x.TestcaseIndex == 1).Steps.First().Headers["x-request-id"];
+    Check(Guid.TryParse(compiledHeader, out _), "Config HTTP header compiles <guid> before execution");
     File.WriteAllText(Path.Combine(temporary, "appsettings.json"), JsonSerializer.Serialize(new { WorkspaceRoot = ".", PromptForTestcaseSelection = false, RequestTimeoutSeconds = 5 }));
     int Run(string cases, string? stepsJson, string env, string runId)
     {

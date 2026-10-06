@@ -13,6 +13,7 @@ public sealed class InstanceBuilderWindow : Window
     private readonly ComboBox _template = new() { ItemsSource = new[] { "Full DataEngine template", "Minimal HTTP template" }, SelectedIndex = 0 };
     private readonly TextBox _message = new() { TextWrapping = Avalonia.Media.TextWrapping.Wrap };
     private readonly Button _create;
+    public string? CreatedFolder { get; private set; }
 
     public InstanceBuilderWindow(string defaultRoot)
     {
@@ -76,7 +77,7 @@ public sealed class InstanceBuilderWindow : Window
             File.WriteAllText(Path.Combine(folder, "appsettings.json"), JsonSerializer.Serialize(new { AllowTrustedScripts = false, WorkspaceRoot = ".", InstanceName = name }, new JsonSerializerOptions { WriteIndented = true }));
             File.WriteAllText(Path.Combine(folder, "Templates", "login.json"), "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}\n");
             File.WriteAllText(Path.Combine(folder, "README.md"), $"# {name}\n\nCreated by LoadTestingTool. Open the DataEngine workbook or use the guided editor.\n");
-            Close(folder);
+            CreatedFolder = folder; Close();
         }
         catch (Exception ex) { _message.Text = $"Could not create instance: {ex.Message}"; _create.IsEnabled = false; }
     }

@@ -15,6 +15,7 @@ public sealed class AssertionEditorWindow : Window
     private readonly TextBlock _actual = new();
     private readonly TextBlock _error = new();
     private readonly Button _save;
+    public AssertionEditResult? Result { get; private set; }
     private static readonly string[] Verbs = { "eq", "ne", "lt", "lte", "gt", "gte", "contains", "notcontains", "startswith", "endswith", "regex", "exists", "notexists", "empty", "notempty", "in", "size" };
 
     public AssertionEditorWindow(AssertionInfo assertion)
@@ -37,7 +38,7 @@ public sealed class AssertionEditorWindow : Window
         form.Children.Add(Field("Extract variable (optional)", _extract));
         form.Children.Add(DashboardStyle.Text("Examples: eq + 200, contains + completed, regex + ^ORD-, exists with an empty expected value.", 11, false, DashboardStyle.Muted));
         form.Children.Add(_error);
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Children = { DashboardStyle.Action("Cancel", () => Close(null)), _save } };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Children = { DashboardStyle.Action("Cancel", Close), _save } };
         var root = new Grid { RowDefinitions = new RowDefinitions("*,Auto"), Margin = new Thickness(22) };
         root.Children.Add(new ScrollViewer { Content = form }); Grid.SetRow(buttons, 1); root.Children.Add(buttons); Content = root;
         _verb.SelectionChanged += (_, _) => Validate(); _path.TextChanged += (_, _) => Validate(); _expected.TextChanged += (_, _) => Validate(); Validate();
@@ -54,6 +55,6 @@ public sealed class AssertionEditorWindow : Window
     private void Save()
     {
         if (!_save.IsEnabled) return;
-        Close(new AssertionEditResult(_path.Text!.Trim(), _verb.SelectedItem!.ToString()!, _expected.Text ?? "", _extract.Text?.Trim() ?? ""));
+        Result = new AssertionEditResult(_path.Text!.Trim(), _verb.SelectedItem!.ToString()!, _expected.Text ?? "", _extract.Text?.Trim() ?? ""); Close();
     }
 }
