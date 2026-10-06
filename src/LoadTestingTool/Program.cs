@@ -93,9 +93,12 @@ internal static class Program
             {
                 overall.Cancelled |= cancellation.IsCancellationRequested;
                 overall.EndedAt = DateTimeOffset.Now;
+                var overallResult = overall.Cancelled ? "cancelled" : overall.Testcases.Any(t => t.Result == "FAILED") ? "failed" : "passed";
+                var historyFolder = Path.Combine(config.HistoryFolder, overallResult);
+                Directory.CreateDirectory(historyFolder);
                 var historyName = $"Execution_History_{InternalLogger.SafeFolderName(runId)}.xlsx";
                 var historyPath = string.Empty;
-                try { historyPath = new HistoryWriter(config).Write(overall, config.HistoryFolder, historyName); }
+                try { historyPath = new HistoryWriter(config).Write(overall, historyFolder, historyName); }
                 catch (Exception ex) { Console.Error.WriteLine($"[Warning] History generation failed: {ex.Message}"); }
                 WriteMetrics(config.ResultsFolder, runId, overall);
                 runEvents.WriteRunCompleted(overall, historyPath);
@@ -199,7 +202,7 @@ internal static class Program
         processLogger.Info($"Testcase process completed. Result={(local.Cancelled ? "CANCELLED" : failed ? "FAILED" : "PASSED")}");
         if (Directory.Exists(resultFolder))
         {
-            var finalFolder = Path.Combine(config.ResultsFolder, local.Cancelled ? "cancelled" : failed ? "failed" : "pass", Path.GetFileName(resultFolder));
+            var finalFolder = Path.Combine(config.HistoryFolder, local.Cancelled ? "cancelled" : failed ? "failed" : "passed", Path.GetFileName(resultFolder));
             Directory.CreateDirectory(Path.GetDirectoryName(finalFolder)!);
             Directory.Move(resultFolder, finalFolder);
         }

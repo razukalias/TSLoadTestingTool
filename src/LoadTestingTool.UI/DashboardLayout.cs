@@ -13,7 +13,7 @@ namespace LoadTestingTool.UI;
 
 internal static class DashboardStyle
 {
-    public const string Build = "Dashboard 2026.10.04.10";
+    public const string Build = "Dashboard 2026.10.04.11";
     public static IBrush Brush(string color) => new SolidColorBrush(Color.Parse(color));
     public static IBrush Panel => Brush("#101E2E");
     public static IBrush Muted => Brush("#8EA4BC");
@@ -109,6 +109,12 @@ public sealed partial class MainWindow
     private readonly StackPanel _configurationPanel = new() { Spacing = 12 };
     private readonly StackPanel _artifactPanel = new() { Spacing = 10 };
     private readonly StackPanel _historyPanel = new() { Spacing = 10 };
+    private readonly TextBox _historySearch = new() { Watermark = "Filter instance, testcase, step, Data ID, status…", Width = 330 };
+    private readonly ComboBox _historyStatus = new() { ItemsSource = new[] { "All statuses", "Passed", "Failed", "Cancelled" }, SelectedIndex = 0, Width = 140 };
+    private readonly StackPanel _historyResults = new() { Spacing = 5 };
+    private readonly List<HistoryEntry> _historyEntries = [];
+    private readonly HashSet<string> _historySelected = new(StringComparer.OrdinalIgnoreCase);
+    private readonly TextBlock _historyCompare = DashboardStyle.Text("Select two history files to compare.", 12, false, DashboardStyle.Muted);
     private readonly StackPanel _eventPanel = new() { Spacing = 3 };
     private readonly TextBlock _selectedTitle = DashboardStyle.Text("Selected instance", 16, true);
     private readonly TextBlock _pageTitle = DashboardStyle.Text("Instances", 18, true);
@@ -431,18 +437,81 @@ public sealed partial class MainWindow
     }
     private void RefreshHistoryPanel()
     {
-        _historyPanel.Children.Clear(); _historyPanel.Children.Add(DashboardStyle.Text("Saved run workbooks", 20, true));
-        _historyPanel.Children.Add(DashboardStyle.Action("Refresh history", RefreshHistoryPanel));
-        var count = 0;
-        foreach (var item in _instances)
-            foreach (var folder in new[] { item.ResultsFolder, item.HistoryFolder }.Where(Directory.Exists))
-                foreach (var path in Directory.GetFiles(folder, "*.xlsx", SearchOption.AllDirectories).OrderByDescending(File.GetLastWriteTimeUtc).Take(30))
-                {
-                    count++; var entry = path;
-                    var label = $"{item.Name}  /  {Path.GetFileName(path)}  /  {File.GetLastWriteTime(path):yyyy-MM-dd HH:mm}";
-                    _historyPanel.Children.Add(DashboardStyle.Action(label, () => OpenExcelFile(entry, "history workbook")));
-                }
-        if (count == 0) _historyPanel.Children.Add(DashboardStyle.Text("No saved runs yet. Complete a run to create its result workbook.", color: DashboardStyle.Muted));
+        _historyEntries.Clear(); _historySelected.RemoveWhere(path => !File.Exists(path));
+        foreach (var item in _instances.Where(x => Directory.Exists(x.HistoryFolder)))
+            foreach (var path in Directory.GetFiles(item.HistoryFolder, "Execution_History_*.xlsx", SearchOption.AllDirectories).OrderByDescending(File.GetLastWriteTimeUtc))
+                try { _historyEntries.Add(ReadHistoryEntry(item, path)); } catch (Exception ex) { UiLog($"History entry skipped. path={path}; error={ex.Message}"); }
+        _historyPanel.Children.Clear();
+        _historyPanel.Children.Add(DashboardStyle.Text("History Explorer", 20, true));
+        _historyPanel.Children.Add(DashboardStyle.Text("Browse complete runs, testcase rows, steps, Data IDs, assertions, request/response data, and compare two executions.", 12, false, DashboardStyle.Muted));
+        var filterTools = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _historySearch, _historyStatus, DashboardStyle.Action("Refresh", RefreshHistoryPanel), DashboardStyle.Action("Clear comparison", () => { _historySelected.Clear(); RenderHistoryEntries(); }) } };
+        _historySearch.TextChanged -= HistoryFilterChanged; _historySearch.TextChanged += HistoryFilterChanged;
+        _historyStatus.SelectionChanged -= HistoryFilterChanged; _historyStatus.SelectionChanged += HistoryFilterChanged;
+        _historyPanel.Children.Add(filterTools);
+        var compare = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { DashboardStyle.Action("Compare selected", CompareHistory), _historyCompare } };
+        _historyPanel.Children.Add(DashboardStyle.Card(compare, new Thickness(10)));
+        _historyPanel.Children.Add(new Border { Height = 1, Background = DashboardStyle.Line });
+        _historyPanel.Children.Add(new ScrollViewer { Content = _historyResults, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
+        RenderHistoryEntries();
+    }
+
+    private void HistoryFilterChanged(object? sender, EventArgs e) => RenderHistoryEntries();
+
+    private void RenderHistoryEntries()
+    {
+        _historyResults.Children.Clear();
+        var query = _historySearch.Text?.Trim() ?? "";
+        var status = _historyStatus.SelectedItem?.ToString() ?? "All statuses";
+        var visible = _historyEntries.Where(x => status == "All statuses" || x.Status.Equals(status, StringComparison.OrdinalIgnoreCase))
+            .Where(x => string.IsNullOrWhiteSpace(query) || x.SearchText.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+        foreach (var entry in visible)
+        {
+            var selected = _historySelected.Contains(entry.Path);
+            var check = new CheckBox { IsChecked = selected, VerticalAlignment = VerticalAlignment.Top };
+            check.IsCheckedChanged += (_, _) => { if (check.IsChecked == true) _historySelected.Add(entry.Path); else _historySelected.Remove(entry.Path); _historyCompare.Text = $"{_historySelected.Count} history file(s) selected; choose exactly two to compare."; };
+            var title = DashboardStyle.Text($"{entry.Instance}  ·  {entry.Status}  ·  {entry.RunId}", 13, true); title.TextWrapping = TextWrapping.Wrap;
+            var summary = DashboardStyle.Text($"{entry.Started:yyyy-MM-dd HH:mm:ss}  ·  {entry.Requests.Count} step rows  ·  {entry.Passed} passed  ·  {entry.Failed} failed  ·  p95 {entry.P95Ms} ms", 11, false, DashboardStyle.Muted); summary.TextWrapping = TextWrapping.Wrap;
+            var open = DashboardStyle.Action("Open workbook", () => OpenExcelFile(entry.Path, "history workbook"));
+            var details = new StackPanel { Spacing = 4, Children = { title, summary } };
+            foreach (var row in entry.Requests.Take(8)) { var line = DashboardStyle.Text($"{row.Result,-5}  {row.Testcase} / {row.DataId} / {row.Step}  {row.DurationMs} ms  HTTP {row.HttpStatus}", 11, false, row.Result == "FAIL" ? DashboardStyle.Red : DashboardStyle.Muted); line.TextWrapping = TextWrapping.Wrap; details.Children.Add(line); }
+            var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("30,*,Auto"), Children = { check, details, open } }; Grid.SetColumn(details, 1); Grid.SetColumn(open, 2);
+            _historyResults.Children.Add(DashboardStyle.Card(grid, new Thickness(10)));
+        }
+        if (visible.Count == 0) _historyResults.Children.Add(DashboardStyle.Text("No history matches the current filters.", color: DashboardStyle.Muted));
+        _historyCompare.Text = $"{_historySelected.Count} history file(s) selected; choose exactly two to compare.";
+    }
+
+    private void CompareHistory()
+    {
+        var selected = _historyEntries.Where(x => _historySelected.Contains(x.Path)).ToList();
+        if (selected.Count != 2) { _historyCompare.Text = "Select exactly two history files first."; return; }
+        var left = selected[0]; var right = selected[1];
+        var byKey = left.Requests.Concat(right.Requests).GroupBy(x => $"{x.Testcase}|{x.DataId}|{x.Step}", StringComparer.OrdinalIgnoreCase).OrderBy(x => x.Key);
+        var changed = 0; var lines = new List<string> { $"Comparison: {Path.GetFileName(left.Path)}  vs  {Path.GetFileName(right.Path)}" };
+        foreach (var group in byKey)
+        {
+            var a = group.FirstOrDefault(x => left.Requests.Contains(x)); var b = group.FirstOrDefault(x => right.Requests.Contains(x));
+            if (a is null || b is null || a.Result != b.Result || a.HttpStatus != b.HttpStatus || a.DurationMs != b.DurationMs || a.RequestBody != b.RequestBody || a.ResponseBody != b.ResponseBody)
+            { changed++; lines.Add($"{group.Key}: {(a?.Result ?? "missing")} / {(b?.Result ?? "missing")}; HTTP {a?.HttpStatus.ToString() ?? "-"} / {b?.HttpStatus.ToString() ?? "-"}; {a?.DurationMs.ToString() ?? "-"} ms / {b?.DurationMs.ToString() ?? "-"} ms"); }
+        }
+        _historyCompare.Text = $"Comparison complete: {changed} changed row(s).";
+        var dialog = new Window { Title = "History comparison", Width = 1100, Height = 720, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        var text = new TextBox { Text = string.Join(Environment.NewLine, lines), IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap };
+        var close = DashboardStyle.Action("Close", dialog.Close);
+        var comparisonGrid = new Grid { RowDefinitions = new RowDefinitions("*,Auto"), Margin = new Thickness(18) };
+        var textScroll = new ScrollViewer { Content = text, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto };
+        comparisonGrid.Children.Add(textScroll); Grid.SetRow(close, 1); comparisonGrid.Children.Add(close); dialog.Content = comparisonGrid;
+        dialog.Show(this);
+    }
+
+    private static HistoryEntry ReadHistoryEntry(InstanceInfo item, string path)
+    {
+        using var workbook = new XLWorkbook(path); var summary = workbook.Worksheet("RunSummary"); var metrics = workbook.Worksheet("Metrics"); var requestSheet = workbook.Worksheet("RequestHistory");
+        var headers = requestSheet.FirstRowUsed()!.CellsUsed().ToDictionary(c => c.GetString(), c => c.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase);
+        string Cell(IXLRow row, string name) => headers.TryGetValue(name, out var c) ? row.Cell(c).GetString() : "";
+        var requests = requestSheet.RowsUsed().Skip(1).Select(row => new HistoryRequest(Cell(row, "testcase"), Cell(row, "dataid"), Cell(row, "stepname"), Cell(row, "requestresult"), long.TryParse(Cell(row, "durationms"), out var d) ? d : 0, int.TryParse(Cell(row, "httpstatus"), out var s) ? s : 0, Cell(row, "requestbody"), Cell(row, "responsebody"))).ToList();
+        var result = summary.Cell(2, 16).GetString(); var runId = summary.Cell(2, 1).GetString(); var started = DateTime.TryParse(summary.Cell(2, 2).GetString(), out var date) ? date : File.GetLastWriteTime(path); var p95 = metrics.RowsUsed().FirstOrDefault(r => r.Cell(1).GetString().Equals("p95DurationMs", StringComparison.OrdinalIgnoreCase))?.Cell(2).GetString() ?? "0";
+        return new HistoryEntry(path, item.Name, result, runId, started, requests, requests.Count(x => x.Result == "PASS"), requests.Count(x => x.Result == "FAIL"), p95, string.Join(" ", item.Name, result, runId, requests.Select(x => $"{x.Testcase} {x.DataId} {x.Step}")));
     }
     private static void RecordDashboardEvent(InstanceInfo item, JsonElement e)
     {
@@ -466,6 +535,8 @@ public sealed partial class MainWindow
 }
 
 public sealed record DashboardRequest(string StepName, string StepType, string Testcase, string DataId, string Result, long DurationMs, string FailureCategory, string Error);
+internal sealed record HistoryRequest(string Testcase, string DataId, string Step, string Result, long DurationMs, int HttpStatus, string RequestBody, string ResponseBody);
+internal sealed record HistoryEntry(string Path, string Instance, string Status, string RunId, DateTime Started, IReadOnlyList<HistoryRequest> Requests, int Passed, int Failed, string P95Ms, string SearchText);
 internal sealed class LatencyChart(double[] values) : Control
 {
     public override void Render(DrawingContext context)
