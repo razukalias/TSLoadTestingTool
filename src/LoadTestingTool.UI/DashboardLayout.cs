@@ -13,7 +13,7 @@ namespace LoadTestingTool.UI;
 
 internal static class DashboardStyle
 {
-    public const string Build = "Dashboard 2026.10.04.11";
+    public const string Build = "Dashboard 2026.10.04.12";
     public static IBrush Brush(string color) => new SolidColorBrush(Color.Parse(color));
     public static IBrush Panel => Brush("#101E2E");
     public static IBrush Muted => Brush("#8EA4BC");
@@ -115,6 +115,7 @@ public sealed partial class MainWindow
     private readonly List<HistoryEntry> _historyEntries = [];
     private readonly HashSet<string> _historySelected = new(StringComparer.OrdinalIgnoreCase);
     private readonly TextBlock _historyCompare = DashboardStyle.Text("Select two history files to compare.", 12, false, DashboardStyle.Muted);
+    private bool _historyRefreshing;
     private readonly StackPanel _eventPanel = new() { Spacing = 3 };
     private readonly TextBlock _selectedTitle = DashboardStyle.Text("Selected instance", 16, true);
     private readonly TextBlock _pageTitle = DashboardStyle.Text("Instances", 18, true);
@@ -333,7 +334,7 @@ public sealed partial class MainWindow
     private void ApplyRunSelection(InstanceInfo item, RunSelectionResult result)
     {
         item.TestcaseSelection = result.Testcases; item.StepSelectionJson = result.StepsJson; item.EnvironmentSelection = result.Environments;
-        item.EnvironmentSelectionJson = result.EnvironmentsJson; item.DataIdSelection = result.DataIds; item.HasAppliedSelection = true; item.Selected = true;
+        item.EnvironmentSelectionJson = result.EnvironmentsJson; item.DataIdSelection = result.DataIds; item.ExecutionMode = result.ExecutionMode; item.RunScenariosInParallel = result.ScenariosParallel; item.HasAppliedSelection = true; item.Selected = true;
         try
         {
             var profile = Path.Combine(item.FolderPath, ".run-selection.json");
@@ -435,12 +436,17 @@ public sealed partial class MainWindow
         _artifactPanel.Children.Add(KeyValue("Results", item.ResultsFolder));
         _artifactPanel.Children.Add(KeyValue("Current run", item.CurrentRunFolder));
     }
-    private void RefreshHistoryPanel()
+    private async void RefreshHistoryPanel()
     {
-        _historyEntries.Clear(); _historySelected.RemoveWhere(path => !File.Exists(path));
-        foreach (var item in _instances.Where(x => Directory.Exists(x.HistoryFolder)))
-            foreach (var path in Directory.GetFiles(item.HistoryFolder, "Execution_History_*.xlsx", SearchOption.AllDirectories).OrderByDescending(File.GetLastWriteTimeUtc))
-                try { _historyEntries.Add(ReadHistoryEntry(item, path)); } catch (Exception ex) { UiLog($"History entry skipped. path={path}; error={ex.Message}"); }
+        if (_historyRefreshing) return;
+        _historyRefreshing = true;
+        try
+        {
+            var sources = _instances.Where(x => Directory.Exists(x.HistoryFolder)).Select(x => (Item: x, Paths: Directory.GetFiles(x.HistoryFolder, "Execution_History_*.xlsx", SearchOption.AllDirectories).OrderByDescending(File.GetLastWriteTimeUtc).ToArray())).ToArray();
+            var loaded = await Task.Run(() => sources.SelectMany(source => source.Paths.Select(path => (source.Item, Path: path))).Select(source => { try { return ReadHistoryEntry(source.Item, source.Path); } catch { return null; } }).Where(x => x is not null).Cast<HistoryEntry>().ToList());
+            _historyEntries.Clear(); _historyEntries.AddRange(loaded); _historySelected.RemoveWhere(path => !File.Exists(path));
+        }
+        finally { _historyRefreshing = false; }
         _historyPanel.Children.Clear();
         _historyPanel.Children.Add(DashboardStyle.Text("History Explorer", 20, true));
         _historyPanel.Children.Add(DashboardStyle.Text("Browse complete runs, testcase rows, steps, Data IDs, assertions, request/response data, and compare two executions.", 12, false, DashboardStyle.Muted));
@@ -464,7 +470,7 @@ public sealed partial class MainWindow
         var status = _historyStatus.SelectedItem?.ToString() ?? "All statuses";
         var visible = _historyEntries.Where(x => status == "All statuses" || x.Status.Equals(status, StringComparison.OrdinalIgnoreCase))
             .Where(x => string.IsNullOrWhiteSpace(query) || x.SearchText.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
-        foreach (var entry in visible)
+        foreach (var entry in visible.Take(200))
         {
             var selected = _historySelected.Contains(entry.Path);
             var check = new CheckBox { IsChecked = selected, VerticalAlignment = VerticalAlignment.Top };
@@ -478,6 +484,7 @@ public sealed partial class MainWindow
             _historyResults.Children.Add(DashboardStyle.Card(grid, new Thickness(10)));
         }
         if (visible.Count == 0) _historyResults.Children.Add(DashboardStyle.Text("No history matches the current filters.", color: DashboardStyle.Muted));
+        else if (visible.Count > 200) _historyResults.Children.Add(DashboardStyle.Text($"Showing the first 200 of {visible.Count} matches. Use filters to narrow the list.", color: DashboardStyle.Muted));
         _historyCompare.Text = $"{_historySelected.Count} history file(s) selected; choose exactly two to compare.";
     }
 
@@ -487,20 +494,29 @@ public sealed partial class MainWindow
         if (selected.Count != 2) { _historyCompare.Text = "Select exactly two history files first."; return; }
         var left = selected[0]; var right = selected[1];
         var byKey = left.Requests.Concat(right.Requests).GroupBy(x => $"{x.Testcase}|{x.DataId}|{x.Step}", StringComparer.OrdinalIgnoreCase).OrderBy(x => x.Key);
-        var changed = 0; var lines = new List<string> { $"Comparison: {Path.GetFileName(left.Path)}  vs  {Path.GetFileName(right.Path)}" };
+        var changed = 0; var requestLines = new List<string> { $"Comparison: {Path.GetFileName(left.Path)}  vs  {Path.GetFileName(right.Path)}" };
+        var responseLines = new List<string>(); var configLines = new List<string>(); var assertionLines = new List<string>();
         foreach (var group in byKey)
         {
             var a = group.FirstOrDefault(x => left.Requests.Contains(x)); var b = group.FirstOrDefault(x => right.Requests.Contains(x));
-            if (a is null || b is null || a.Result != b.Result || a.HttpStatus != b.HttpStatus || a.DurationMs != b.DurationMs || a.RequestBody != b.RequestBody || a.ResponseBody != b.ResponseBody)
-            { changed++; lines.Add($"{group.Key}: {(a?.Result ?? "missing")} / {(b?.Result ?? "missing")}; HTTP {a?.HttpStatus.ToString() ?? "-"} / {b?.HttpStatus.ToString() ?? "-"}; {a?.DurationMs.ToString() ?? "-"} ms / {b?.DurationMs.ToString() ?? "-"} ms"); }
+            if (a is null || b is null || a.Result != b.Result || a.HttpStatus != b.HttpStatus || a.DurationMs != b.DurationMs || a.RequestBody != b.RequestBody || a.ResponseBody != b.ResponseBody || a.RequestHeaders != b.RequestHeaders || a.ResponseHeaders != b.ResponseHeaders || a.StepConfig != b.StepConfig)
+            { changed++; requestLines.Add($"{group.Key}: {(a?.Result ?? "missing")} / {(b?.Result ?? "missing")}; HTTP {a?.HttpStatus.ToString() ?? "-"} / {b?.HttpStatus.ToString() ?? "-"}; {a?.DurationMs.ToString() ?? "-"} ms / {b?.DurationMs.ToString() ?? "-"} ms"); configLines.Add($"{group.Key}:\nA: {a?.StepConfig ?? "missing"}\nB: {b?.StepConfig ?? "missing"}"); responseLines.Add($"{group.Key}:\nA headers: {a?.ResponseHeaders ?? "missing"}\nB headers: {b?.ResponseHeaders ?? "missing"}\nA body: {a?.ResponseBody ?? "missing"}\nB body: {b?.ResponseBody ?? "missing"}"); }
+        }
+        var assertionKeys = left.Assertions.Concat(right.Assertions).GroupBy(x => $"{x.Testcase}|{x.DataId}|{x.Step}|{x.Path}", StringComparer.OrdinalIgnoreCase).OrderBy(x => x.Key);
+        foreach (var group in assertionKeys)
+        {
+            var a = group.FirstOrDefault(x => left.Assertions.Contains(x)); var b = group.FirstOrDefault(x => right.Assertions.Contains(x));
+            if (a is null || b is null || a.Result != b.Result || a.Verb != b.Verb || a.Expected != b.Expected || a.Actual != b.Actual) assertionLines.Add($"{group.Key}: {(a?.Result ?? "missing")} / {(b?.Result ?? "missing")}; verb {a?.Verb ?? "-"} / {b?.Verb ?? "-"}; expected {a?.Expected ?? "-"} / {b?.Expected ?? "-"}; actual {a?.Actual ?? "-"} / {b?.Actual ?? "-"}");
         }
         _historyCompare.Text = $"Comparison complete: {changed} changed row(s).";
         var dialog = new Window { Title = "History comparison", Width = 1100, Height = 720, WindowStartupLocation = WindowStartupLocation.CenterOwner };
-        var text = new TextBox { Text = string.Join(Environment.NewLine, lines), IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap };
+        var search = new TextBox { Watermark = "Filter differences…", Margin = new Thickness(0, 0, 0, 8) };
+        var tabs = new TabControl();
+        void AddTab(string header, IEnumerable<string> values) { var box = new TextBox { Text = string.Join(Environment.NewLine + Environment.NewLine, values), IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap }; var scroll = new ScrollViewer { Content = box, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto }; tabs.Items.Add(new TabItem { Header = header, Content = scroll }); search.TextChanged += (_, _) => box.Text = string.Join(Environment.NewLine + Environment.NewLine, values.Where(x => x.Contains(search.Text ?? "", StringComparison.OrdinalIgnoreCase))); }
+        AddTab("Request", requestLines); AddTab("Response", responseLines); AddTab("Assertions", assertionLines); AddTab("Config", configLines);
         var close = DashboardStyle.Action("Close", dialog.Close);
-        var comparisonGrid = new Grid { RowDefinitions = new RowDefinitions("*,Auto"), Margin = new Thickness(18) };
-        var textScroll = new ScrollViewer { Content = text, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto };
-        comparisonGrid.Children.Add(textScroll); Grid.SetRow(close, 1); comparisonGrid.Children.Add(close); dialog.Content = comparisonGrid;
+        var comparisonGrid = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), Margin = new Thickness(18) };
+        comparisonGrid.Children.Add(search); Grid.SetRow(tabs, 1); comparisonGrid.Children.Add(tabs); Grid.SetRow(close, 2); comparisonGrid.Children.Add(close); dialog.Content = comparisonGrid;
         dialog.Show(this);
     }
 
@@ -509,9 +525,11 @@ public sealed partial class MainWindow
         using var workbook = new XLWorkbook(path); var summary = workbook.Worksheet("RunSummary"); var metrics = workbook.Worksheet("Metrics"); var requestSheet = workbook.Worksheet("RequestHistory");
         var headers = requestSheet.FirstRowUsed()!.CellsUsed().ToDictionary(c => c.GetString(), c => c.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase);
         string Cell(IXLRow row, string name) => headers.TryGetValue(name, out var c) ? row.Cell(c).GetString() : "";
-        var requests = requestSheet.RowsUsed().Skip(1).Select(row => new HistoryRequest(Cell(row, "testcase"), Cell(row, "dataid"), Cell(row, "stepname"), Cell(row, "requestresult"), long.TryParse(Cell(row, "durationms"), out var d) ? d : 0, int.TryParse(Cell(row, "httpstatus"), out var s) ? s : 0, Cell(row, "requestbody"), Cell(row, "responsebody"))).ToList();
+        var requests = requestSheet.RowsUsed().Skip(1).Select(row => new HistoryRequest(Cell(row, "testcase"), Cell(row, "dataid"), Cell(row, "stepname"), Cell(row, "requestresult"), long.TryParse(Cell(row, "durationms"), out var d) ? d : 0, int.TryParse(Cell(row, "httpstatus"), out var s) ? s : 0, Cell(row, "requestbody"), Cell(row, "responsebody"), Cell(row, "requestheaders"), Cell(row, "responseheaders"), Cell(row, "stepconfig"))).ToList();
+        var assertionSheet = workbook.Worksheet("AssertionHistory"); var ah = assertionSheet.FirstRowUsed()!.CellsUsed().ToDictionary(c => c.GetString(), c => c.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase); string ACell(IXLRow row, string name) => ah.TryGetValue(name, out var c) ? row.Cell(c).GetString() : "";
+        var assertions = assertionSheet.RowsUsed().Skip(1).Select(row => new HistoryAssertion(ACell(row, "testcase"), ACell(row, "dataid"), ACell(row, "stepname"), ACell(row, "responsepath"), ACell(row, "assertionverb"), ACell(row, "expectedvalue"), ACell(row, "actualvalue"), ACell(row, "result"))).ToList();
         var result = summary.Cell(2, 16).GetString(); var runId = summary.Cell(2, 1).GetString(); var started = DateTime.TryParse(summary.Cell(2, 2).GetString(), out var date) ? date : File.GetLastWriteTime(path); var p95 = metrics.RowsUsed().FirstOrDefault(r => r.Cell(1).GetString().Equals("p95DurationMs", StringComparison.OrdinalIgnoreCase))?.Cell(2).GetString() ?? "0";
-        return new HistoryEntry(path, item.Name, result, runId, started, requests, requests.Count(x => x.Result == "PASS"), requests.Count(x => x.Result == "FAIL"), p95, string.Join(" ", item.Name, result, runId, requests.Select(x => $"{x.Testcase} {x.DataId} {x.Step}")));
+        return new HistoryEntry(path, item.Name, result, runId, started, requests, assertions, requests.Count(x => x.Result == "PASS"), requests.Count(x => x.Result == "FAIL"), p95, string.Join(" ", item.Name, result, runId, requests.Select(x => $"{x.Testcase} {x.DataId} {x.Step}")));
     }
     private static void RecordDashboardEvent(InstanceInfo item, JsonElement e)
     {
@@ -535,8 +553,9 @@ public sealed partial class MainWindow
 }
 
 public sealed record DashboardRequest(string StepName, string StepType, string Testcase, string DataId, string Result, long DurationMs, string FailureCategory, string Error);
-internal sealed record HistoryRequest(string Testcase, string DataId, string Step, string Result, long DurationMs, int HttpStatus, string RequestBody, string ResponseBody);
-internal sealed record HistoryEntry(string Path, string Instance, string Status, string RunId, DateTime Started, IReadOnlyList<HistoryRequest> Requests, int Passed, int Failed, string P95Ms, string SearchText);
+internal sealed record HistoryRequest(string Testcase, string DataId, string Step, string Result, long DurationMs, int HttpStatus, string RequestBody, string ResponseBody, string RequestHeaders, string ResponseHeaders, string StepConfig);
+internal sealed record HistoryAssertion(string Testcase, string DataId, string Step, string Path, string Verb, string Expected, string Actual, string Result);
+internal sealed record HistoryEntry(string Path, string Instance, string Status, string RunId, DateTime Started, IReadOnlyList<HistoryRequest> Requests, IReadOnlyList<HistoryAssertion> Assertions, int Passed, int Failed, string P95Ms, string SearchText);
 internal sealed class LatencyChart(double[] values) : Control
 {
     public override void Render(DrawingContext context)

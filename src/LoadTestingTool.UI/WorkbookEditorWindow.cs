@@ -79,6 +79,7 @@ public sealed class WorkbookEditorWindow : Window
         private readonly StackPanel _wizard = new() { Spacing = 9 };
         private readonly StackPanel _tokenList = new() { Spacing = 3 };
         private readonly ComboBox _assertionVerb = new() { ItemsSource = AssertionVerbs, SelectedIndex = 0 };
+        private readonly ComboBox _headerVerb = new() { ItemsSource = AssertionVerbs, SelectedIndex = 0 };
         private readonly TextBox _expected = new();
         private readonly TextBox _cellValue = new();
         private readonly TextBlock _help = DashboardStyle.Text("Select a cell to see help.", 11, false, DashboardStyle.Muted);
@@ -122,6 +123,10 @@ public sealed class WorkbookEditorWindow : Window
             _wizard.Children.Add(DashboardStyle.Text("Expected value", 11, false, DashboardStyle.Muted));
             _expected.TextChanged += (_, _) => { if (SelectedRow >= 1 && SelectedColumn >= 0 && IsAssertionColumn()) ApplyAssertion(); };
             _wizard.Children.Add(_expected);
+            _wizard.Children.Add(DashboardStyle.Text("Header-level assertion rule", 11, false, DashboardStyle.Muted));
+            _wizard.Children.Add(_headerVerb);
+            _wizard.Children.Add(DashboardStyle.Action("Apply verb to response header", ApplyHeaderVerb));
+            _wizard.Children.Add(DashboardStyle.Text("Cell value overrides the header rule when it starts with {verb}. Functions in the cell remain the expected value, for example {eq}<From_request_user_r> or {contains}<randomnumber:1-100>.", 10, false, DashboardStyle.Muted));
             _wizard.Children.Add(DashboardStyle.Text("Insert token / function", 11, false, DashboardStyle.Muted));
             _tokenSearch.TextChanged += (_, _) => RefreshWizard(); _wizard.Children.Add(_tokenSearch);
             _wizard.Children.Add(_tokenList);
@@ -130,6 +135,9 @@ public sealed class WorkbookEditorWindow : Window
             verbSearch.TextChanged += (_, _) => verbs.ItemsSource = AssertionVerbs.Where(x => x.Contains(verbSearch.Text ?? "", StringComparison.OrdinalIgnoreCase)).ToList();
             verbs.SelectionChanged += (_, _) => { if (verbs.SelectedItem is string v) { _assertionVerb.SelectedItem = v; if (IsAssertionColumn()) ApplyAssertion(); } };
             _wizard.Children.Add(verbSearch); _wizard.Children.Add(verbs);
+            var overrides = new WrapPanel { ItemWidth = 125, ItemHeight = 32 };
+            foreach (var verb in AssertionVerbs) overrides.Children.Add(DashboardStyle.Action($"{{{verb}}} override", () => { _assertionVerb.SelectedItem = verb; if (IsAssertionColumn()) ApplyAssertion(); }));
+            _wizard.Children.Add(DashboardStyle.Text("Cell-level override verbs", 11, false, DashboardStyle.Muted)); _wizard.Children.Add(overrides);
             _wizard.Children.Add(_help);
             RefreshWizard();
         }
@@ -138,7 +146,7 @@ public sealed class WorkbookEditorWindow : Window
         {
             if (SelectedRow < 0 || SelectedColumn < 0 || SelectedRow >= _values.Count || SelectedColumn >= _values[SelectedRow].Count) { _selection.Text = "Select a cell"; return; }
             var header = Headers[SelectedColumn]; var value = _values[SelectedRow][SelectedColumn]; _selection.Text = $"Row {SelectedRow + 1}, Column {SelectedColumn + 1} ({header})";
-            _cellValue.Tag = header; _cellValue.Text = value; _expected.Text = ParseExpected(value); _assertionVerb.SelectedItem = ParseVerb(value);
+            _cellValue.Tag = header; _cellValue.Text = value; _expected.Text = ParseExpected(value); _assertionVerb.SelectedItem = ParseVerb(value); _headerVerb.SelectedItem = ParseHeaderVerb(header);
             _help.Text = GetHelp(header);
             _tokenList.Children.Clear();
             foreach (var token in CompatibleTokens(header).Where(x => string.IsNullOrWhiteSpace(_tokenSearch.Text) || x.Contains(_tokenSearch.Text!, StringComparison.OrdinalIgnoreCase))) _tokenList.Children.Add(DashboardStyle.Action(token, () => InsertToken(token)));
@@ -163,7 +171,14 @@ public sealed class WorkbookEditorWindow : Window
         };
         private bool IsAssertionColumn() => SelectedColumn >= 0 && (_sheetName.Equals("response", StringComparison.OrdinalIgnoreCase) || Headers[SelectedColumn].Contains("assert", StringComparison.OrdinalIgnoreCase));
         private void ApplyAssertion() { var verb = _assertionVerb.SelectedItem?.ToString() ?? "eq"; var expected = _expected.Text ?? ""; _cellValue.Text = verb is "exists" or "notexists" or "empty" or "notempty" ? $"{{{verb}}}" : $"{{{verb}}}{expected}"; _values[SelectedRow][SelectedColumn] = _cellValue.Text; }
+        private void ApplyHeaderVerb()
+        {
+            if (!_sheetName.Equals("response", StringComparison.OrdinalIgnoreCase) || SelectedColumn < 0 || SelectedColumn >= Headers.Length) return;
+            var header = Headers[SelectedColumn]; var existing = header.StartsWith("{", StringComparison.Ordinal) && header.IndexOf('}') > 1 ? header[(header.IndexOf('}') + 1)..] : header;
+            _values[0][SelectedColumn] = $"{{{_headerVerb.SelectedItem?.ToString() ?? "eq"}}}{existing}"; Render();
+        }
         private static string ParseVerb(string value) { var open = value.IndexOf('{'); var close = value.IndexOf('}'); return open == 0 && close > 1 && AssertionVerbs.Contains(value[1..close]) ? value[1..close] : "eq"; }
+        private static string ParseHeaderVerb(string value) { var close = value.IndexOf('}'); return value.StartsWith("{", StringComparison.Ordinal) && close > 1 && AssertionVerbs.Contains(value[1..close]) ? value[1..close] : "eq"; }
         private static string ParseExpected(string value) { var close = value.IndexOf('}'); return value.StartsWith("{") && close > 1 ? value[(close + 1)..] : value; }
         private void InsertToken(string token) { _cellValue.Text = (_cellValue.Text ?? "") + token; if (SelectedRow >= 1 && SelectedColumn >= 0) _values[SelectedRow][SelectedColumn] = _cellValue.Text; }
         private void Render(bool refreshWizard = true)

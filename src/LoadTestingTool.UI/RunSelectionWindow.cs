@@ -17,6 +17,8 @@ public sealed class RunSelectionWindow : Window
     private readonly TextBlock _summary = new() { TextWrapping = Avalonia.Media.TextWrapping.Wrap };
     private readonly TextBlock _error = new() { TextWrapping = Avalonia.Media.TextWrapping.Wrap, Foreground = DashboardStyle.Red };
     private readonly Button _apply;
+    private readonly ComboBox _executionMode = new() { ItemsSource = new[] { "threaded", "loop" }, Width = 150 };
+    private readonly ComboBox _scenarioOrder = new() { ItemsSource = new[] { "Sequential testcases", "Parallel testcases" }, Width = 180 };
     private bool _rebuilding;
     public RunSelectionResult? Result { get; private set; }
 
@@ -26,6 +28,8 @@ public sealed class RunSelectionWindow : Window
         Width = 1260; Height = 760; MinWidth = 980; MinHeight = 600;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         _draft = new RunSelectionDraft(item.TestcaseOptions, item.TestcaseSelection, item.StepSelectionJson, item.EnvironmentSelection, item.EnvironmentSelectionJson);
+        _executionMode.SelectedItem = item.ExecutionMode.Equals("loop", StringComparison.OrdinalIgnoreCase) ? "loop" : "threaded";
+        _scenarioOrder.SelectedIndex = item.RunScenariosInParallel ? 1 : 0;
         _dataOptions = item.DataIdOptions; _currentDataSelection = item.DataIdSelection;
         _apply = DashboardStyle.Action("Apply selection", Apply, "primary"); _apply.IsDefault = true;
         var heading = new StackPanel { Spacing = 8, Margin = new Thickness(0, 0, 0, 16), Children =
@@ -41,7 +45,8 @@ public sealed class RunSelectionWindow : Window
         var data = Panel("4  Data IDs", _dataItems, () => SetAllData(true), () => SetAllData(false));
         cases.Margin = new Thickness(0, 0, 8, 0); steps.Margin = new Thickness(0, 0, 8, 0); environments.Margin = new Thickness(0, 0, 8, 0);
         columns.Children.Add(cases); Grid.SetColumn(steps, 1); columns.Children.Add(steps); Grid.SetColumn(environments, 2); columns.Children.Add(environments); Grid.SetColumn(data, 3); columns.Children.Add(data);
-        var status = new StackPanel { Spacing = 6, Margin = new Thickness(0, 12), Children = { _summary, _error, DashboardStyle.Text("Dependencies are not auto-selected. Include setup/dependency steps when your chosen step needs them.", 11, false, DashboardStyle.Muted) } };
+        var runOptions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Children = { Field("Execution mode", _executionMode), Field("Testcase order", _scenarioOrder) } };
+        var status = new StackPanel { Spacing = 6, Margin = new Thickness(0, 12), Children = { runOptions, _summary, _error, DashboardStyle.Text("Dependencies are not auto-selected. Include setup/dependency steps when your chosen step needs them.", 11, false, DashboardStyle.Muted) } };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Children = { DashboardStyle.Action("Cancel", () => Close(null)), _apply } };
         var grid = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto,Auto"), Margin = new Thickness(20) };
         grid.Children.Add(heading); Grid.SetRow(columns, 1); grid.Children.Add(columns); Grid.SetRow(status, 2); grid.Children.Add(status); Grid.SetRow(buttons, 3); grid.Children.Add(buttons); Content = grid;
@@ -124,6 +129,8 @@ public sealed class RunSelectionWindow : Window
     }
     private void Apply()
     {
-        if (_draft.TryBuild(out var result, out var error)) { Result = result! with { DataIds = SerializeDataIds() }; Close(); } else _error.Text = error;
+        if (_draft.TryBuild(out var result, out var error)) { Result = result! with { DataIds = SerializeDataIds(), ExecutionMode = _executionMode.SelectedItem?.ToString() ?? "threaded", ScenariosParallel = _scenarioOrder.SelectedIndex == 1 }; Close(); } else _error.Text = error;
     }
+
+    private static Control Field(string label, Control control) => new StackPanel { Spacing = 4, Children = { DashboardStyle.Text(label, 11, false, DashboardStyle.Muted), control } };
 }
