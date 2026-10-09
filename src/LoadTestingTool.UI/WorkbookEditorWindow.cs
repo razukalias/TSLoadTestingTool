@@ -87,7 +87,7 @@ public sealed class WorkbookEditorWindow : Window
             _columnFilter.TextChanged += (_, _) => Render();
             _suggestions.SelectionChanged += (_, _) => { if (_suggestions.SelectedItem is string value) AcceptSuggestion(value); };
             _suggestionPopup.Child = _suggestions;
-            var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { DashboardStyle.Action("Add row", AddRow), DashboardStyle.Action("Delete row", DeleteRow), DashboardStyle.Action("Insert column before", () => InsertColumn(false)), DashboardStyle.Action("Insert column after", () => InsertColumn(true)), DashboardStyle.Action("Delete column", DeleteColumn), _columnFilter, _position } };
+            var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { DashboardStyle.Action("Add row", AddRow), DashboardStyle.Action("Delete row", DeleteRow), DashboardStyle.Action("Insert column before", () => InsertColumn(false)), DashboardStyle.Action("Insert column after", () => InsertColumn(true)), DashboardStyle.Action("Delete column", DeleteColumn), DashboardStyle.Action("Widen column", () => ResizeColumn(30)), DashboardStyle.Action("Narrow column", () => ResizeColumn(-30)), _columnFilter, _position } };
             var gridScroll = new ScrollViewer { Content = _rows, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             var table = new Grid { RowDefinitions = new RowDefinitions("Auto,*"), Children = { toolbar, gridScroll } }; Grid.SetRow(gridScroll, 1);
             View = new Border { BorderBrush = DashboardStyle.Line, BorderThickness = new Thickness(1), Child = table };
@@ -144,6 +144,7 @@ public sealed class WorkbookEditorWindow : Window
         private void DeleteRow() { if (_selectedRow > 0 && _selectedRow < _values.Count) { _values.RemoveAt(_selectedRow); _selectedRow = -1; Render(); } }
         private void InsertColumn(bool after) { var index = _selectedColumn < 0 ? Headers.Length : Math.Clamp(_selectedColumn + (after ? 1 : 0), 0, Headers.Length); foreach (var row in _values) row.Insert(index, ""); _widths.Insert(index, 190); Render(); }
         private void DeleteColumn() { if (_selectedColumn < 0 || Headers.Length <= 1) return; foreach (var row in _values) row.RemoveAt(_selectedColumn); _widths.RemoveAt(_selectedColumn); _selectedColumn = -1; Render(); }
+        private void ResizeColumn(double delta) { if (_selectedColumn < 0 || _selectedColumn >= _widths.Count) return; _widths[_selectedColumn] = Math.Clamp(_widths[_selectedColumn] + delta, 100, 700); Render(); }
         public void Validate() { if (_values.Count == 0 || _values[0].All(string.IsNullOrWhiteSpace)) throw new InvalidDataException($"Sheet '{_sheetName}' must retain a header row."); if (_values[0].Distinct(StringComparer.OrdinalIgnoreCase).Count() != _values[0].Count) throw new InvalidDataException($"Sheet '{_sheetName}' contains duplicate headers."); }
         public void WriteTo(IXLWorksheet sheet) { sheet.RangeUsed()?.Clear(XLClearOptions.All); for (var r = 0; r < _values.Count; r++) for (var c = 0; c < _values[r].Count; c++) sheet.Cell(r + 1, c + 1).Value = _values[r][c]; sheet.Row(1).Style.Font.Bold = true; sheet.SheetView.FreezeRows(1); }
     }
