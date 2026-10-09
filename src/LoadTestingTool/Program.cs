@@ -98,7 +98,7 @@ internal static class Program
                 Directory.CreateDirectory(historyFolder);
                 var historyName = $"Execution_History_{InternalLogger.SafeFolderName(runId)}.xlsx";
                 var historyPath = string.Empty;
-                try { historyPath = new HistoryWriter(config).Write(overall, historyFolder, historyName); }
+                try { historyPath = new HistoryWriter(config).Write(overall, historyFolder, historyName, workbook); }
                 catch (Exception ex) { Console.Error.WriteLine($"[Warning] History generation failed: {ex.Message}"); }
                 WriteMetrics(config.ResultsFolder, runId, overall);
                 runEvents.WriteRunCompleted(overall, historyPath);

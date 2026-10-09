@@ -13,7 +13,7 @@ namespace LoadTestingTool.UI;
 
 internal static class DashboardStyle
 {
-    public const string Build = "Dashboard 2026.10.04.12";
+    public const string Build = "Dashboard 2026.10.04.13";
     public static IBrush Brush(string color) => new SolidColorBrush(Color.Parse(color));
     public static IBrush Panel => Brush("#101E2E");
     public static IBrush Muted => Brush("#8EA4BC");
@@ -446,6 +446,15 @@ public sealed partial class MainWindow
             var loaded = await Task.Run(() => sources.SelectMany(source => source.Paths.Select(path => (source.Item, Path: path))).Select(source => { try { return ReadHistoryEntry(source.Item, source.Path); } catch { return null; } }).Where(x => x is not null).Cast<HistoryEntry>().ToList());
             _historyEntries.Clear(); _historyEntries.AddRange(loaded); _historySelected.RemoveWhere(path => !File.Exists(path));
         }
+        catch (Exception ex)
+        {
+            UiLog($"History refresh failed safely: {ex}");
+            _historyEntries.Clear();
+            _historyPanel.Children.Clear();
+            _historyPanel.Children.Add(DashboardStyle.Text("History could not be loaded. The dashboard is still available; fix the file or permission problem and click Refresh.", color: DashboardStyle.Red));
+            _historyPanel.Children.Add(DashboardStyle.Text(ex.Message, 11, false, DashboardStyle.Muted));
+            return;
+        }
         finally { _historyRefreshing = false; }
         _historyPanel.Children.Clear();
         _historyPanel.Children.Add(DashboardStyle.Text("History Explorer", 20, true));
@@ -496,6 +505,9 @@ public sealed partial class MainWindow
         var byKey = left.Requests.Concat(right.Requests).GroupBy(x => $"{x.Testcase}|{x.DataId}|{x.Step}", StringComparer.OrdinalIgnoreCase).OrderBy(x => x.Key);
         var changed = 0; var requestLines = new List<string> { $"Comparison: {Path.GetFileName(left.Path)}  vs  {Path.GetFileName(right.Path)}" };
         var responseLines = new List<string>(); var configLines = new List<string>(); var assertionLines = new List<string>();
+        var variableLines = CompareSheet(left.Path, right.Path, "Variables");
+        var dataRowLines = CompareSheet(left.Path, right.Path, "DataEngineRequestRows");
+        configLines.AddRange(CompareSheet(left.Path, right.Path, "DataEngineConfig"));
         foreach (var group in byKey)
         {
             var a = group.FirstOrDefault(x => left.Requests.Contains(x)); var b = group.FirstOrDefault(x => right.Requests.Contains(x));
@@ -512,12 +524,47 @@ public sealed partial class MainWindow
         var dialog = new Window { Title = "History comparison", Width = 1100, Height = 720, WindowStartupLocation = WindowStartupLocation.CenterOwner };
         var search = new TextBox { Watermark = "Filter differences…", Margin = new Thickness(0, 0, 0, 8) };
         var tabs = new TabControl();
-        void AddTab(string header, IEnumerable<string> values) { var box = new TextBox { Text = string.Join(Environment.NewLine + Environment.NewLine, values), IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap }; var scroll = new ScrollViewer { Content = box, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto }; tabs.Items.Add(new TabItem { Header = header, Content = scroll }); search.TextChanged += (_, _) => box.Text = string.Join(Environment.NewLine + Environment.NewLine, values.Where(x => x.Contains(search.Text ?? "", StringComparison.OrdinalIgnoreCase))); }
-        AddTab("Request", requestLines); AddTab("Response", responseLines); AddTab("Assertions", assertionLines); AddTab("Config", configLines);
+        void AddTab(string header, IEnumerable<string> values)
+        {
+            var source = values.ToList(); var host = new StackPanel { Spacing = 6, Margin = new Thickness(8) };
+            void Render() { host.Children.Clear(); var filtered = source.Where(x => x.Contains(search.Text ?? "", StringComparison.OrdinalIgnoreCase)).ToList(); foreach (var line in filtered) host.Children.Add(DiffVisual(line)); if (filtered.Count == 0) host.Children.Add(DashboardStyle.Text("No differences in this tab.", color: DashboardStyle.Muted)); }
+            search.TextChanged += (_, _) => Render(); Render();
+            tabs.Items.Add(new TabItem { Header = header, Content = new ScrollViewer { Content = host, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto } });
+        }
+        AddTab("Request", requestLines); AddTab("Response", responseLines); AddTab("Assertions", assertionLines); AddTab("Variables", variableLines); AddTab("DataEngine rows", dataRowLines); AddTab("Config", configLines);
         var close = DashboardStyle.Action("Close", dialog.Close);
         var comparisonGrid = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), Margin = new Thickness(18) };
         comparisonGrid.Children.Add(search); Grid.SetRow(tabs, 1); comparisonGrid.Children.Add(tabs); Grid.SetRow(close, 2); comparisonGrid.Children.Add(close); dialog.Content = comparisonGrid;
         dialog.Show(this);
+    }
+
+    private static Control DiffVisual(string line)
+    {
+        var panel = new StackPanel { Spacing = 2 };
+        var heading = DashboardStyle.Text(line.Split('\n')[0], 11, true); heading.TextWrapping = TextWrapping.Wrap; panel.Children.Add(heading);
+        foreach (var part in line.Split('\n').Skip(1))
+        {
+            var color = part.StartsWith("A:", StringComparison.OrdinalIgnoreCase) ? DashboardStyle.Red : part.StartsWith("B:", StringComparison.OrdinalIgnoreCase) ? DashboardStyle.Green : DashboardStyle.Muted;
+            var value = DashboardStyle.Text(part, 11, false, color); value.TextWrapping = TextWrapping.Wrap; panel.Children.Add(value);
+        }
+        return DashboardStyle.Card(panel, new Thickness(7));
+    }
+
+    private static List<string> CompareSheet(string leftPath, string rightPath, string sheetName)
+    {
+        try
+        {
+            using var aBook = new XLWorkbook(leftPath); using var bBook = new XLWorkbook(rightPath);
+            var a = aBook.Worksheets.FirstOrDefault(x => x.Name.Equals(sheetName, StringComparison.OrdinalIgnoreCase)); var b = bBook.Worksheets.FirstOrDefault(x => x.Name.Equals(sheetName, StringComparison.OrdinalIgnoreCase));
+            if (a is null || b is null) return [];
+            var aRows = a.RowsUsed().Select(r => string.Join(" | ", r.CellsUsed().Select(c => c.GetString()))).Skip(1).ToHashSet(StringComparer.Ordinal);
+            var bRows = b.RowsUsed().Select(r => string.Join(" | ", r.CellsUsed().Select(c => c.GetString()))).Skip(1).ToHashSet(StringComparer.Ordinal);
+            var result = new List<string>();
+            foreach (var row in aRows.Except(bRows)) result.Add($"{sheetName} row changed\nA: {row}\nB: <removed or changed>");
+            foreach (var row in bRows.Except(aRows)) result.Add($"{sheetName} row changed\nA: <removed or changed>\nB: {row}");
+            return result;
+        }
+        catch { return []; }
     }
 
     private static HistoryEntry ReadHistoryEntry(InstanceInfo item, string path)

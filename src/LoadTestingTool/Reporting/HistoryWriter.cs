@@ -8,7 +8,7 @@ public sealed class HistoryWriter
     private readonly AppConfig _config;
     public HistoryWriter(AppConfig config) => _config = config;
 
-    public string Write(RunResult run, string? outputFolder = null, string? fileName = null)
+    public string Write(RunResult run, string? outputFolder = null, string? fileName = null, WorkbookModel? workbookModel = null)
     {
         var folder = outputFolder ?? _config.HistoryFolder;
         Directory.CreateDirectory(folder);
@@ -60,6 +60,21 @@ public sealed class HistoryWriter
                 vars.AddRow(run.RunId, r.RequestId, r.TestcaseIndex, r.Testcase, r.DataId, r.StepName, variable.Key, Mask($"{variable.Key}={variable.Value}"), "request/runtime");
             foreach (var correlation in r.Correlations)
                 corr.AddRow(run.RunId, r.RequestId, r.TestcaseIndex, r.DataId, correlation.SourceStepName, correlation.ResponsePath, correlation.Variable, Mask($"{correlation.Variable}={correlation.ExtractedValue}"), correlation.UsedByStepName);
+        }
+        if (workbookModel is not null)
+        {
+            var data = workbook.AddWorksheet("DataEngineRequestRows");
+            WriteTable(data, "testcaseindex", "testcase", "dataid", "dontrun", "variable", "value", "source");
+            foreach (var row in workbookModel.RequestData.Values.OrderBy(x => x.TestcaseIndex).ThenBy(x => x.DataId))
+            {
+                if (row.Variables.Count == 0) data.AddRow(row.TestcaseIndex, row.Testcase, row.DataId, string.Join(',', row.Dontrun), "", "", "DataEngine request row");
+                foreach (var variable in row.Variables.OrderBy(x => x.Key)) data.AddRow(row.TestcaseIndex, row.Testcase, row.DataId, string.Join(',', row.Dontrun), variable.Key, Mask(variable.Value), "DataEngine request row");
+            }
+            var config = workbook.AddWorksheet("DataEngineConfig");
+            WriteTable(config, "testcaseindex", "testcase", "stepname", "steptype", "stage", "enabled", "sequence", "templetsource", "targeturl", "verb", "contenttype", "stepconfig", "headers", "stoponfailure", "assertonlyresponse", "environments");
+            foreach (var testcase in workbookModel.Testcases)
+                foreach (var step in testcase.Steps)
+                    config.AddRow(step.TestcaseIndex, step.Testcase, step.StepName, step.StepType.WireName(), step.Stage.ToString(), step.Enabled, step.Sequence, step.TemplateSource, step.TargetUrl, step.Verb, step.ContentType, Mask(step.StepConfig), Mask(string.Join("; ", step.Headers.Select(h => $"{h.Key}={h.Value}"))), step.StopOnFailure, step.AssertOnlyResponse, string.Join(',', step.Environments));
         }
         foreach (var sheet in workbook.Worksheets) { sheet.Columns().AdjustToContents(1, 80); sheet.SheetView.FreezeRows(1); sheet.Row(1).Style.Font.Bold = true; sheet.Row(1).Style.Fill.SetBackgroundColor(XLColor.LightBlue); }
         workbook.SaveAs(path); return path;
