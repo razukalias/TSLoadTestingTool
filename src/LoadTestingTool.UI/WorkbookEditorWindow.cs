@@ -73,6 +73,7 @@ public sealed class WorkbookEditorWindow : Window
         private readonly Popup _suggestionPopup = new() { PlacementMode = PlacementMode.BottomEdgeAlignedLeft, IsLightDismissEnabled = false };
         private readonly ListBox _suggestions = new() { MaxHeight = 220, MinWidth = 260 };
         private int _selectedRow = -1, _selectedColumn = -1;
+        private bool _updatingSuggestions;
         private TextBox? _activeBox;
         private IReadOnlyList<int> _visibleColumns = [];
         public Control View { get; }
@@ -85,12 +86,13 @@ public sealed class WorkbookEditorWindow : Window
             if (_values.Count == 0) _values.Add(Enumerable.Repeat("", lastColumn).ToList());
             _widths.AddRange(Enumerable.Repeat(190d, lastColumn));
             _columnFilter.TextChanged += (_, _) => Render();
-            _suggestions.SelectionChanged += (_, _) => { if (_suggestions.SelectedItem is string value) AcceptSuggestion(value); };
+            _suggestions.SelectionChanged += (_, _) => { if (!_updatingSuggestions && _suggestionPopup.IsOpen && _suggestions.SelectedItem is string value) AcceptSuggestion(value); };
             _suggestionPopup.Child = _suggestions;
             var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { DashboardStyle.Action("Add row", AddRow), DashboardStyle.Action("Delete row", DeleteRow), DashboardStyle.Action("Insert column before", () => InsertColumn(false)), DashboardStyle.Action("Insert column after", () => InsertColumn(true)), DashboardStyle.Action("Delete column", DeleteColumn), DashboardStyle.Action("Widen column", () => ResizeColumn(30)), DashboardStyle.Action("Narrow column", () => ResizeColumn(-30)), _columnFilter, _position } };
             var gridScroll = new ScrollViewer { Content = _rows, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             var table = new Grid { RowDefinitions = new RowDefinitions("Auto,*"), Children = { toolbar, gridScroll } }; Grid.SetRow(gridScroll, 1);
-            View = new Border { BorderBrush = DashboardStyle.Line, BorderThickness = new Thickness(1), Child = table };
+            var editorHost = new Grid { Children = { table, _suggestionPopup } };
+            View = new Border { BorderBrush = DashboardStyle.Line, BorderThickness = new Thickness(1), Child = editorHost };
             Render();
         }
 
@@ -111,6 +113,7 @@ public sealed class WorkbookEditorWindow : Window
             {
                 var column = _visibleColumns[n]; var box = new TextBox { Text = _values[row][column], FontSize = 11, MinWidth = 80, Margin = new Thickness(1), AcceptsReturn = !header, TextWrapping = TextWrapping.NoWrap };
                 box.CaretIndex = box.Text?.Length ?? 0; box.TextChanged += (_, _) => { _values[row][column] = box.Text ?? ""; if (!header && ReferenceEquals(box, _activeBox)) UpdateSuggestions(box); };
+                box.GotFocus += (_, _) => SelectCell(row, column, box);
                 box.PointerPressed += (_, _) => SelectCell(row, column, box);
                 box.KeyDown += (_, e) => { if (e.Key == Key.Space && (e.KeyModifiers & KeyModifiers.Control) != 0) { UpdateSuggestions(box, true); e.Handled = true; } else if (e.Key == Key.Escape) CloseSuggestions(); else if (e.Key is Key.Enter or Key.Tab && _suggestionPopup.IsOpen && _suggestions.SelectedItem is string) { AcceptSuggestion(_suggestions.SelectedItem.ToString()!); e.Handled = true; } };
                 if (header) { box.Foreground = DashboardStyle.Brush("#E3EDF9"); ToolTip.SetTip(box, "Header is editable. Use insert/delete column buttons to change the schema."); }
@@ -133,7 +136,9 @@ public sealed class WorkbookEditorWindow : Window
             }
             else if (value.Contains('<') || force) suggestions.AddRange(Functions);
             suggestions = suggestions.Where(x => force || x.Contains(token, StringComparison.OrdinalIgnoreCase)).Distinct().Take(80).ToList();
-            _suggestions.ItemsSource = suggestions; if (suggestions.Count == 0) { CloseSuggestions(); return; } _suggestions.SelectedIndex = 0; _suggestionPopup.PlacementTarget = box; _suggestionPopup.IsOpen = true;
+            if (suggestions.Count == 0) { CloseSuggestions(); return; }
+            _updatingSuggestions = true; _suggestions.ItemsSource = suggestions; _suggestions.SelectedIndex = 0; _updatingSuggestions = false;
+            _suggestionPopup.PlacementTarget = box; _suggestionPopup.IsOpen = true;
         }
         private void AcceptSuggestion(string suggestion)
         {
