@@ -165,9 +165,9 @@ public sealed class WorkbookEditorWindow : Window
             {
                 var column = _visibleColumns[n];
                 var cell = new Grid { ColumnDefinitions = new ColumnDefinitions("*,10") };
-                var box = new TextBox { Text = _values[row][column], FontSize = _fontSize, MinWidth = 80, Margin = new Thickness(1), AcceptsReturn = true, IsReadOnly = false, Focusable = true, TextWrapping = TextWrapping.NoWrap };
+                var isWrapped = _wrap.TryGetValue((row, column), out var wrapped) && wrapped;
+                var box = new TextBox { Text = _values[row][column], FontSize = _fontSize, MinWidth = 80, Margin = new Thickness(1), AcceptsReturn = true, IsReadOnly = false, Focusable = true, TextWrapping = isWrapped ? TextWrapping.Wrap : TextWrapping.NoWrap, MinHeight = isWrapped ? WrappedHeight(_values[row][column], _widths[column]) : 30 };
                 ScrollViewer.SetVerticalScrollBarVisibility(box, ScrollBarVisibility.Hidden); ScrollViewer.SetHorizontalScrollBarVisibility(box, ScrollBarVisibility.Hidden);
-                if (_wrap.TryGetValue((row, column), out var wrapped) && wrapped) box.TextWrapping = TextWrapping.Wrap;
                 box.Background = _selectedCells.Contains((row, column)) || _selectedColumns.Contains(column) || _selectedRows.Contains(row) ? DashboardStyle.Brush("#173559") : (_cellColors.TryGetValue((row, column), out var cellColor) && cellColor is not null ? DashboardStyle.Brush(cellColor) : Brushes.Transparent);
                 box.CaretIndex = box.Text?.Length ?? 0;
                 _cellBoxes[(row, column)] = box;
@@ -249,7 +249,7 @@ public sealed class WorkbookEditorWindow : Window
         private void HandleKey(TextBox box, KeyEventArgs e)
         {
             if (e.Key == Key.Space && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { UpdateSuggestions(box, true); e.Handled = true; return; }
-            if (e.Key == Key.A && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { SelectAllCells(); e.Handled = true; return; }
+            if (e.Key == Key.A && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { box.SelectAll(); e.Handled = true; return; }
             if (e.Key == Key.Escape) { CloseSuggestions(); return; }
             if ((e.Key == Key.Enter || e.Key == Key.Tab) && _suggestionPopup.IsOpen && _suggestions.SelectedItem is string value) { AcceptSuggestion(value); e.Handled = true; return; }
             if (e.Key == Key.Z && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { Undo(); e.Handled = true; }
@@ -350,6 +350,12 @@ public sealed class WorkbookEditorWindow : Window
                     _wrap[(r, c)] = value;
             _status(value ? "Wrapped the selected columns." : "Removed wrapping from the selected columns.", false);
             Render();
+        }
+        private static double WrappedHeight(string value, double width)
+        {
+            var charsPerLine = Math.Max(8, (int)(Math.Max(100, width - 16) / 7.2));
+            var lines = value.Split('\n').Sum(line => Math.Max(1, (int)Math.Ceiling(Math.Max(1, line.Length) / (double)charsPerLine)));
+            return Math.Clamp(lines * 20 + 10, 30, 420);
         }
         private void SetCellColor(string? color) { foreach (var cell in _selectedCells) _cellColors[cell] = color; foreach (var r in TargetRows()) foreach (var c in TargetColumns()) _cellColors[(r, c)] = color; _status(color is null ? "Highlight cleared for the selected range." : "Highlight applied to the selected range.", false); Render(); }
         private void ChangeFont(double delta) { _fontSize = Math.Clamp(_fontSize + delta, 8, 24); Render(); }
