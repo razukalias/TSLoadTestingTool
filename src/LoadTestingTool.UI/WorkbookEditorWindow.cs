@@ -106,7 +106,11 @@ public sealed class WorkbookEditorWindow : Window
             var used = sheet.RangeUsed(); var lastRow = used?.RangeAddress.LastAddress.RowNumber ?? 1; var lastColumn = used?.RangeAddress.LastAddress.ColumnNumber ?? 1;
             for (var r = 1; r <= lastRow; r++) _values.Add(Enumerable.Range(1, lastColumn).Select(c => sheet.Cell(r, c).GetString()).ToList());
             if (_values.Count == 0) _values.Add(Enumerable.Repeat("", Math.Max(1, lastColumn)).ToList());
-            _widths.AddRange(Enumerable.Repeat(190d, _values[0].Count));
+            for (var c = 0; c < _values[0].Count; c++)
+            {
+                var existingWidth = sheet.Column(c + 1).Width;
+                _widths.Add(existingWidth > 0 ? Math.Clamp(existingWidth * 7.5, 100, 700) : 190d);
+            }
             _columnFilter.TextChanged += (_, _) => Render();
             _zoom.SelectionChanged += (_, _) => { _fontSize = double.TryParse((_zoom.SelectedItem?.ToString() ?? "100%").TrimEnd('%'), out var z) ? 11 * z / 100 : 11; Render(); };
             _suggestions.SelectionChanged += (_, _) => { if (!_updatingSuggestions && _suggestionPopup.IsOpen && _suggestions.SelectedItem is string value) AcceptSuggestion(value); };
@@ -354,6 +358,8 @@ public sealed class WorkbookEditorWindow : Window
         {
             sheet.RangeUsed()?.Clear(XLClearOptions.All);
             for (var r = 0; r < _values.Count; r++) for (var c = 0; c < _values[r].Count; c++) { var cell = sheet.Cell(r + 1, c + 1); cell.Value = _values[r][c]; cell.Style.Alignment.WrapText = _wrap.TryGetValue((r, c), out var wrapped) && wrapped; cell.Style.Font.FontSize = _fontSize; if (_cellColors.TryGetValue((r, c), out var color) && color is not null) cell.Style.Fill.BackgroundColor = XLColor.FromHtml(color); }
+            for (var c = 0; c < _widths.Count; c++)
+                sheet.Column(c + 1).Width = Math.Clamp(_widths[c] / 7.5, 13.3, 93.3);
             sheet.Row(1).Style.Font.Bold = true; sheet.SheetView.FreezeRows(1);
         }
     }
