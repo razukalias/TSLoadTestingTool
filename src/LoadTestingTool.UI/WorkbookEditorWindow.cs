@@ -24,7 +24,7 @@ public sealed class WorkbookEditorWindow : Window
     {
         _path = workbookPath;
         Title = $"DataEngine Editor — {Path.GetFileName(workbookPath)}";
-        Width = 1550; Height = 920; MinWidth = 1100; MinHeight = 650;
+        Width = 1250; Height = 920; MinWidth = 900; MinHeight = 650;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         using var workbook = new XLWorkbook(workbookPath);
         var sheetHeaders = workbook.Worksheets.ToDictionary(x => x.Name,
@@ -43,9 +43,16 @@ public sealed class WorkbookEditorWindow : Window
             DashboardStyle.Text("Excel-style selection: click A/B/C column indexes or row numbers; Ctrl adds and Shift selects ranges. Edit headers directly. Drag column borders to resize. Type < or { for autocomplete; Ctrl+Space opens it.", 12, false, DashboardStyle.Muted) } };
         _status.Foreground = DashboardStyle.Red;
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8,
-            Children = { DashboardStyle.Action("New sheet", AddNewSheet), DashboardStyle.Action("Rename sheet", RenameCurrentSheet), DashboardStyle.Action("Open raw workbook", () => SystemDefaultFileOpener.Open(_path)), DashboardStyle.Action("Cancel", () => Close(null)), _save } };
+            Children = { DashboardStyle.Action("New sheet", AddNewSheet), DashboardStyle.Action("Rename sheet", RenameCurrentSheet), DashboardStyle.Action("Add row at end", AddRowToCurrentSheet), DashboardStyle.Action("Open raw workbook", () => SystemDefaultFileOpener.Open(_path)), DashboardStyle.Action("Cancel", () => Close(null)), _save } };
         var root = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto,Auto"), Margin = new Thickness(18) };
         root.Children.Add(top); Grid.SetRow(_tabs, 1); root.Children.Add(_tabs); Grid.SetRow(_status, 2); root.Children.Add(_status); Grid.SetRow(buttons, 3); root.Children.Add(buttons); Content = root;
+        AddHandler(InputElement.KeyDownEvent, (_, e) =>
+        {
+            if ((e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control && e.Key == Key.S)
+            {
+                Save(close: false); e.Handled = true;
+            }
+        }, RoutingStrategies.Tunnel);
         _tabs.SelectedIndex = 0;
     }
 
@@ -55,11 +62,18 @@ public sealed class WorkbookEditorWindow : Window
         string name;
         do name = $"Sheet{index++}"; while (_sheets.ContainsKey(name));
         using var temporary = new XLWorkbook();
-        var draft = new SheetDraft(temporary.AddWorksheet(name), name, _sheetHeaders, SetStatus, () => Save(close: false));
+        var source = temporary.AddWorksheet(name); source.Cell(1, 1).Value = "Column1";
+        var draft = new SheetDraft(source, name, _sheetHeaders, SetStatus, () => Save(close: false));
         _sheets[name] = draft;
         _tabs.Items.Add(new TabItem { Header = name, Content = draft.View });
         _tabs.SelectedIndex = _tabs.ItemCount - 1;
         SetStatus($"Created new sheet '{name}'. Press Ctrl+S to save it without closing the editor.");
+    }
+
+    private void AddRowToCurrentSheet()
+    {
+        if (_tabs.SelectedItem is TabItem tab && tab.Header is string name && _sheets.TryGetValue(name, out var draft))
+            draft.AddRowAtEnd();
     }
 
     private void RenameCurrentSheet()
@@ -416,6 +430,7 @@ public sealed class WorkbookEditorWindow : Window
         private void Undo() { if (_undo.Count == 0) return; _redo.Add(_values.Select(x => x.ToList()).ToList()); _values.Clear(); _values.AddRange(_undo[^1].Select(x => x.ToList())); _undo.RemoveAt(_undo.Count - 1); Render(); }
         private void Redo() { if (_redo.Count == 0) return; _undo.Add(_values.Select(x => x.ToList()).ToList()); _values.Clear(); _values.AddRange(_redo[^1].Select(x => x.ToList())); _redo.RemoveAt(_redo.Count - 1); Render(); }
         private void InsertRows(int row, bool below) { SaveUndo(); var at = Math.Clamp(row + (below ? 1 : 0), 1, _values.Count); _values.Insert(at, Enumerable.Repeat("", Headers.Length).ToList()); Render(); }
+        public void AddRowAtEnd() { InsertRows(_values.Count, true); _status("Added a new row at the end of the current sheet.", false); }
         private void DeleteRows() { SaveUndo(); var rows = TargetRows().Where(r => r > 0 && r < _values.Count).OrderByDescending(x => x).ToArray(); foreach (var r in rows) _values.RemoveAt(r); _selectedRows.Clear(); Render(); }
         private void CopyRows() { _copiedRows = TargetRows().Select(r => _values[r].ToList()).ToList(); _status("Copied rows internally. Select a row and choose Duplicate rows or press Ctrl+V.", false); }
         private void PasteRows() { SaveUndo(); if (_copiedRows is null) return; var at = _selectedRow > 0 ? _selectedRow : _values.Count; foreach (var row in _copiedRows.Select(x => x.ToList())) _values.Insert(Math.Min(at, _values.Count), row); Render(); }
