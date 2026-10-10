@@ -4,6 +4,20 @@ This list records deferred editor work so it can be implemented later without lo
 
 ## High priority
 
+### 0. Fix cell highlighting
+
+**Current status:** Deferred. The cell highlight action does not currently behave reliably and the highlight is not saved as expected.
+
+Required behavior:
+
+- Highlight one selected cell.
+- Highlight multiple selected cells.
+- Highlight selected rows and columns.
+- Provide a reliable clear-highlight action.
+- Preserve the highlight color after saving and reopening the workbook.
+- Support choosing or changing the highlight color.
+- Add regression coverage for applying, clearing, saving, and reloading highlights.
+
 ### 1. Fix Excel-style wrapping
 
 **Current status:** Deferred. The current implementation does not reliably show wrapping for selected rows or columns.
