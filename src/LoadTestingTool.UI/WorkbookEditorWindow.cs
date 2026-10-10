@@ -32,10 +32,10 @@ public sealed class WorkbookEditorWindow : Window
         {
             var sheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
             if (sheet is null) continue;
-            var draft = new SheetDraft(sheet, name, sheetHeaders, SetStatus);
+            var draft = new SheetDraft(sheet, name, sheetHeaders, SetStatus, () => Save(close: false));
             _sheets[name] = draft; tabs.Items.Add(new TabItem { Header = name, Content = draft.View });
         }
-        _save = DashboardStyle.Action("Save workbook", Save, "primary");
+        _save = DashboardStyle.Action("Save workbook", () => Save(), "primary");
         var top = new StackPanel { Spacing = 4, Children = {
             DashboardStyle.Text("DataEngine Editor", 21, true),
             DashboardStyle.Text("Excel-style selection: click A/B/C column indexes or row numbers; Ctrl adds and Shift selects ranges. Edit headers directly. Drag column borders to resize. Type < or { for autocomplete; Ctrl+Space opens it.", 12, false, DashboardStyle.Muted) } };
@@ -49,15 +49,17 @@ public sealed class WorkbookEditorWindow : Window
 
     private void SetStatus(string message, bool error = false) { _status.Text = message; _status.Foreground = error ? DashboardStyle.Red : DashboardStyle.Muted; }
 
-    private void Save()
+    private void Save(bool close = true)
     {
         try
         {
             foreach (var draft in _sheets.Values) draft.Validate();
             using var workbook = new XLWorkbook(_path);
             foreach (var (name, draft) in _sheets) draft.WriteTo(workbook.Worksheet(name));
-            SavedBackup = $"{_path}.backup.{DateTime.Now:yyyyMMdd_HHmmss}.xlsx";
-            File.Copy(_path, SavedBackup, overwrite: false); workbook.Save(); SetStatus($"Saved workbook. Backup: {Path.GetFileName(SavedBackup)}"); Close();
+            var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmssfff");
+            SavedBackup = $"{_path}.backup.{stamp}.xlsx";
+            File.Copy(_path, SavedBackup, overwrite: false); workbook.Save(); SetStatus(close ? $"Saved workbook. Backup: {Path.GetFileName(SavedBackup)}" : $"Saved workbook and backup. Editor remains open. Backup: {Path.GetFileName(SavedBackup)}");
+            if (close) Close();
         }
         catch (Exception ex) { SetStatus(ex.Message, true); }
     }
@@ -69,6 +71,7 @@ public sealed class WorkbookEditorWindow : Window
         private readonly string _sheetName;
         private readonly Dictionary<string, string[]> _allHeaders;
         private readonly Action<string, bool> _status;
+        private readonly Action _saveWorkbook;
         private readonly List<List<string>> _values = [];
         private readonly List<double> _widths = [];
         private readonly StackPanel _rows = new() { Spacing = 1 };
@@ -99,9 +102,9 @@ public sealed class WorkbookEditorWindow : Window
         private double _fontSize = 11;
         public Control View { get; }
 
-        public SheetDraft(IXLWorksheet sheet, string name, IReadOnlyDictionary<string, string[]> headers, Action<string, bool> status)
+        public SheetDraft(IXLWorksheet sheet, string name, IReadOnlyDictionary<string, string[]> headers, Action<string, bool> status, Action saveWorkbook)
         {
-            _sheetName = name; _allHeaders = new Dictionary<string, string[]>(headers, StringComparer.OrdinalIgnoreCase); _status = status;
+            _sheetName = name; _allHeaders = new Dictionary<string, string[]>(headers, StringComparer.OrdinalIgnoreCase); _status = status; _saveWorkbook = saveWorkbook;
             var used = sheet.RangeUsed(); var lastRow = used?.RangeAddress.LastAddress.RowNumber ?? 1; var lastColumn = used?.RangeAddress.LastAddress.ColumnNumber ?? 1;
             for (var r = 1; r <= lastRow; r++)
             {
@@ -258,6 +261,7 @@ public sealed class WorkbookEditorWindow : Window
         private void HandleKey(TextBox box, KeyEventArgs e)
         {
             if (e.Key == Key.Space && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { UpdateSuggestions(box, true); e.Handled = true; return; }
+            if (e.Key == Key.S && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { _saveWorkbook(); e.Handled = true; return; }
             if (e.Key == Key.A && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { box.SelectAll(); e.Handled = true; return; }
             if (e.Key == Key.Escape) { CloseSuggestions(); return; }
             if ((e.Key == Key.Enter || e.Key == Key.Tab) && _suggestionPopup.IsOpen && _suggestions.SelectedItem is string value) { AcceptSuggestion(value); e.Handled = true; return; }
