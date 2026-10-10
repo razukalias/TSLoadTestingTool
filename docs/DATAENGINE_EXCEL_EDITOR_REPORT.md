@@ -39,3 +39,21 @@ Corrective changes in this revision:
 - Header autocomplete is activated when a header is explicitly put into edit mode.
 
 Still not complete in this revision: system clipboard integration, cut operations, full row/column insertion of copied ranges, font color/bold/italic/underline/alignment formatting, automatic row-height controls, and a full Excel-grade selection surface. These must not be described as complete until separately verified in a live UI test.
+
+
+## Stability retest — 2026-10-10
+
+A new live UI retest was performed after the corrective package was rejected as partly unstable. The following interactions were reproduced and then fixed in the native Avalonia UI:
+
+- Mouse-only Cell range, Row/Add rows, and Column/Add columns selection modes, which do not depend on Ctrl/Shift event handling.
+- Live highlighting and selection counters for selected cell ranges, rows, and columns.
+- Pointer-captured resize handles: resize no longer re-renders during a drag, so selected columns resize together on mouse release.
+- A readable selection-mode popup in the dark theme.
+- Row and column actions exposed in a cell context menu, so they remain accessible even when the horizontal grid is scrolled away from the row-number gutter.
+- Header editing through **right-click → Edit header**.
+- Autocomplete in an edited header and in an existing data-cell value at the caret.
+- Enter acceptance of the top autocomplete suggestion before multiline TextBox handling.
+- Mouse acceptance of a suggestion.
+- Native text paste restored inside editing cells; range copy/paste remains accessible through the context menu.
+
+The live verification used both selection modes and mouse actions. It confirmed a two-row selection, two-column selection, simultaneous resizing of selected columns, header suggestions, prefix suggestions before existing text, and Enter/mouse suggestion insertion.

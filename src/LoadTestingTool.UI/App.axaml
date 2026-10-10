@@ -50,6 +50,18 @@
       <Setter Property="Padding" Value="10,7" />
       <Setter Property="FontSize" Value="12" />
     </Style>
+    <Style Selector="ComboBoxItem">
+      <Setter Property="Foreground" Value="#E3EDF9" />
+      <Setter Property="Background" Value="#102036" />
+      <Setter Property="Padding" Value="10,7" />
+    </Style>
+    <Style Selector="ComboBoxItem:pointerover">
+      <Setter Property="Background" Value="#1D4C79" />
+    </Style>
+    <Style Selector="ComboBoxItem:selected">
+      <Setter Property="Background" Value="#173F73" />
+      <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
     <Style Selector="TabItem">
       <Setter Property="FontSize" Value="12" />
       <Setter Property="Padding" Value="10,10" />
