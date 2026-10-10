@@ -38,7 +38,7 @@ public sealed class WorkbookEditorWindow : Window
         _save = DashboardStyle.Action("Save workbook", Save, "primary");
         var top = new StackPanel { Spacing = 4, Children = {
             DashboardStyle.Text("DataEngine Editor", 21, true),
-            DashboardStyle.Text("Select cells, rows, or columns with the mouse. Right-click for operations. Drag column borders to resize. Type < or { for autocomplete; Ctrl+Space opens it. For a header, right-click and select Edit header.", 12, false, DashboardStyle.Muted) } };
+            DashboardStyle.Text("Excel-style selection: click A/B/C column indexes or row numbers; Ctrl adds and Shift selects ranges. Edit headers directly. Drag column borders to resize. Type < or { for autocomplete; Ctrl+Space opens it.", 12, false, DashboardStyle.Muted) } };
         _status.Foreground = DashboardStyle.Red;
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8,
             Children = { DashboardStyle.Action("Open raw workbook", () => SystemDefaultFileOpener.Open(_path)), DashboardStyle.Action("Cancel", () => Close(null)), _save } };
@@ -75,7 +75,6 @@ public sealed class WorkbookEditorWindow : Window
         private readonly TextBox _columnFilter = new() { Watermark = "Filter columns by header…", Width = 280 };
         private readonly TextBlock _position = DashboardStyle.Text("Select a cell, row, or column", 11, false, DashboardStyle.Muted);
         private readonly ComboBox _zoom = new() { Width = 90, ItemsSource = new[] { "80%", "90%", "100%", "110%", "125%", "150%" }, SelectedIndex = 2 };
-        private readonly ComboBox _selectionMode = new() { Width = 136, ItemsSource = new[] { "Cell", "Add cells", "Cell range", "Row", "Add rows", "Row range", "Column", "Add columns", "Column range" }, SelectedIndex = 0 };
         private readonly Popup _suggestionPopup = new() { PlacementMode = PlacementMode.BottomEdgeAlignedLeft, IsLightDismissEnabled = false };
         private readonly ListBox _suggestions = new() { MaxHeight = 220, MinWidth = 280 };
         private readonly HashSet<int> _selectedRows = [];
@@ -116,8 +115,8 @@ public sealed class WorkbookEditorWindow : Window
             _suggestions.SelectionChanged += (_, _) => { if (!_updatingSuggestions && _suggestionPopup.IsOpen && _suggestions.SelectedItem is string value) AcceptSuggestion(value); };
             _suggestions.PointerReleased += (_, _) => { if (_suggestions.SelectedItem is string value) AcceptSuggestion(value); };
             _suggestionPopup.Child = _suggestions;
-            var help = DashboardStyle.Text("Mouse: drag column borders to resize; Shift/Ctrl selects ranges. Right-click cells, row numbers, or headers for actions. Ctrl+C/V copies internal ranges. Wrap, format, and auto-fit are available in the context menu.", 11, false, DashboardStyle.Muted);
-            var zoomOut = DashboardStyle.Action("A−", () => ChangeFont(-1)); zoomOut.Padding = new Thickness(7, 5); var zoomIn = DashboardStyle.Action("A+", () => ChangeFont(1)); zoomIn.Padding = new Thickness(7, 5); var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _columnFilter, DashboardStyle.Text("Select", 11, false, DashboardStyle.Muted), _selectionMode, DashboardStyle.Text("Zoom", 11, false, DashboardStyle.Muted), _zoom, zoomOut, zoomIn, _position } };
+            var help = DashboardStyle.Text("Mouse: use column letters and row numbers; Ctrl adds selections; Shift selects ranges. Drag column borders to resize. Right-click cells, rows, or headers for operations. Wrap, copy, insert, delete, and auto-fit are available in context menus.", 11, false, DashboardStyle.Muted);
+            var zoomOut = DashboardStyle.Action("A−", () => ChangeFont(-1)); zoomOut.Padding = new Thickness(7, 5); var zoomIn = DashboardStyle.Action("A+", () => ChangeFont(1)); zoomIn.Padding = new Thickness(7, 5); var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _columnFilter, DashboardStyle.Text("Zoom", 11, false, DashboardStyle.Muted), _zoom, zoomOut, zoomIn, _position } };
             var gridScroll = new ScrollViewer { Content = _rows, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             var table = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*"), Children = { toolbar, help, gridScroll } }; Grid.SetRow(help, 1); Grid.SetRow(gridScroll, 2);
             var editorHost = new Grid { Children = { table, _suggestionPopup } };
@@ -132,7 +131,28 @@ public sealed class WorkbookEditorWindow : Window
             _rows.Children.Clear(); _cellBoxes.Clear(); _rowHeaders.Clear(); var filter = _columnFilter.Text?.Trim() ?? "";
             _visibleColumns = Enumerable.Range(0, Headers.Length).Where(i => string.IsNullOrWhiteSpace(filter) || Headers[i].Contains(filter, StringComparison.OrdinalIgnoreCase)).ToArray();
             if (_visibleColumns.Count == 0) { _rows.Children.Add(DashboardStyle.Text("No columns match the filter. Clear the filter to restore the grid.", color: DashboardStyle.Muted)); return; }
-            AddRowView(0, true); for (var r = 1; r < _values.Count; r++) AddRowView(r, false);
+            AddColumnIndexView(); AddRowView(0, true); for (var r = 1; r < _values.Count; r++) AddRowView(r, false);
+        }
+
+        private void AddColumnIndexView()
+        {
+            var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("52," + string.Join(',', _visibleColumns.Select(i => ScaleWidth(_widths[i])))), Background = DashboardStyle.Brush("#102943") };
+            var corner = DashboardStyle.Text("", 11, true); corner.TextAlignment = TextAlignment.Center; corner.VerticalAlignment = VerticalAlignment.Center; corner.ContextMenu = RowMenu(0, true); Grid.SetColumn(corner, 0); grid.Children.Add(corner);
+            for (var n = 0; n < _visibleColumns.Count; n++)
+            {
+                var column = _visibleColumns[n];
+                var index = DashboardStyle.Text(ColumnLetter(column), 11, true); index.TextAlignment = TextAlignment.Center; index.VerticalAlignment = VerticalAlignment.Center; index.Background = _selectedColumns.Contains(column) ? DashboardStyle.Brush("#275B8F") : Brushes.Transparent;
+                index.PointerPressed += (_, e) => { if (e.GetCurrentPoint(index).Properties.IsLeftButtonPressed) { SelectColumn(column, e); e.Handled = true; } };
+                index.ContextMenu = ColumnMenu(column); Grid.SetColumn(index, n + 1); grid.Children.Add(index);
+            }
+            _rows.Children.Add(grid);
+        }
+
+        private static string ColumnLetter(int column)
+        {
+            var value = column + 1; var result = "";
+            while (value > 0) { value--; result = (char)('A' + value % 26) + result; value /= 26; }
+            return result;
         }
 
         private void AddRowView(int row, bool header)
@@ -145,7 +165,7 @@ public sealed class WorkbookEditorWindow : Window
             {
                 var column = _visibleColumns[n];
                 var cell = new Grid { ColumnDefinitions = new ColumnDefinitions("*,10") };
-                var box = new TextBox { Text = _values[row][column], FontSize = _fontSize, MinWidth = 80, Margin = new Thickness(1), AcceptsReturn = !header, IsReadOnly = header, Focusable = !header, TextWrapping = TextWrapping.NoWrap };
+                var box = new TextBox { Text = _values[row][column], FontSize = _fontSize, MinWidth = 80, Margin = new Thickness(1), AcceptsReturn = true, IsReadOnly = false, Focusable = true, TextWrapping = TextWrapping.NoWrap };
                 ScrollViewer.SetVerticalScrollBarVisibility(box, ScrollBarVisibility.Hidden); ScrollViewer.SetHorizontalScrollBarVisibility(box, ScrollBarVisibility.Hidden);
                 if (_wrap.TryGetValue((row, column), out var wrapped) && wrapped) box.TextWrapping = TextWrapping.Wrap;
                 box.Background = _selectedCells.Contains((row, column)) || _selectedColumns.Contains(column) || _selectedRows.Contains(row) ? DashboardStyle.Brush("#173559") : (_cellColors.TryGetValue((row, column), out var cellColor) && cellColor is not null ? DashboardStyle.Brush(cellColor) : Brushes.Transparent);
@@ -159,26 +179,15 @@ public sealed class WorkbookEditorWindow : Window
                     {
                         if (!e.GetCurrentPoint(box).Properties.IsLeftButtonPressed) return;
                         _activeBox = box;
-                        if (e.ClickCount >= 2)
-                        {
-                            box.Focusable = true; box.IsReadOnly = false; box.Focus();
-                            Dispatcher.UIThread.Post(() => UpdateSuggestions(box, true), DispatcherPriority.Background);
-                        }
-                        else
-                        {
-                            _selectedColumn = column;
-                            _selectedCells.Clear();
-                            _selectedRows.Clear();
-                            _selectedColumns.Clear();
-                            UpdateSelectionText();
-                        }
+                        box.Focus();
+                        if ((e.KeyModifiers & (KeyModifiers.Control | KeyModifiers.Shift)) != KeyModifiers.None) SelectColumn(column, e);
                         e.Handled = true;
                     }, RoutingStrategies.Tunnel);
                 }
                 else box.AddHandler(InputElement.PointerPressedEvent, (_, e) => { if (e.GetCurrentPoint(box).Properties.IsLeftButtonPressed) { _activeBox = box; SelectCell(row, column, box, e); } }, RoutingStrategies.Tunnel);
                 box.AddHandler(InputElement.KeyDownEvent, (_, e) => HandleKey(box, e), RoutingStrategies.Tunnel);
                 box.ContextMenu = header ? ColumnMenu(column) : CellMenu(row, column);
-                if (header) { box.Foreground = DashboardStyle.Brush("#E3EDF9"); ToolTip.SetTip(box, "Click to select the column. Right-click and choose Edit header to edit it or use column operations."); }
+                if (header) { box.Foreground = DashboardStyle.Brush("#E3EDF9"); ToolTip.SetTip(box, "Edit this header directly. Use the column letter above it to select the column."); }
                 Grid.SetColumn(box, 0); cell.Children.Add(box);
                 var grip = new Border { Width = 10, HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Stretch, Cursor = new Cursor(StandardCursorType.SizeWestEast), Background = DashboardStyle.Brush("#45698E"), Opacity = 0.75, IsHitTestVisible = true };
                 grip.PointerPressed += (_, e) =>
@@ -200,20 +209,14 @@ public sealed class WorkbookEditorWindow : Window
             _rows.Children.Add(grid);
         }
 
-        private string SelectionMode => _selectionMode.SelectedItem?.ToString() ?? "Cell";
         private (bool Add, bool Range) SelectionIntent(PointerEventArgs? e, string scope)
         {
             var add = e is not null && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control;
             var range = e is not null && (e.KeyModifiers & KeyModifiers.Shift) == KeyModifiers.Shift;
-            var configured = SelectionMode;
-            if (configured.Equals($"Add {scope}", StringComparison.OrdinalIgnoreCase)) add = true;
-            if (configured.Equals($"{scope[..^1]} range", StringComparison.OrdinalIgnoreCase)) range = true;
             return (add, range);
         }
         private void SelectCell(int row, int column, TextBox box, PointerEventArgs? args)
         {
-            if (SelectionMode.Contains("row", StringComparison.OrdinalIgnoreCase)) { SelectRow(row, args); return; }
-            if (SelectionMode.Contains("column", StringComparison.OrdinalIgnoreCase)) { SelectColumn(column, args); return; }
             var (add, range) = SelectionIntent(args, "cells");
             _selectedRow = row; _selectedColumn = column; _activeBox = box; _selectedRows.Clear(); _selectedColumns.Clear();
             if (range && _anchorRow >= 0)
