@@ -117,6 +117,8 @@ public sealed class WorkbookEditorWindow : Window
                 var existingWidth = sheet.Column(c + 1).Width;
                 _widths.Add(existingWidth > 0 ? Math.Clamp(existingWidth * 7.5, 100, 700) : 190d);
             }
+            var storedFontSize = sheet.CellsUsed().Select(c => c.Style.Font.FontSize).FirstOrDefault(size => size > 0);
+            if (storedFontSize > 0) _fontSize = Math.Clamp(storedFontSize, 8, 24);
             _columnFilter.TextChanged += (_, _) => Render();
             _zoom.SelectionChanged += (_, _) => { _fontSize = double.TryParse((_zoom.SelectedItem?.ToString() ?? "100%").TrimEnd('%'), out var z) ? 11 * z / 100 : 11; Render(); };
             _suggestions.SelectionChanged += (_, _) => { if (!_updatingSuggestions && _suggestionPopup.IsOpen && _suggestions.SelectedItem is string value) AcceptSuggestion(value); };
