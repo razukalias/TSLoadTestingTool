@@ -164,7 +164,14 @@ public sealed class WorkbookEditorWindow : Window
                             box.Focusable = true; box.IsReadOnly = false; box.Focus();
                             Dispatcher.UIThread.Post(() => UpdateSuggestions(box, true), DispatcherPriority.Background);
                         }
-                        else SelectColumn(column, e);
+                        else
+                        {
+                            _selectedColumn = column;
+                            _selectedCells.Clear();
+                            _selectedRows.Clear();
+                            _selectedColumns.Clear();
+                            UpdateSelectionText();
+                        }
                         e.Handled = true;
                     }, RoutingStrategies.Tunnel);
                 }
@@ -286,7 +293,7 @@ public sealed class WorkbookEditorWindow : Window
             Menu("Wrap selected cells", () => SetWrap(true)), Menu("No wrap", () => SetWrap(false)), Menu("Auto-fit selected columns", AutoFitSelectedColumns),
             Menu("Highlight selected cells", () => SetCellColor("#284D70")), Menu("Clear highlight", () => SetCellColor(null)), Menu("Increase font", () => ChangeFont(1)), Menu("Decrease font", () => ChangeFont(-1)), Menu("Delete cell contents", () => ClearSelection()));
         private ContextMenu RowMenu(int row, bool header) => header ? MakeMenu(Menu("Select all rows", SelectAllRows), Menu("Select all columns", SelectAllColumns), Menu("Select all cells", SelectAllCells)) : MakeMenu(Menu("Select row", () => SelectRowDirect(row, false)), Menu("Add row", () => SelectRowDirect(row, true)), Menu("Insert row above", () => InsertRows(row, false)), Menu("Insert row below", () => InsertRows(row, true)), Menu("Copy rows", CopyRows), Menu("Duplicate rows", PasteRows), Menu("Delete selected rows", DeleteRows), Menu("Wrap selected rows", () => SetWrap(true)));
-        private ContextMenu ColumnMenu(int column) => MakeMenu(Menu("Edit header", () => BeginHeaderEdit(column)), Menu("Select column", () => SelectColumnDirect(column, false)), Menu("Add column", () => SelectColumnDirect(column, true)), Menu("Insert column before", () => InsertColumns(column, false)), Menu("Insert column after", () => InsertColumns(column, true)), Menu("Copy columns", CopyColumns), Menu("Paste columns", PasteColumns), Menu("Delete selected columns", DeleteColumns), Menu("Auto-fit selected columns", AutoFitSelectedColumns), Menu("Set selected width (280)", () => SetSelectedColumnsWidth(280)), Menu("Reset selected width", () => SetSelectedColumnsWidth(190)), Menu("Wrap selected columns", () => SetWrap(true)), Menu("Select all columns", SelectAllColumns), Menu("Select all cells", SelectAllCells));
+        private ContextMenu ColumnMenu(int column) => MakeMenu(Menu("Edit header", () => BeginHeaderEdit(column)), Menu("Select column", () => SelectColumnDirect(column, false)), Menu("Add column", () => InsertColumns(column, true)), Menu("Insert column before", () => InsertColumns(column, false)), Menu("Insert column after", () => InsertColumns(column, true)), Menu("Copy columns", CopyColumns), Menu("Paste columns", PasteColumns), Menu("Delete selected columns", DeleteColumns), Menu("Auto-fit selected columns", AutoFitSelectedColumns), Menu("Set selected width (280)", () => SetSelectedColumnsWidth(280)), Menu("Reset selected width", () => SetSelectedColumnsWidth(190)), Menu("Wrap selected columns", () => SetWrapForColumns(true)), Menu("No wrap selected columns", () => SetWrapForColumns(false)), Menu("Select all columns", SelectAllColumns), Menu("Select all cells", SelectAllCells));
         private void BeginHeaderEdit(int column)
         {
             if (!_cellBoxes.TryGetValue((0, column), out var box)) return;
@@ -332,6 +339,15 @@ public sealed class WorkbookEditorWindow : Window
         }
         private void ClearSelection() { foreach (var (r, c) in _selectedCells) if (r > 0 && r < _values.Count) _values[r][c] = ""; Render(); }
         private void SetWrap(bool value) { foreach (var cell in _selectedCells) _wrap[cell] = value; foreach (var r in TargetRows()) foreach (var c in TargetColumns()) _wrap[(r, c)] = value; Render(); }
+        private void SetWrapForColumns(bool value)
+        {
+            IEnumerable<int> columns = _selectedColumns.Count > 0 ? _selectedColumns : (_selectedColumn >= 0 ? new[] { _selectedColumn } : Array.Empty<int>());
+            foreach (var r in Enumerable.Range(1, Math.Max(0, _values.Count - 1)))
+                foreach (var c in columns)
+                    _wrap[(r, c)] = value;
+            _status(value ? "Wrapped the selected columns." : "Removed wrapping from the selected columns.", false);
+            Render();
+        }
         private void SetCellColor(string? color) { foreach (var cell in _selectedCells) _cellColors[cell] = color; foreach (var r in TargetRows()) foreach (var c in TargetColumns()) _cellColors[(r, c)] = color; _status(color is null ? "Highlight cleared for the selected range." : "Highlight applied to the selected range.", false); Render(); }
         private void ChangeFont(double delta) { _fontSize = Math.Clamp(_fontSize + delta, 8, 24); Render(); }
         private void RefreshSelectionVisuals()
