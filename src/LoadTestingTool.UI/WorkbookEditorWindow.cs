@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using ClosedXML.Excel;
@@ -86,6 +87,9 @@ public sealed class WorkbookEditorWindow : Window
         private IReadOnlyList<int> _visibleColumns = [];
         private List<List<string>>? _copiedRows;
         private List<List<string>>? _copiedColumns;
+        private List<List<string>>? _copiedCells;
+        private List<List<List<string>>> _undo = [];
+        private List<List<List<string>>> _redo = [];
         private double _fontSize = 11;
         public Control View { get; }
 
@@ -102,7 +106,7 @@ public sealed class WorkbookEditorWindow : Window
             _suggestions.PointerReleased += (_, _) => { if (_suggestions.SelectedItem is string value) AcceptSuggestion(value); };
             _suggestionPopup.Child = _suggestions;
             var help = DashboardStyle.Text("Mouse: drag column borders to resize; Shift/Ctrl selects ranges. Right-click cells, row numbers, or headers for actions. Ctrl+C/V copies internal ranges. Wrap, format, and auto-fit are available in the context menu.", 11, false, DashboardStyle.Muted);
-            var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _columnFilter, _zoom, _position } };
+            var zoomOut = DashboardStyle.Action("A−", () => ChangeFont(-1)); zoomOut.Padding = new Thickness(7, 5); var zoomIn = DashboardStyle.Action("A+", () => ChangeFont(1)); zoomIn.Padding = new Thickness(7, 5); var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _columnFilter, DashboardStyle.Text("Zoom", 11, false, DashboardStyle.Muted), _zoom, zoomOut, zoomIn, _position } };
             var gridScroll = new ScrollViewer { Content = _rows, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             var table = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*"), Children = { toolbar, help, gridScroll } }; Grid.SetRow(help, 1); Grid.SetRow(gridScroll, 2);
             var editorHost = new Grid { Children = { table, _suggestionPopup } };
@@ -130,16 +134,22 @@ public sealed class WorkbookEditorWindow : Window
             {
                 var column = _visibleColumns[n];
                 var cell = new Grid { ColumnDefinitions = new ColumnDefinitions("*,6") };
-                var box = new TextBox { Text = _values[row][column], FontSize = _fontSize, MinWidth = 80, Margin = new Thickness(1), AcceptsReturn = !header, TextWrapping = TextWrapping.NoWrap };
+                var box = new TextBox { Text = _values[row][column], FontSize = _fontSize, MinWidth = 80, Margin = new Thickness(1), AcceptsReturn = !header, IsReadOnly = header, Focusable = !header, TextWrapping = TextWrapping.NoWrap };
+                ScrollViewer.SetVerticalScrollBarVisibility(box, ScrollBarVisibility.Hidden); ScrollViewer.SetHorizontalScrollBarVisibility(box, ScrollBarVisibility.Hidden);
                 if (_wrap.TryGetValue((row, column), out var wrapped) && wrapped) box.TextWrapping = TextWrapping.Wrap;
                 box.Background = _selectedCells.Contains((row, column)) || _selectedColumns.Contains(column) || _selectedRows.Contains(row) ? DashboardStyle.Brush("#173559") : (_cellColors.TryGetValue((row, column), out var cellColor) && cellColor is not null ? DashboardStyle.Brush(cellColor) : Brushes.Transparent);
                 box.CaretIndex = box.Text?.Length ?? 0;
                 box.TextChanged += (_, _) => { _values[row][column] = box.Text ?? ""; if (ReferenceEquals(box, _activeBox)) UpdateSuggestions(box); };
-                box.GotFocus += (_, _) => { if (!header) SelectCell(row, column, box, null); };
-                box.PointerPressed += (_, e) => { if (header) SelectColumn(column, e); else SelectCell(row, column, box, e); };
+                box.GotFocus += (_, _) => { _activeBox = box; if (!header) SelectCell(row, column, box, null); };
+                if (header)
+                {
+                    box.AddHandler(InputElement.PointerPressedEvent, (_, e) => { _activeBox = box; SelectColumn(column, e); e.Handled = true; }, RoutingStrategies.Tunnel);
+                }
+                else box.PointerPressed += (_, e) => { _activeBox = box; SelectCell(row, column, box, e); };
+                box.DoubleTapped += (_, _) => { if (header) { box.Focusable = true; box.IsReadOnly = false; box.Focus(); UpdateSuggestions(box, true); } };
                 box.KeyDown += (_, e) => HandleKey(box, e);
                 box.ContextMenu = header ? ColumnMenu(column) : CellMenu(row, column);
-                if (header) { box.Foreground = DashboardStyle.Brush("#E3EDF9"); ToolTip.SetTip(box, "Editable header. Right-click for column operations."); }
+                if (header) { box.Foreground = DashboardStyle.Brush("#E3EDF9"); ToolTip.SetTip(box, "Click to select the column. Double-click to edit the header. Right-click for column operations."); }
                 Grid.SetColumn(box, 0); cell.Children.Add(box);
                 var grip = new Thumb { Width = 6, HorizontalAlignment = HorizontalAlignment.Right, Cursor = new Cursor(StandardCursorType.SizeWestEast), Background = Brushes.Transparent };
                 grip.DragDelta += (_, e) => ResizeSelectedColumns(e.Vector.X);
@@ -168,7 +178,12 @@ public sealed class WorkbookEditorWindow : Window
         }
         private void SelectAllRows() { _selectedRows.Clear(); for (var r = 1; r < _values.Count; r++) _selectedRows.Add(r); UpdateSelectionText(); Render(); }
         private void SelectColumn(int column, PointerEventArgs e)
-        { if (((e.KeyModifiers & KeyModifiers.Control) != KeyModifiers.Control && (e.KeyModifiers & KeyModifiers.Shift) != KeyModifiers.Shift)) _selectedColumns.Clear(); _selectedColumns.Add(column); _selectedColumn = column; UpdateSelectionText(); Render(); }
+        {
+            var shift = (e.KeyModifiers & KeyModifiers.Shift) == KeyModifiers.Shift; var control = (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control;
+            if (!control && !shift) _selectedColumns.Clear();
+            if (shift && _anchorColumn >= 0) for (var c = Math.Min(_anchorColumn, column); c <= Math.Max(_anchorColumn, column); c++) _selectedColumns.Add(c); else _selectedColumns.Add(column);
+            _selectedColumn = column; if (!shift) _anchorColumn = column; UpdateSelectionText(); Render();
+        }
         private void UpdateSelectionText() => _position.Text = $"Sheet: {_sheetName} | {_selectedCells.Count} cells | {_selectedRows.Count} rows | {_selectedColumns.Count} columns";
 
         private void HandleKey(TextBox box, KeyEventArgs e)
@@ -178,6 +193,8 @@ public sealed class WorkbookEditorWindow : Window
             if ((e.Key == Key.Enter || e.Key == Key.Tab) && _suggestionPopup.IsOpen && _suggestions.SelectedItem is string value) { AcceptSuggestion(value); e.Handled = true; return; }
             if (e.Key == Key.C && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { CopySelection(); e.Handled = true; }
             else if (e.Key == Key.V && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { PasteSelection(); e.Handled = true; }
+            else if (e.Key == Key.Z && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { Undo(); e.Handled = true; }
+            else if (e.Key == Key.Y && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { Redo(); e.Handled = true; }
         }
 
         private void UpdateSuggestions(TextBox box, bool force = false)
@@ -211,31 +228,53 @@ public sealed class WorkbookEditorWindow : Window
         }
         private void CloseSuggestions() { _suggestionPopup.IsOpen = false; }
 
-        private ContextMenu CellMenu(int row, int column) => MakeMenu(Menu("Copy selection", CopySelection), Menu("Paste", PasteSelection), Menu("Wrap selected cells", () => SetWrap(true)), Menu("No wrap", () => SetWrap(false)), Menu("Auto-fit selected columns", AutoFitSelectedColumns), Menu("Highlight selected cells", () => SetCellColor("#284D70")), Menu("Clear highlight", () => SetCellColor(null)), Menu("Increase font", () => ChangeFont(1)), Menu("Decrease font", () => ChangeFont(-1)), Menu("Delete cell contents", () => ClearSelection()));
+        private ContextMenu CellMenu(int row, int column) => MakeMenu(Menu("Copy selection", CopySelection), Menu("Paste", PasteSelection), Menu("Undo", Undo), Menu("Redo", Redo), Menu("Wrap selected cells", () => SetWrap(true)), Menu("No wrap", () => SetWrap(false)), Menu("Auto-fit selected columns", AutoFitSelectedColumns), Menu("Highlight selected cells", () => SetCellColor("#284D70")), Menu("Clear highlight", () => SetCellColor(null)), Menu("Increase font", () => ChangeFont(1)), Menu("Decrease font", () => ChangeFont(-1)), Menu("Delete cell contents", () => ClearSelection()));
         private ContextMenu RowMenu(int row, bool header) => header ? MakeMenu(Menu("Select all rows", SelectAllRows), Menu("Select all columns", SelectAllColumns)) : MakeMenu(Menu("Insert row above", () => InsertRows(row, false)), Menu("Insert row below", () => InsertRows(row, true)), Menu("Copy rows", CopyRows), Menu("Duplicate rows", PasteRows), Menu("Delete selected rows", DeleteRows), Menu("Wrap selected rows", () => SetWrap(true)));
-        private ContextMenu ColumnMenu(int column) => MakeMenu(Menu("Insert column before", () => InsertColumns(column, false)), Menu("Insert column after", () => InsertColumns(column, true)), Menu("Copy columns", CopyColumns), Menu("Paste columns", PasteColumns), Menu("Delete selected columns", DeleteColumns), Menu("Auto-fit selected columns", AutoFitSelectedColumns), Menu("Wrap selected columns", () => SetWrap(true)), Menu("Select all columns", SelectAllColumns));
+        private ContextMenu ColumnMenu(int column) => MakeMenu(Menu("Insert column before", () => InsertColumns(column, false)), Menu("Insert column after", () => InsertColumns(column, true)), Menu("Copy columns", CopyColumns), Menu("Paste columns", PasteColumns), Menu("Delete selected columns", DeleteColumns), Menu("Auto-fit selected columns", AutoFitSelectedColumns), Menu("Wrap selected columns", () => SetWrap(true)), Menu("Select all columns", SelectAllColumns), Menu("Select all cells", SelectAllCells));
         private static ContextMenu MakeMenu(params MenuItem[] items) { var menu = new ContextMenu(); foreach (var item in items) menu.Items.Add(item); return menu; }
         private static MenuItem Menu(string text, Action action) { var item = new MenuItem { Header = text }; item.Click += (_, _) => action(); return item; }
 
         private void SelectAllColumns() { _selectedColumns.Clear(); for (var c = 0; c < Headers.Length; c++) _selectedColumns.Add(c); UpdateSelectionText(); Render(); }
+        private void SelectAllCells() { _selectedCells.Clear(); for (var r = 1; r < _values.Count; r++) for (var c = 0; c < Headers.Length; c++) _selectedCells.Add((r, c)); SelectAllRows(); SelectAllColumns(); }
         private IEnumerable<int> TargetColumns() => _selectedColumns.Count > 0 ? _selectedColumns : (_selectedColumn >= 0 ? new[] { _selectedColumn } : Enumerable.Range(0, Headers.Length));
         private IEnumerable<int> TargetRows() => _selectedRows.Count > 0 ? _selectedRows : (_selectedRow > 0 ? new[] { _selectedRow } : Enumerable.Range(1, _values.Count - 1));
-        private void InsertRows(int row, bool below) { var at = Math.Clamp(row + (below ? 1 : 0), 1, _values.Count); _values.Insert(at, Enumerable.Repeat("", Headers.Length).ToList()); Render(); }
-        private void DeleteRows() { var rows = TargetRows().Where(r => r > 0 && r < _values.Count).OrderByDescending(x => x).ToArray(); foreach (var r in rows) _values.RemoveAt(r); _selectedRows.Clear(); Render(); }
+        private void SaveUndo() { _undo.Add(_values.Select(x => x.ToList()).ToList()); if (_undo.Count > 30) _undo.RemoveAt(0); _redo.Clear(); }
+        private void Undo() { if (_undo.Count == 0) return; _redo.Add(_values.Select(x => x.ToList()).ToList()); _values.Clear(); _values.AddRange(_undo[^1].Select(x => x.ToList())); _undo.RemoveAt(_undo.Count - 1); Render(); }
+        private void Redo() { if (_redo.Count == 0) return; _undo.Add(_values.Select(x => x.ToList()).ToList()); _values.Clear(); _values.AddRange(_redo[^1].Select(x => x.ToList())); _redo.RemoveAt(_redo.Count - 1); Render(); }
+        private void InsertRows(int row, bool below) { SaveUndo(); var at = Math.Clamp(row + (below ? 1 : 0), 1, _values.Count); _values.Insert(at, Enumerable.Repeat("", Headers.Length).ToList()); Render(); }
+        private void DeleteRows() { SaveUndo(); var rows = TargetRows().Where(r => r > 0 && r < _values.Count).OrderByDescending(x => x).ToArray(); foreach (var r in rows) _values.RemoveAt(r); _selectedRows.Clear(); Render(); }
         private void CopyRows() { _copiedRows = TargetRows().Select(r => _values[r].ToList()).ToList(); _status("Copied rows internally. Select a row and choose Duplicate rows or press Ctrl+V.", false); }
-        private void PasteRows() { if (_copiedRows is null) return; var at = _selectedRow > 0 ? _selectedRow : _values.Count; foreach (var row in _copiedRows.Select(x => x.ToList())) _values.Insert(Math.Min(at, _values.Count), row); Render(); }
-        private void InsertColumns(int column, bool after) { var cols = TargetColumns().OrderBy(x => x).ToArray(); var at = Math.Clamp(column + (after ? 1 : 0), 0, Headers.Length); foreach (var row in _values) row.Insert(at, ""); _widths.Insert(at, 190); Render(); }
-        private void DeleteColumns() { var cols = TargetColumns().Where(c => c >= 0 && c < Headers.Length).OrderByDescending(x => x).ToArray(); if (cols.Length >= Headers.Length) return; foreach (var row in _values) foreach (var c in cols) row.RemoveAt(c); foreach (var c in cols) _widths.RemoveAt(c); _selectedColumns.Clear(); Render(); }
+        private void PasteRows() { SaveUndo(); if (_copiedRows is null) return; var at = _selectedRow > 0 ? _selectedRow : _values.Count; foreach (var row in _copiedRows.Select(x => x.ToList())) _values.Insert(Math.Min(at, _values.Count), row); Render(); }
+        private void InsertColumns(int column, bool after) { SaveUndo(); var cols = TargetColumns().OrderBy(x => x).ToArray(); var at = Math.Clamp(column + (after ? 1 : 0), 0, Headers.Length); foreach (var row in _values) row.Insert(at, ""); _widths.Insert(at, 190); Render(); }
+        private void DeleteColumns() { SaveUndo(); var cols = TargetColumns().Where(c => c >= 0 && c < Headers.Length).OrderByDescending(x => x).ToArray(); if (cols.Length >= Headers.Length) return; foreach (var row in _values) foreach (var c in cols) row.RemoveAt(c); foreach (var c in cols) _widths.RemoveAt(c); _selectedColumns.Clear(); Render(); }
         private void CopyColumns() { _copiedColumns = TargetColumns().OrderBy(x => x).Select(c => _values.Select(row => row[c]).ToList()).ToList(); _status("Copied columns internally. Choose Paste columns from a column menu.", false); }
-        private void PasteColumns() { if (_copiedColumns is null) return; var at = _selectedColumn >= 0 ? _selectedColumn : Headers.Length; for (var i = 0; i < _copiedColumns.Count; i++) { var c = Math.Min(at + i, Headers.Length); for (var r = 0; r < _values.Count; r++) _values[r].Insert(c, _copiedColumns[i][r]); _widths.Insert(c, 190); } Render(); }
-        private void CopySelection() { if (_selectedCells.Count > 0) _status("Cell range copied internally. Use Ctrl+V in the editor to paste.", false); else CopyRows(); }
-        private void PasteSelection() { if (_copiedRows is not null) PasteRows(); else if (_copiedColumns is not null) PasteColumns(); }
+        private void PasteColumns() { SaveUndo(); if (_copiedColumns is null) return; var at = _selectedColumn >= 0 ? _selectedColumn : Headers.Length; for (var i = 0; i < _copiedColumns.Count; i++) { var c = Math.Min(at + i, Headers.Length); for (var r = 0; r < _values.Count; r++) _values[r].Insert(c, _copiedColumns[i][r]); _widths.Insert(c, 190); } Render(); }
+        private void CopySelection()
+        {
+            if (_selectedCells.Count > 0)
+            {
+                var minR = _selectedCells.Min(x => x.Row); var maxR = _selectedCells.Max(x => x.Row); var minC = _selectedCells.Min(x => x.Column); var maxC = _selectedCells.Max(x => x.Column);
+                _copiedCells = Enumerable.Range(minR, maxR - minR + 1).Select(r => Enumerable.Range(minC, maxC - minC + 1).Select(c => _values[r][c]).ToList()).ToList();
+                _status("Copied selected cells internally. Ctrl+V pastes the range at the active cell.", false);
+            }
+            else CopyRows();
+        }
+        private void PasteSelection()
+        {
+            if (_copiedCells is not null && _selectedRow >= 0 && _selectedColumn >= 0)
+            {
+                SaveUndo(); var r0 = _selectedRow; var c0 = _selectedColumn;
+                for (var r = 0; r < _copiedCells.Count && r0 + r < _values.Count; r++) for (var c = 0; c < _copiedCells[r].Count && c0 + c < Headers.Length; c++) _values[r0 + r][c0 + c] = _copiedCells[r][c]; Render();
+            }
+            else if (_copiedRows is not null) PasteRows(); else if (_copiedColumns is not null) PasteColumns();
+        }
         private void ClearSelection() { foreach (var (r, c) in _selectedCells) if (r > 0 && r < _values.Count) _values[r][c] = ""; Render(); }
         private void SetWrap(bool value) { foreach (var cell in _selectedCells) _wrap[cell] = value; foreach (var r in TargetRows()) foreach (var c in TargetColumns()) _wrap[(r, c)] = value; Render(); }
         private void SetCellColor(string? color) { foreach (var cell in _selectedCells) _cellColors[cell] = color; foreach (var r in TargetRows()) foreach (var c in TargetColumns()) _cellColors[(r, c)] = color; _status(color is null ? "Highlight cleared for the selected range." : "Highlight applied to the selected range.", false); Render(); }
         private void ChangeFont(double delta) { _fontSize = Math.Clamp(_fontSize + delta, 8, 24); Render(); }
         private void ResizeSelectedColumns(double delta) { foreach (var c in TargetColumns()) _widths[c] = Math.Clamp(_widths[c] + delta, 100, 700); Render(); }
-        private void AutoFitSelectedColumns() { foreach (var c in TargetColumns()) _widths[c] = Math.Clamp(Math.Max(120, _values.Max(row => row[c].Length * 7.5 + 24)), 100, 700); Render(); }
+        private void AutoFitSelectedColumns() { foreach (var c in TargetColumns()) _widths[c] = Math.Clamp(Math.Max(120, Math.Max(_values.Max(row => row[c].Length * 7.5 + 24), Headers[c].Length * 7.5 + 24)), 100, 700); Render(); }
+        private void SetSelectedColumnsWidth(double width) { foreach (var c in TargetColumns()) _widths[c] = Math.Clamp(width, 100, 700); Render(); }
 
         public void Validate() { if (_values.Count == 0 || _values[0].All(string.IsNullOrWhiteSpace)) throw new InvalidDataException($"Sheet '{_sheetName}' must retain a header row."); if (_values[0].Distinct(StringComparer.OrdinalIgnoreCase).Count() != _values[0].Count) throw new InvalidDataException($"Sheet '{_sheetName}' contains duplicate headers."); }
         public void WriteTo(IXLWorksheet sheet)

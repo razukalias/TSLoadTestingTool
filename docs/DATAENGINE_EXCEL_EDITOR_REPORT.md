@@ -21,3 +21,21 @@ The full solution builds successfully. The regression suite passes all 40 checks
 ## Scope note
 
 Copy/paste is maintained as an editor-internal clipboard so row and column structures remain safe and predictable. The editor keeps the DataEngine workbook values and runner contract intact.
+
+## Corrective recheck — 2026-10-10
+
+The first release was rechecked against the supplied failure list. The recheck found that the release had overclaimed several behaviors: row/column multi-selection and mouse resizing were not reliable, cell-range copy/paste was only a status message, and several formatting/context actions were placeholders.
+
+Corrective changes in this revision:
+
+- Header cells are non-editable on normal click, so clicking a header is reserved for column selection; double-click enables header editing.
+- Header pointer events are captured before TextBox focus processing.
+- Shift/Ctrl column selection now builds a real selected-column set and applies resize, auto-fit, width, and wrap operations to that set.
+- Auto-fit considers both header and cell content.
+- Fixed width and reset-width context actions were added.
+- Cell rectangular ranges are copied and pasted internally at the active cell.
+- Undo and redo snapshots were added for editing operations and Ctrl+Z/Ctrl+Y.
+- Cell scrollbars are suppressed through Avalonia attached properties.
+- Header autocomplete is activated when a header is explicitly put into edit mode.
+
+Still not complete in this revision: system clipboard integration, cut operations, full row/column insertion of copied ranges, font color/bold/italic/underline/alignment formatting, automatic row-height controls, and a full Excel-grade selection surface. These must not be described as complete until separately verified in a live UI test.
