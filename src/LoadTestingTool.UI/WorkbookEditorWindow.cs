@@ -43,7 +43,7 @@ public sealed class WorkbookEditorWindow : Window
             DashboardStyle.Text("Excel-style selection: click A/B/C column indexes or row numbers; Ctrl adds and Shift selects ranges. Edit headers directly. Drag column borders to resize. Type < or { for autocomplete; Ctrl+Space opens it.", 12, false, DashboardStyle.Muted) } };
         _status.Foreground = DashboardStyle.Red;
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8,
-            Children = { DashboardStyle.Action("New sheet", AddNewSheet), DashboardStyle.Action("Open raw workbook", () => SystemDefaultFileOpener.Open(_path)), DashboardStyle.Action("Cancel", () => Close(null)), _save } };
+            Children = { DashboardStyle.Action("New sheet", AddNewSheet), DashboardStyle.Action("Rename sheet", RenameCurrentSheet), DashboardStyle.Action("Open raw workbook", () => SystemDefaultFileOpener.Open(_path)), DashboardStyle.Action("Cancel", () => Close(null)), _save } };
         var root = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto,Auto"), Margin = new Thickness(18) };
         root.Children.Add(top); Grid.SetRow(_tabs, 1); root.Children.Add(_tabs); Grid.SetRow(_status, 2); root.Children.Add(_status); Grid.SetRow(buttons, 3); root.Children.Add(buttons); Content = root;
         _tabs.SelectedIndex = 0;
@@ -62,6 +62,26 @@ public sealed class WorkbookEditorWindow : Window
         SetStatus($"Created new sheet '{name}'. Press Ctrl+S to save it without closing the editor.");
     }
 
+    private void RenameCurrentSheet()
+    {
+        if (_tabs.SelectedItem is not TabItem tab || tab.Content is not Control) return;
+        var oldName = tab.Header?.ToString() ?? "Sheet";
+        var input = new TextBox { Text = oldName, Width = 300 };
+        var dialog = new Window { Title = "Rename sheet", Width = 420, Height = 170, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        var ok = DashboardStyle.Action("Rename", () => { }, "primary");
+        ok.Click += (_, _) =>
+        {
+            var newName = input.Text?.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(newName) || newName.Equals(oldName, StringComparison.OrdinalIgnoreCase)) { dialog.Close(); return; }
+            if (_sheets.Keys.Any(x => x.Equals(newName, StringComparison.OrdinalIgnoreCase))) { SetStatus($"A sheet named '{newName}' already exists.", true); return; }
+            var draft = _sheets[oldName]; _sheets.Remove(oldName); _sheets[newName] = draft; draft.Rename(newName); tab.Header = newName; dialog.Close(); SetStatus($"Renamed sheet '{oldName}' to '{newName}'. Press Ctrl+S to save it.");
+        };
+        var cancel = DashboardStyle.Action("Cancel", () => dialog.Close());
+        dialog.Content = new StackPanel { Margin = new Thickness(18), Spacing = 10, Children = { DashboardStyle.Text("New sheet name", 14, true), input, new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { cancel, ok } } } };
+        dialog.Show(this);
+        input.Focus(); input.SelectAll();
+    }
+
     private void SetStatus(string message, bool error = false) { _status.Text = message; _status.Foreground = error ? DashboardStyle.Red : DashboardStyle.Muted; }
 
     private void Save(bool close = true)
@@ -70,9 +90,10 @@ public sealed class WorkbookEditorWindow : Window
         {
             foreach (var draft in _sheets.Values) draft.Validate();
             using var workbook = new XLWorkbook(_path);
-            foreach (var (name, draft) in _sheets)
+            foreach (var (name, draft) in _sheets.ToArray())
             {
-                var sheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? workbook.AddWorksheet(name);
+                var sheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(draft.OriginalName, StringComparison.OrdinalIgnoreCase)) ?? workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? workbook.AddWorksheet(name);
+                if (!sheet.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) sheet.Name = name;
                 draft.WriteTo(sheet);
             }
             var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmssfff");
@@ -91,6 +112,8 @@ public sealed class WorkbookEditorWindow : Window
         private readonly Dictionary<string, string[]> _allHeaders;
         private readonly Action<string, bool> _status;
         private readonly Action _saveWorkbook;
+        public string OriginalName { get; }
+        public string SheetName { get; private set; }
         private readonly List<List<string>> _values = [];
         private readonly List<double> _widths = [];
         private readonly Button _transposeButton;
@@ -125,7 +148,7 @@ public sealed class WorkbookEditorWindow : Window
 
         public SheetDraft(IXLWorksheet sheet, string name, IReadOnlyDictionary<string, string[]> headers, Action<string, bool> status, Action saveWorkbook)
         {
-            _sheetName = name; _allHeaders = new Dictionary<string, string[]>(headers, StringComparer.OrdinalIgnoreCase); _status = status; _saveWorkbook = saveWorkbook;
+            _sheetName = name; SheetName = name; OriginalName = name; _allHeaders = new Dictionary<string, string[]>(headers, StringComparer.OrdinalIgnoreCase); _status = status; _saveWorkbook = saveWorkbook;
             var used = sheet.RangeUsed(); var lastRow = used?.RangeAddress.LastAddress.RowNumber ?? 1; var lastColumn = used?.RangeAddress.LastAddress.ColumnNumber ?? 1;
             for (var r = 1; r <= lastRow; r++)
             {
@@ -153,6 +176,7 @@ public sealed class WorkbookEditorWindow : Window
             var gridScroll = new ScrollViewer { Content = _rows, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             var table = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*"), Children = { toolbar, help, gridScroll } }; Grid.SetRow(help, 1); Grid.SetRow(gridScroll, 2);
             var editorHost = new Grid { Children = { table, _suggestionPopup } };
+            editorHost.AddHandler(InputElement.KeyDownEvent, (_, e) => { if (HandleSelectionClipboardKey(e)) e.Handled = true; }, RoutingStrategies.Tunnel);
             View = new Border { BorderBrush = DashboardStyle.Line, BorderThickness = new Thickness(1), Child = editorHost };
             Render();
         }
@@ -212,6 +236,8 @@ public sealed class WorkbookEditorWindow : Window
             }
             _rows.Children.Add(grid);
         }
+
+        public void Rename(string name) => SheetName = name;
 
         private static string ColumnLetter(int column)
         {
@@ -315,11 +341,21 @@ public sealed class WorkbookEditorWindow : Window
         {
             if (e.Key == Key.Space && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { UpdateSuggestions(box, true); e.Handled = true; return; }
             if (e.Key == Key.S && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { _saveWorkbook(); e.Handled = true; return; }
+            if (e.Key == Key.C && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control && (_selectedRows.Count > 0 || _selectedColumns.Count > 0)) { if (_selectedColumns.Count > 0) CopyColumns(); else CopyRows(); e.Handled = true; return; }
+            if (e.Key == Key.V && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control && (_selectedRows.Count > 0 || _selectedColumns.Count > 0)) { if (_copiedColumns is not null && _selectedColumns.Count > 0) PasteColumns(); else if (_copiedRows is not null && _selectedRows.Count > 0) PasteRows(); e.Handled = true; return; }
             if (e.Key == Key.A && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { box.SelectAll(); e.Handled = true; return; }
             if (e.Key == Key.Escape) { CloseSuggestions(); return; }
             if ((e.Key == Key.Enter || e.Key == Key.Tab) && _suggestionPopup.IsOpen && _suggestions.SelectedItem is string value) { AcceptSuggestion(value); e.Handled = true; return; }
             if (e.Key == Key.Z && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { Undo(); e.Handled = true; }
             else if (e.Key == Key.Y && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { Redo(); e.Handled = true; }
+        }
+
+        private bool HandleSelectionClipboardKey(KeyEventArgs e)
+        {
+            if ((e.KeyModifiers & KeyModifiers.Control) != KeyModifiers.Control) return false;
+            if (e.Key == Key.C && (_selectedRows.Count > 0 || _selectedColumns.Count > 0)) { if (_selectedColumns.Count > 0) CopyColumns(); else CopyRows(); return true; }
+            if (e.Key == Key.V && (_selectedRows.Count > 0 || _selectedColumns.Count > 0)) { if (_copiedColumns is not null && _selectedColumns.Count > 0) PasteColumns(); else if (_copiedRows is not null && _selectedRows.Count > 0) PasteRows(); return true; }
+            return false;
         }
 
         private void UpdateSuggestions(TextBox box, bool force = false)
@@ -361,8 +397,8 @@ public sealed class WorkbookEditorWindow : Window
             Menu("Insert column before", () => InsertColumns(column, false)), Menu("Insert column after", () => InsertColumns(column, true)), Menu("Delete selected columns", DeleteColumns),
             Menu("Wrap selected cells", () => SetWrap(true)), Menu("No wrap", () => SetWrap(false)), Menu("Auto-fit selected columns", AutoFitSelectedColumns),
             Menu("Highlight selected cells", () => SetCellColor("#284D70")), Menu("Clear highlight", () => SetCellColor(null)), Menu("Increase font", () => ChangeFont(1)), Menu("Decrease font", () => ChangeFont(-1)), Menu("Delete cell contents", () => ClearSelection()));
-        private ContextMenu RowMenu(int row, bool header) => header ? MakeMenu(Menu("Select all rows", SelectAllRows), Menu("Select all columns", SelectAllColumns), Menu("Select all cells", SelectAllCells)) : MakeMenu(Menu("Select row", () => SelectRowDirect(row, false)), Menu("Add row", () => SelectRowDirect(row, true)), Menu("Insert row above", () => InsertRows(row, false)), Menu("Insert row below", () => InsertRows(row, true)), Menu("Copy rows", CopyRows), Menu("Duplicate rows", PasteRows), Menu("Delete selected rows", DeleteRows), Menu("Wrap selected rows", () => SetWrapForRows(true, row)), Menu("No wrap selected rows", () => SetWrapForRows(false, row)));
-        private ContextMenu ColumnMenu(int column) => MakeMenu(Menu("Edit header", () => BeginHeaderEdit(column)), Menu("Select column", () => SelectColumnDirect(column, false)), Menu("Add column", () => InsertColumns(column, true)), Menu("Insert column before", () => InsertColumns(column, false)), Menu("Insert column after", () => InsertColumns(column, true)), Menu("Copy columns", CopyColumns), Menu("Paste columns", PasteColumns), Menu("Delete selected columns", DeleteColumns), Menu("Auto-fit selected columns", AutoFitSelectedColumns), Menu("Set selected width (280)", () => SetSelectedColumnsWidth(280)), Menu("Reset selected width", () => SetSelectedColumnsWidth(190)), Menu("Wrap selected columns", () => SetWrapForColumns(true, column)), Menu("No wrap selected columns", () => SetWrapForColumns(false, column)), Menu("Select all columns", SelectAllColumns), Menu("Select all cells", SelectAllCells));
+        private ContextMenu RowMenu(int row, bool header) => header ? MakeMenu(Menu("Select all rows", SelectAllRows), Menu("Select all columns", SelectAllColumns), Menu("Select all cells", SelectAllCells)) : MakeMenu(Menu("Select row", () => SelectRowDirect(row, false)), Menu("Add row at end", () => InsertRows(_values.Count, true)), Menu("Insert row above", () => InsertRows(row, false)), Menu("Insert row below", () => InsertRows(row, true)), Menu("Copy rows", CopyRows), Menu("Duplicate rows", PasteRows), Menu("Delete selected rows", DeleteRows), Menu("Wrap selected rows", () => SetWrapForRows(true, row)), Menu("No wrap selected rows", () => SetWrapForRows(false, row)));
+        private ContextMenu ColumnMenu(int column) => MakeMenu(Menu("Edit header", () => BeginHeaderEdit(column)), Menu("Select column", () => SelectColumnDirect(column, false)), Menu("Add column at end", () => InsertColumns(Headers.Length, true)), Menu("Insert column before", () => InsertColumns(column, false)), Menu("Insert column after", () => InsertColumns(column, true)), Menu("Copy columns", CopyColumns), Menu("Paste columns", PasteColumns), Menu("Delete selected columns", DeleteColumns), Menu("Auto-fit selected columns", AutoFitSelectedColumns), Menu("Set selected width (280)", () => SetSelectedColumnsWidth(280)), Menu("Reset selected width", () => SetSelectedColumnsWidth(190)), Menu("Wrap selected columns", () => SetWrapForColumns(true, column)), Menu("No wrap selected columns", () => SetWrapForColumns(false, column)), Menu("Select all columns", SelectAllColumns), Menu("Select all cells", SelectAllCells));
         private void BeginHeaderEdit(int column)
         {
             if (!_cellBoxes.TryGetValue((0, column), out var box)) return;
