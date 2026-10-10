@@ -103,7 +103,14 @@ public sealed class WorkbookEditorWindow : Window
         {
             _sheetName = name; _allHeaders = new Dictionary<string, string[]>(headers, StringComparer.OrdinalIgnoreCase); _status = status;
             var used = sheet.RangeUsed(); var lastRow = used?.RangeAddress.LastAddress.RowNumber ?? 1; var lastColumn = used?.RangeAddress.LastAddress.ColumnNumber ?? 1;
-            for (var r = 1; r <= lastRow; r++) _values.Add(Enumerable.Range(1, lastColumn).Select(c => sheet.Cell(r, c).GetString()).ToList());
+            for (var r = 1; r <= lastRow; r++)
+            {
+                var row = Enumerable.Range(1, lastColumn).Select(c => sheet.Cell(r, c).GetString()).ToList();
+                _values.Add(row);
+                for (var c = 1; c <= lastColumn; c++)
+                    if (sheet.Cell(r, c).Style.Alignment.WrapText)
+                        _wrap[(r - 1, c - 1)] = true;
+            }
             if (_values.Count == 0) _values.Add(Enumerable.Repeat("", Math.Max(1, lastColumn)).ToList());
             for (var c = 0; c < _values[0].Count; c++)
             {
