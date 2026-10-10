@@ -14,6 +14,8 @@ public sealed class WorkbookEditorWindow : Window
 {
     private readonly string _path;
     private readonly Dictionary<string, SheetDraft> _sheets = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string[]> _sheetHeaders = new(StringComparer.OrdinalIgnoreCase);
+    private readonly TabControl _tabs = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap };
     private readonly Button _save;
     public string? SavedBackup { get; private set; }
@@ -27,13 +29,13 @@ public sealed class WorkbookEditorWindow : Window
         using var workbook = new XLWorkbook(workbookPath);
         var sheetHeaders = workbook.Worksheets.ToDictionary(x => x.Name,
             x => x.FirstRowUsed()?.CellsUsed().Select(c => c.GetString()).Where(x => !string.IsNullOrWhiteSpace(x)).ToArray() ?? [], StringComparer.OrdinalIgnoreCase);
-        var tabs = new TabControl { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
+        foreach (var pair in sheetHeaders) _sheetHeaders[pair.Key] = pair.Value;
         foreach (var name in new[] { "config", "request", "response", "README" })
         {
             var sheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
             if (sheet is null) continue;
             var draft = new SheetDraft(sheet, name, sheetHeaders, SetStatus, () => Save(close: false));
-            _sheets[name] = draft; tabs.Items.Add(new TabItem { Header = name, Content = draft.View });
+            _sheets[name] = draft; _tabs.Items.Add(new TabItem { Header = name, Content = draft.View });
         }
         _save = DashboardStyle.Action("Save workbook", () => Save(), "primary");
         var top = new StackPanel { Spacing = 4, Children = {
@@ -41,10 +43,23 @@ public sealed class WorkbookEditorWindow : Window
             DashboardStyle.Text("Excel-style selection: click A/B/C column indexes or row numbers; Ctrl adds and Shift selects ranges. Edit headers directly. Drag column borders to resize. Type < or { for autocomplete; Ctrl+Space opens it.", 12, false, DashboardStyle.Muted) } };
         _status.Foreground = DashboardStyle.Red;
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8,
-            Children = { DashboardStyle.Action("Open raw workbook", () => SystemDefaultFileOpener.Open(_path)), DashboardStyle.Action("Cancel", () => Close(null)), _save } };
+            Children = { DashboardStyle.Action("New sheet", AddNewSheet), DashboardStyle.Action("Open raw workbook", () => SystemDefaultFileOpener.Open(_path)), DashboardStyle.Action("Cancel", () => Close(null)), _save } };
         var root = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto,Auto"), Margin = new Thickness(18) };
-        root.Children.Add(top); Grid.SetRow(tabs, 1); root.Children.Add(tabs); Grid.SetRow(_status, 2); root.Children.Add(_status); Grid.SetRow(buttons, 3); root.Children.Add(buttons); Content = root;
-        tabs.SelectedIndex = 0;
+        root.Children.Add(top); Grid.SetRow(_tabs, 1); root.Children.Add(_tabs); Grid.SetRow(_status, 2); root.Children.Add(_status); Grid.SetRow(buttons, 3); root.Children.Add(buttons); Content = root;
+        _tabs.SelectedIndex = 0;
+    }
+
+    private void AddNewSheet()
+    {
+        var index = 1;
+        string name;
+        do name = $"Sheet{index++}"; while (_sheets.ContainsKey(name));
+        using var temporary = new XLWorkbook();
+        var draft = new SheetDraft(temporary.AddWorksheet(name), name, _sheetHeaders, SetStatus, () => Save(close: false));
+        _sheets[name] = draft;
+        _tabs.Items.Add(new TabItem { Header = name, Content = draft.View });
+        _tabs.SelectedIndex = _tabs.ItemCount - 1;
+        SetStatus($"Created new sheet '{name}'. Press Ctrl+S to save it without closing the editor.");
     }
 
     private void SetStatus(string message, bool error = false) { _status.Text = message; _status.Foreground = error ? DashboardStyle.Red : DashboardStyle.Muted; }
@@ -55,7 +70,11 @@ public sealed class WorkbookEditorWindow : Window
         {
             foreach (var draft in _sheets.Values) draft.Validate();
             using var workbook = new XLWorkbook(_path);
-            foreach (var (name, draft) in _sheets) draft.WriteTo(workbook.Worksheet(name));
+            foreach (var (name, draft) in _sheets)
+            {
+                var sheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? workbook.AddWorksheet(name);
+                draft.WriteTo(sheet);
+            }
             var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmssfff");
             SavedBackup = $"{_path}.backup.{stamp}.xlsx";
             File.Copy(_path, SavedBackup, overwrite: false); workbook.Save(); SetStatus(close ? $"Saved workbook. Backup: {Path.GetFileName(SavedBackup)}" : $"Saved workbook and backup. Editor remains open. Backup: {Path.GetFileName(SavedBackup)}");
@@ -74,6 +93,7 @@ public sealed class WorkbookEditorWindow : Window
         private readonly Action _saveWorkbook;
         private readonly List<List<string>> _values = [];
         private readonly List<double> _widths = [];
+        private readonly Button _transposeButton;
         private readonly StackPanel _rows = new() { Spacing = 1 };
         private readonly TextBox _columnFilter = new() { Watermark = "Filter columns by header…", Width = 280 };
         private readonly TextBlock _position = DashboardStyle.Text("Select a cell, row, or column", 11, false, DashboardStyle.Muted);
@@ -100,6 +120,7 @@ public sealed class WorkbookEditorWindow : Window
         private List<List<List<string>>> _undo = [];
         private List<List<List<string>>> _redo = [];
         private double _fontSize = 11;
+        private bool _transposed;
         public Control View { get; }
 
         public SheetDraft(IXLWorksheet sheet, string name, IReadOnlyDictionary<string, string[]> headers, Action<string, bool> status, Action saveWorkbook)
@@ -128,7 +149,7 @@ public sealed class WorkbookEditorWindow : Window
             _suggestions.PointerReleased += (_, _) => { if (_suggestions.SelectedItem is string value) AcceptSuggestion(value); };
             _suggestionPopup.Child = _suggestions;
             var help = DashboardStyle.Text("Mouse: use column letters and row numbers; Ctrl adds selections; Shift selects ranges. Drag column borders to resize. Right-click cells, rows, or headers for operations. Wrap, copy, insert, delete, and auto-fit are available in context menus.", 11, false, DashboardStyle.Muted);
-            var zoomOut = DashboardStyle.Action("A−", () => ChangeFont(-1)); zoomOut.Padding = new Thickness(7, 5); var zoomIn = DashboardStyle.Action("A+", () => ChangeFont(1)); zoomIn.Padding = new Thickness(7, 5); var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _columnFilter, DashboardStyle.Text("Zoom", 11, false, DashboardStyle.Muted), _zoom, zoomOut, zoomIn, _position } };
+            var zoomOut = DashboardStyle.Action("A−", () => ChangeFont(-1)); zoomOut.Padding = new Thickness(7, 5); var zoomIn = DashboardStyle.Action("A+", () => ChangeFont(1)); zoomIn.Padding = new Thickness(7, 5); _transposeButton = DashboardStyle.Action("Transpose view", ToggleTranspose); var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _columnFilter, DashboardStyle.Text("Zoom", 11, false, DashboardStyle.Muted), _zoom, zoomOut, zoomIn, _transposeButton, _position } };
             var gridScroll = new ScrollViewer { Content = _rows, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             var table = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*"), Children = { toolbar, help, gridScroll } }; Grid.SetRow(help, 1); Grid.SetRow(gridScroll, 2);
             var editorHost = new Grid { Children = { table, _suggestionPopup } };
@@ -141,9 +162,41 @@ public sealed class WorkbookEditorWindow : Window
         private void Render()
         {
             _rows.Children.Clear(); _cellBoxes.Clear(); _rowHeaders.Clear(); var filter = _columnFilter.Text?.Trim() ?? "";
+            if (_transposed) { RenderTransposed(); return; }
             _visibleColumns = Enumerable.Range(0, Headers.Length).Where(i => string.IsNullOrWhiteSpace(filter) || Headers[i].Contains(filter, StringComparison.OrdinalIgnoreCase)).ToArray();
             if (_visibleColumns.Count == 0) { _rows.Children.Add(DashboardStyle.Text("No columns match the filter. Clear the filter to restore the grid.", color: DashboardStyle.Muted)); return; }
             AddColumnIndexView(); AddRowView(0, true); for (var r = 1; r < _values.Count; r++) AddRowView(r, false);
+        }
+
+        private void ToggleTranspose()
+        {
+            _transposed = !_transposed;
+            _transposeButton.Content = _transposed ? "Normal view" : "Transpose view";
+            _status($"{(_transposed ? "Transpose view is read-only; workbook orientation is unchanged." : "Normal editable view restored.")}", false);
+            Render();
+        }
+
+        private void RenderTransposed()
+        {
+            var sourceRows = _values.Count; var sourceColumns = _values.Count == 0 ? 0 : _values[0].Count;
+            if (sourceRows == 0 || sourceColumns == 0) return;
+            var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("90," + string.Join(',', Enumerable.Repeat("180", sourceRows))), Background = DashboardStyle.Brush("#102943") };
+            for (var c = 0; c < sourceRows; c++)
+            {
+                var label = DashboardStyle.Text(c == 0 ? "Header" : $"Row {c}", 11, true); label.Background = DashboardStyle.Brush("#173559"); label.Margin = new Thickness(1); Grid.SetColumn(label, c + 1); grid.Children.Add(label);
+            }
+            for (var sourceColumn = 0; sourceColumn < sourceColumns; sourceColumn++)
+            {
+                var row = new Grid { ColumnDefinitions = new ColumnDefinitions("90," + string.Join(',', Enumerable.Repeat("180", sourceRows))) };
+                var label = DashboardStyle.Text(ColumnLetter(sourceColumn), 11, true); label.Background = DashboardStyle.Brush("#173559"); label.Margin = new Thickness(1); Grid.SetColumn(label, 0); row.Children.Add(label);
+                for (var sourceRow = 0; sourceRow < sourceRows; sourceRow++)
+                {
+                    var cell = DashboardStyle.Text(_values[sourceRow][sourceColumn], 11, false); cell.TextWrapping = TextWrapping.Wrap; cell.Margin = new Thickness(1); cell.Background = DashboardStyle.Brush("#0B1726"); Grid.SetColumn(cell, sourceRow + 1); row.Children.Add(cell);
+                }
+                Grid.SetRow(row, sourceColumn); grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto)); grid.Children.Add(row);
+            }
+            _rows.Children.Add(new TextBlock { Text = "Virtual transpose view — editing is disabled; use Normal view to edit and save.", Foreground = DashboardStyle.Brush("#C8D7E8"), Margin = new Thickness(4) });
+            _rows.Children.Add(grid);
         }
 
         private void AddColumnIndexView()
