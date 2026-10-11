@@ -122,6 +122,19 @@ public sealed class FileStepOptions
     public string? Content { get; set; }
     public string OutputVariable { get; set; } = "fileContent";
     public string? JsonPath { get; set; }
+    public string Encoding { get; set; } = "Base64";
+    public string OutputMode { get; set; } = "Reference";
+    public long MaxBytes { get; set; } = 52428800;
+    public string ContentType { get; set; } = "application/octet-stream";
+}
+
+public sealed class BinaryFileReference
+{
+    public string Path { get; init; } = string.Empty;
+    public long SizeBytes { get; init; }
+    public string Sha256 { get; init; } = string.Empty;
+    public string ContentType { get; init; } = "application/octet-stream";
+    public override string ToString() => $"[binary file: {SizeBytes} bytes, sha256={Sha256}]";
 }
 
 public sealed class SqlStepOptions

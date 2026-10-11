@@ -140,8 +140,20 @@ public sealed class TestRunner
         try
         {
             var resolvedUrl = await ResolveDynamicValueAsync(step.TargetUrl.Replace("{env}", environment, StringComparison.OrdinalIgnoreCase), correlation, requestReferences, executionContext, cancellationToken);
-            result.TargetUrl = Substitute(resolvedUrl, variables); var resolvedTemplate = await ResolveDynamicValueAsync(File.ReadAllText(templatePath), correlation, requestReferences, executionContext, cancellationToken); var body = TemplateRenderer.Render(resolvedTemplate, result.ContentType, variables); result.RequestBody = body;
-            using var request = new HttpRequestMessage(new HttpMethod(step.Verb), result.TargetUrl); if (!step.Verb.Equals("HEAD", StringComparison.OrdinalIgnoreCase) || !string.IsNullOrWhiteSpace(body)) request.Content = new StringContent(body, Encoding.UTF8, result.ContentType.Equals("xml", StringComparison.OrdinalIgnoreCase) ? "application/xml" : "application/json");
+            result.TargetUrl = Substitute(resolvedUrl, variables); var resolvedTemplate = await ResolveDynamicValueAsync(File.ReadAllText(templatePath), correlation, requestReferences, executionContext, cancellationToken); var body = TemplateRenderer.Render(resolvedTemplate, result.ContentType, variables);
+            using var request = new HttpRequestMessage(new HttpMethod(step.Verb), result.TargetUrl);
+            var binaryBody = ResolveBinaryHttpBody(step, executionContext);
+            if (binaryBody is not null)
+            {
+                request.Content = new StreamContent(File.OpenRead(binaryBody.Path));
+                request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(binaryBody.ContentType);
+                result.RequestBody = $"[binary file body omitted: {binaryBody.SizeBytes} bytes, sha256={binaryBody.Sha256}]";
+            }
+            else
+            {
+                result.RequestBody = body;
+                if (!step.Verb.Equals("HEAD", StringComparison.OrdinalIgnoreCase) || !string.IsNullOrWhiteSpace(body)) request.Content = new StringContent(body, Encoding.UTF8, result.ContentType.Equals("xml", StringComparison.OrdinalIgnoreCase) ? "application/xml" : "application/json");
+            }
             var resolvedHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var header in step.Headers)
             {
@@ -149,7 +161,7 @@ public sealed class TestRunner
                 resolvedHeaders[header.Key] = Substitute(value, variables);
             }
             result.RequestHeaders = string.Join("; ", resolvedHeaders.Select(h => $"{h.Key}={h.Value}")); foreach (var h in resolvedHeaders) if (!request.Headers.TryAddWithoutValidation(h.Key, h.Value)) request.Content?.Headers.TryAddWithoutValidation(h.Key, h.Value);
-            _logger.Info($"REQUEST SENT [{requestId}]\nURL: {result.TargetUrl}\nMETHOD: {step.Verb}\nHEADERS:\n{result.RequestHeaders}\nBODY:\n{body}");
+            _logger.Info($"REQUEST SENT [{requestId}]\nURL: {result.TargetUrl}\nMETHOD: {step.Verb}\nHEADERS:\n{result.RequestHeaders}\nBODY:\n{result.RequestBody}");
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken); timeout.CancelAfter(TimeSpan.FromSeconds(step.TimeoutSeconds > 0 ? step.TimeoutSeconds : _timeoutSeconds)); using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseContentRead, timeout.Token);
             result.HttpStatus = (int)response.StatusCode; result.ResponseHeaders = string.Join("; ", response.Headers.Concat(response.Content.Headers).Select(h => $"{h.Key}={string.Join(",", h.Value)}")); result.ResponseBody = await response.Content.ReadAsStringAsync(timeout.Token);
             PublishResponseValues(step.StepName, result.ResponseBody, result.ContentType, correlation);
@@ -342,6 +354,22 @@ public sealed class TestRunner
         }
     }
     private static string Substitute(string value, IReadOnlyDictionary<string, string> vars) => Regex.Replace(value ?? "", @"_([\p{L}\p{N}._-]+)_", m => vars.TryGetValue(m.Groups[1].Value, out var v) ? v : throw new InvalidDataException($"Missing request variable '{m.Groups[1].Value}'."));
+    private static BinaryFileReference? ResolveBinaryHttpBody(RequestStep step, LoadTestingTool.Domain.ExecutionContext context)
+    {
+        if (string.IsNullOrWhiteSpace(step.StepConfig)) return null;
+        using var config = StepConfig.Parse(step);
+        var root = config.RootElement;
+        var property = root.EnumerateObject().FirstOrDefault(p => p.NameEquals("BodyFileVariable") || p.NameEquals("BinaryBodyVariable") || p.NameEquals("bodyFileVariable") || p.NameEquals("binaryBodyVariable"));
+        if (property.Value.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(property.Value.GetString())) return null;
+        var variable = property.Value.GetString()!;
+        if (!context.TryGet(variable, out var value) || value is not BinaryFileReference reference)
+            throw new InvalidDataException($"HTTP binary body variable '{variable}' is missing or is not a binary file reference.");
+        if (!File.Exists(reference.Path)) throw new FileNotFoundException("The binary body file reference no longer exists.", reference.Path);
+        var contentType = root.EnumerateObject().FirstOrDefault(p => p.NameEquals("ContentType") || p.NameEquals("contentType"));
+        return contentType.Value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(contentType.Value.GetString())
+            ? new BinaryFileReference { Path = reference.Path, SizeBytes = reference.SizeBytes, Sha256 = reference.Sha256, ContentType = contentType.Value.GetString()! }
+            : reference;
+    }
     private static string ResolveContentType(RequestStep step) => !string.IsNullOrWhiteSpace(step.ContentType) ? step.ContentType : Path.GetExtension(step.TemplateSource).TrimStart('.').ToLowerInvariant() switch { "xml" => "xml", _ => "json" };
     private static bool StatusMatches(int actual, string expected) => expected.Contains('-') ? int.TryParse(expected.Split('-')[0], out var min) && int.TryParse(expected.Split('-')[1], out var max) && actual >= min && actual <= max : expected.EndsWith("xx", StringComparison.OrdinalIgnoreCase) && int.TryParse(expected[..1], out var family) ? actual / 100 == family : int.TryParse(expected, out var exact) && actual == exact;
 }

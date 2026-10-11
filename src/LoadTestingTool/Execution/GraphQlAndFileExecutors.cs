@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Security.Cryptography;
 using LoadTestingTool.Domain;
 
 namespace LoadTestingTool.Execution;
@@ -124,8 +125,10 @@ public sealed class FileStepExecutor : IStepExecutor
         {
             var options = StepConfig.Read<FileStepOptions>(request.Step, request.TemplateText);
             var path = WorkspaceGuard.Resolve(request.WorkspaceRoot, request.Context.Resolve(options.Path));
-            result.RequestText = JsonSerializer.Serialize(new { action = options.Action, path, content = options.Content is null ? null : request.Context.Resolve(options.Content) });
-            switch (options.Action.Trim().ToLowerInvariant())
+            var action = options.Action.Trim().ToLowerInvariant();
+            var binaryAction = action is "readbinary" or "writebinary" or "appendbinary";
+            result.RequestText = JsonSerializer.Serialize(new { action = options.Action, path, content = binaryAction ? "[binary content omitted]" : options.Content is null ? null : request.Context.Resolve(options.Content) });
+            switch (action)
             {
                 case "read":
                 case "json":
@@ -138,6 +141,22 @@ public sealed class FileStepExecutor : IStepExecutor
                     }
                     result.Outputs[request.Context.Resolve(options.OutputVariable)] = output;
                     break;
+                case "readbinary":
+                    var info = new FileInfo(path);
+                    EnsureSize(info.Length, options.MaxBytes, path);
+                    var reference = await CreateReferenceAsync(path, info, options.ContentType, request.CancellationToken);
+                    if (options.OutputMode.Equals("Base64", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var bytes = await File.ReadAllBytesAsync(path, request.CancellationToken);
+                        result.Outputs[request.Context.Resolve(options.OutputVariable)] = Convert.ToBase64String(bytes);
+                        result.ResponseText = $"[binary content materialized as Base64: {bytes.Length} bytes]";
+                    }
+                    else
+                    {
+                        result.Outputs[request.Context.Resolve(options.OutputVariable)] = reference;
+                        result.ResponseText = JsonSerializer.Serialize(reference);
+                    }
+                    break;
                 case "write":
                     Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                     await File.WriteAllTextAsync(path, request.Context.Resolve(options.Content ?? string.Empty), request.CancellationToken);
@@ -145,6 +164,14 @@ public sealed class FileStepExecutor : IStepExecutor
                 case "append":
                     Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                     await File.AppendAllTextAsync(path, request.Context.Resolve(options.Content ?? string.Empty), request.CancellationToken);
+                    break;
+                case "writebinary":
+                case "appendbinary":
+                    var bytesToWrite = await ResolveBinaryContentAsync(options.Content, request.Context, options.MaxBytes, request.CancellationToken);
+                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                    await using (var stream = new FileStream(path, action == "appendbinary" ? FileMode.Append : FileMode.Create, FileAccess.Write, FileShare.Read))
+                        await stream.WriteAsync(bytesToWrite, request.CancellationToken);
+                    result.ResponseText = $"[binary {(action == "appendbinary" ? "appended" : "written")}: {bytesToWrite.Length} bytes]";
                     break;
                 default: throw new InvalidDataException($"Unsupported file action '{options.Action}'.");
             }
@@ -155,7 +182,29 @@ public sealed class FileStepExecutor : IStepExecutor
         result.DurationMs = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
         return result;
     }
+
+    private static void EnsureSize(long size, long maxBytes, string path) { if (maxBytes > 0 && size > maxBytes) throw new InvalidDataException($"Binary file '{path}' is {size} bytes, exceeding MaxBytes={maxBytes}."); }
+    private static async Task<BinaryFileReference> CreateReferenceAsync(string path, FileInfo info, string contentType, CancellationToken cancellationToken)
+    {
+        await using var stream = File.OpenRead(path);
+        var hash = await SHA256.HashDataAsync(stream, cancellationToken);
+        return new BinaryFileReference { Path = path, SizeBytes = info.Length, Sha256 = Convert.ToHexString(hash).ToLowerInvariant(), ContentType = contentType };
+    }
+    private static async Task<byte[]> ResolveBinaryContentAsync(string? content, LoadTestingTool.Domain.ExecutionContext context, long maxBytes, CancellationToken cancellationToken)
+    {
+        var raw = content ?? string.Empty;
+        var match = System.Text.RegularExpressions.Regex.Match(raw.Trim(), "^_([\\p{L}\\p{N}._-]+)_$");
+        if (match.Success && context.TryGet(match.Groups[1].Value, out var value) && value is BinaryFileReference reference)
+        {
+            EnsureSize(reference.SizeBytes, maxBytes, reference.Path);
+            return await File.ReadAllBytesAsync(reference.Path, cancellationToken);
+        }
+        var resolved = context.Resolve(raw);
+        try { var bytes = Convert.FromBase64String(resolved); EnsureSize(bytes.Length, maxBytes, "inline Base64 content"); return bytes; }
+        catch (FormatException ex) { throw new InvalidDataException("Binary Content must be valid Base64 or a binary-file variable reference.", ex); }
+    }
 }
+
 
 public static class ResultStatus
 {
