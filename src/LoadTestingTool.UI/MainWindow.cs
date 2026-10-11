@@ -130,7 +130,7 @@ public sealed partial class MainWindow : Window
     private InstanceRow GetOrCreateRow(InstanceInfo item)
     {
         if (_rows.TryGetValue(item.FolderPath, out var existing)) return existing;
-        var row = new InstanceRow(item, selected => { UiLog($"UI action: instance row clicked. instance={selected.Name}"); _instanceList.SelectedItem = selected; ShowDetails(selected); }, selected => OpenInstanceConfiguration(selected), UiLog);
+        var row = new InstanceRow(item, selected => { UiLog($"UI action: instance row clicked. instance={selected.Name}"); _instanceList.SelectedItem = selected; ShowDetails(selected); }, selected => OpenInstanceConfiguration(selected), selected => OpenStepWizardForInstance(selected), selected => EditWorkbookForInstance(selected), selected => OpenWorkbookForInstance(selected), UiLog);
         row.SetEnvironmentOptions(item.EnvironmentOptions);
         _rows[item.FolderPath] = row;
         return row;
@@ -362,6 +362,48 @@ public sealed partial class MainWindow : Window
         };
         builder.Show(this);
         await Task.CompletedTask;
+    }
+
+    private void OpenStepWizardForInstance(InstanceInfo item)
+    {
+        _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item);
+        var wizard = new TestStepWizardWindow(step => SaveWizardStep(item, step));
+        wizard.Show(this);
+    }
+
+    private void EditWorkbookForInstance(InstanceInfo item)
+    {
+        _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item);
+        _ = EditWorkbookAsync();
+    }
+
+    private void OpenWorkbookForInstance(InstanceInfo item)
+    {
+        _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item);
+        OpenExcelFile(item.WorkbookPath, "DataEngine workbook");
+    }
+
+    private void SaveWizardStep(InstanceInfo item, WizardStepDraft step)
+    {
+        try
+        {
+            using var workbook = new XLWorkbook(item.WorkbookPath);
+            var sheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("config", StringComparison.OrdinalIgnoreCase)) ?? workbook.AddWorksheet("config");
+            var headers = sheet.FirstRowUsed()?.CellsUsed().ToDictionary(c => c.GetString().Trim(), c => c.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase) ?? [];
+            if (headers.Count == 0) { SetStatusForInstance($"Cannot add step to {item.Name}: config sheet has no headers.", true); return; }
+            var row = (sheet.RangeUsed()?.RangeAddress.LastAddress.RowNumber ?? 1) + 1;
+            foreach (var pair in step.Values) if (headers.TryGetValue(pair.Key, out var column)) sheet.Cell(row, column).Value = pair.Value;
+            var backup = $"{item.WorkbookPath}.backup.{DateTime.Now:yyyyMMdd_HHmmssfff}.xlsx";
+            File.Copy(item.WorkbookPath, backup, overwrite: false); workbook.Save();
+            SetStatusForInstance($"Added step '{step.Get("stepname")}' to {item.Name}. Backup: {Path.GetFileName(backup)}");
+            RefreshInstances();
+        }
+        catch (Exception ex) { SetStatusForInstance($"Could not add step: {ex.Message}", true); }
+    }
+
+    private void SetStatusForInstance(string message, bool error = false)
+    {
+        _details.Text = message; _footer.Text = message; UiLog(message);
     }
 
     private void RefreshRows()

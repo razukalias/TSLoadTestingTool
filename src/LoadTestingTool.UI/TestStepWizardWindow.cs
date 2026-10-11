@@ -23,6 +23,16 @@ internal sealed class TestStepWizardWindow : Window
     private readonly TextBox _contentType = Field("application/json");
     private readonly TextBox _expectedStatus = Field("200");
     private readonly TextBox _environments = Field("local");
+    private readonly TextBox _graphqlQuery = Field("query Example { field }");
+    private readonly TextBox _graphqlOperation = Field("Example");
+    private readonly TextBox _graphqlVariables = Field("{}");
+    private readonly TextBox _fileAction = Field("ReadBinary");
+    private readonly TextBox _filePath = Field("Files/image.png");
+    private readonly TextBox _fileOutput = Field("fileData");
+    private readonly TextBox _fileMode = Field("Reference");
+    private readonly TextBox _scriptSource = Field("Scripts/setup.csx");
+    private readonly TextBox _sqlConnection = Field("Default");
+    private readonly TextBox _sqlQuery = Field("select 1");
     private readonly TextBox _stepConfig = new() { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 120, FontFamily = new Avalonia.Media.FontFamily("Consolas") };
     private readonly TextBlock _help = DashboardStyle.Text("", 11, false, DashboardStyle.Muted);
     private readonly TextBlock _error = DashboardStyle.Text("", 11, false, DashboardStyle.Red);
@@ -44,7 +54,7 @@ internal sealed class TestStepWizardWindow : Window
         AddRow(common, 0, "Testcase index", _testcaseIndex); AddRow(common, 1, "Testcase", _testcase); AddRow(common, 2, "Step name", _stepName); AddRow(common, 3, "Step type", _stepType); AddRow(common, 4, "Stage", _stage); AddRow(common, 5, "Timeout (seconds)", _timeout); AddRow(common, 6, "Environments", _environments); AddRow(common, 7, "Enabled", _enabled); AddRow(common, 8, "Target URL", _targetUrl); AddRow(common, 9, "HTTP verb", _verb); AddRow(common, 10, "Template source", _template); AddRow(common, 11, "Content type", _contentType);
         _httpFields.Children.Add(Labeled("Expected status", _expectedStatus));
         var configPanel = new StackPanel { Spacing = 5, Children = { DashboardStyle.Text("StepConfig", 13, true), _stepConfig, _help, DashboardStyle.Text("Generated preview", 13, true), _preview } };
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { DashboardStyle.Action("Cancel", Close), DashboardStyle.Action(existing is null ? "Add step" : "Save step", Save, "primary") } };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { DashboardStyle.Action("Help", ShowHelp), DashboardStyle.Action("Cancel", Close), DashboardStyle.Action(existing is null ? "Add step" : "Save step", Save, "primary") } };
         var body = new StackPanel { Margin = new Thickness(18), Spacing = 10, Children = { DashboardStyle.Text(existing is null ? "Add test step" : "Edit test step", 21, true), DashboardStyle.Text("This writes the same config-sheet columns and StepConfig JSON used by the runner.", 12, false, DashboardStyle.Muted), common, _httpFields, _typeFields, configPanel, _error, buttons } };
         Content = new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         UpdateTypeFields(); UpdatePreview();
@@ -77,12 +87,35 @@ internal sealed class TestStepWizardWindow : Window
         };
         if (type == "File") _typeFields.Children.Add(Labeled("File action", new TextBlock { Text = "Read / Json / Write / Append / ReadBinary / WriteBinary / AppendBinary", TextWrapping = TextWrapping.Wrap }));
         if (type == "Script") _typeFields.Children.Add(Labeled("Security", new TextBlock { Text = "Trusted scripts are disabled by default and require explicit instance configuration.", TextWrapping = TextWrapping.Wrap }));
+        if (type == "GraphQL") { _typeFields.Children.Add(Labeled("Query", _graphqlQuery)); _typeFields.Children.Add(Labeled("Operation name", _graphqlOperation)); _typeFields.Children.Add(Labeled("Variables JSON", _graphqlVariables)); _typeFields.Children.Add(DashboardStyle.Action("Generate GraphQL StepConfig", GenerateStepConfig)); }
+        if (type == "File") { _typeFields.Children.Add(Labeled("Action", _fileAction)); _typeFields.Children.Add(Labeled("Path", _filePath)); _typeFields.Children.Add(Labeled("Output variable", _fileOutput)); _typeFields.Children.Add(Labeled("Output mode", _fileMode)); _typeFields.Children.Add(DashboardStyle.Action("Generate File StepConfig", GenerateStepConfig)); }
+        if (type == "Script") { _typeFields.Children.Add(Labeled("Script source", _scriptSource)); _typeFields.Children.Add(DashboardStyle.Action("Generate Script StepConfig", GenerateStepConfig)); }
+        if (type == "SQL") { _typeFields.Children.Add(Labeled("Connection", _sqlConnection)); _typeFields.Children.Add(Labeled("Query", _sqlQuery)); _typeFields.Children.Add(DashboardStyle.Action("Generate SQL StepConfig", GenerateStepConfig)); }
     }
+    private void GenerateStepConfig()
+    {
+        var type = _stepType.SelectedItem?.ToString() ?? "HTTP";
+        object value = type switch
+        {
+            "GraphQL" => new { Query = _graphqlQuery.Text ?? "", OperationName = _graphqlOperation.Text ?? "", Variables = ParseObject(_graphqlVariables.Text) },
+            "File" => new { Action = _fileAction.Text ?? "ReadBinary", Path = _filePath.Text ?? "", OutputVariable = _fileOutput.Text ?? "", OutputMode = _fileMode.Text ?? "Reference" },
+            "Script" => new { Source = _scriptSource.Text ?? "" },
+            "SQL" => new { Connection = _sqlConnection.Text ?? "", Query = _sqlQuery.Text ?? "" },
+            _ => new { }
+        };
+        _stepConfig.Text = JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = true });
+    }
+    private static object ParseObject(string? text) { try { return JsonDocument.Parse(string.IsNullOrWhiteSpace(text) ? "{}" : text!).RootElement; } catch { return new Dictionary<string, string>(); } }
     private void UpdatePreview()
     {
         try { _preview.Text = JsonSerializer.Serialize(JsonDocument.Parse(string.IsNullOrWhiteSpace(_stepConfig.Text) ? "{}" : _stepConfig.Text).RootElement, new JsonSerializerOptions { WriteIndented = true }); }
         catch { _preview.Text = "Invalid JSON in StepConfig"; }
     }
+    private void ShowHelp()
+    {
+        ContextHelpWindow.Show(this, "Test-step wizard help", "Testcase index identifies the testcase row in the workbook. Testcase and Step name are the stable names used by request/response headers.\n\nStep type selects the executor. Stage controls Setup, Test, or Teardown order. Timeout is per step in seconds; zero means no step timeout. Environments is a comma-separated filter such as local,staging.\n\nHTTP and GraphQL use Target URL, verb, template source, content type, and expected status. File uses StepConfig for Read, Write, Append, ReadBinary, WriteBinary, or AppendBinary. Script requires trusted scripts to be enabled. SQL uses StepConfig for the connection, command, and parameters.\n\nStepConfig must be valid JSON. Example HTTP: {\"Headers\":{\"Authorization\":\"Bearer _token_\"}}. Example binary file reference: {\"Action\":\"ReadBinary\",\"Path\":\"Files/image.png\",\"OutputVariable\":\"imageFile\",\"OutputMode\":\"Reference\"}. Use Advanced JSON when you need an executor option that is not shown as a form field.");
+    }
+
     private void Save()
     {
         _error.Text = ""; var type = _stepType.SelectedItem?.ToString() ?? "HTTP";

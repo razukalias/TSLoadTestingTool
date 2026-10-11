@@ -70,20 +70,21 @@ internal sealed class InstanceRow : Border
     private readonly TextBlock _order = DashboardStyle.Text("");
     private readonly TextBlock _environment = DashboardStyle.Text("");
     private readonly Border _badgeHost = new();
-    public InstanceRow(InstanceInfo item, Action<InstanceInfo> select, Action<InstanceInfo> configure, Action<string> log)
+    public InstanceRow(InstanceInfo item, Action<InstanceInfo> select, Action<InstanceInfo> configure, Action<InstanceInfo> addStep, Action<InstanceInfo> editWorkbook, Action<InstanceInfo> openWorkbook, Action<string> log)
     {
         _item = item;
         Padding = new Thickness(8, 12);
         HorizontalAlignment = HorizontalAlignment.Stretch;
         BorderBrush = DashboardStyle.Line;
         BorderThickness = new Thickness(0, 0, 0, 1);
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("30,*,62,80,82,90,92,110"), MinWidth = 740 };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("30,*,62,80,82,90,92,360"), MinWidth = 980 };
         _check = new CheckBox { IsChecked = item.Selected, VerticalAlignment = VerticalAlignment.Center, MinWidth = 24 };
         _check.IsCheckedChanged += (_, _) => { item.Selected = _check.IsChecked == true; log($"Instance selection changed. instance={item.Name}; selected={item.Selected}"); select(item); Refresh(); };
         var name = DashboardStyle.Text(item.Name, 12, true);
         ToolTip.SetTip(name, item.WorkbookPath);
-        var configureButton = DashboardStyle.Action("Configure", () => configure(item), "primary"); configureButton.Margin = new Thickness(0, 0, 4, 0); configureButton.Padding = new Thickness(8, 5);
-        var cells = new Control[] { _check, name, _testcases, _mode, _order, _environment, _badgeHost, configureButton };
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3 };
+        foreach (var button in new[] { DashboardStyle.Action("Configure", () => configure(item), "primary"), DashboardStyle.Action("Add step", () => addStep(item)), DashboardStyle.Action("Edit workbook", () => editWorkbook(item)), DashboardStyle.Action("Open workbook", () => openWorkbook(item)) }) { button.Margin = new Thickness(0, 0, 3, 0); button.Padding = new Thickness(7, 5); actions.Children.Add(button); }
+        var cells = new Control[] { _check, name, _testcases, _mode, _order, _environment, _badgeHost, actions };
         for (var i = 0; i < cells.Length; i++) { Grid.SetColumn(cells[i], i); cells[i].Margin = new Thickness(0, 0, 6, 0); grid.Children.Add(cells[i]); }
         Child = grid;
         PointerPressed += (_, _) => select(item);
@@ -311,8 +312,7 @@ public sealed partial class MainWindow
         order.SelectionChanged += (_, _) => item.RunScenariosInParallel = order.SelectedIndex == 1;
         _configurationPanel.Children.Add(Field("Testcase order", order));
         _configurationPanel.Children.Add(KeyValue("Data IDs", string.IsNullOrWhiteSpace(item.DataIdSelection) ? "All data rows" : item.DataIdSelection));
-        _configurationPanel.Children.Add(DashboardStyle.Action("Edit DataEngine workbook", () => _ = EditWorkbookAsync(), "primary"));
-        _configurationPanel.Children.Add(DashboardStyle.Action("Open DataEngine workbook", OpenSelectedDataEngine));
+        _configurationPanel.Children.Add(DashboardStyle.Text("Workbook actions are available directly on the instance row: Add step, Edit workbook, and Open workbook.", 12, false, DashboardStyle.Muted));
     }
     private async Task EditWorkbookAsync()
     {

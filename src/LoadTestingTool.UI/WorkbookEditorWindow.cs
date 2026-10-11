@@ -50,7 +50,7 @@ public sealed class WorkbookEditorWindow : Window
             DashboardStyle.Text("DataEngine Editor", 21, true),
             DashboardStyle.Text("Excel-style selection: click A/B/C column indexes or row numbers; Ctrl adds and Shift selects ranges. Edit headers directly. Drag column borders to resize. Type < or { for autocomplete; Ctrl+Space opens it.", 12, false, DashboardStyle.Muted) } };
         _status.Foreground = DashboardStyle.Red;
-        var row1 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 6, Children = { DashboardStyle.Action("New sheet", AddNewSheet), DashboardStyle.Action("Rename sheet", RenameCurrentSheet), DashboardStyle.Action("Add test step", () => OpenStepWizard(false), "primary"), DashboardStyle.Action("Edit selected step", () => OpenStepWizard(true)), DashboardStyle.Action("Import", ShowImportMenu), DashboardStyle.Action("Open raw workbook", () => SystemDefaultFileOpener.Open(_path)) } };
+        var row1 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 6, Children = { DashboardStyle.Action("Help", ShowHelp), DashboardStyle.Action("New sheet", AddNewSheet), DashboardStyle.Action("Rename sheet", RenameCurrentSheet), DashboardStyle.Action("Add test step", () => OpenStepWizard(false), "primary"), DashboardStyle.Action("Edit selected step", () => OpenStepWizard(true)), DashboardStyle.Action("Import", ShowImportMenu), DashboardStyle.Action("Open raw workbook", () => SystemDefaultFileOpener.Open(_path)) } };
         var row2 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 6, Children = { DashboardStyle.Text("Columns", 11, false, DashboardStyle.Muted), _addColumnsCount, DashboardStyle.Action("Add columns at end", AddColumnsToCurrentSheet), DashboardStyle.Text("Rows", 11, false, DashboardStyle.Muted), _addRowsCount, DashboardStyle.Action("Add rows at end", AddRowsToCurrentSheet), DashboardStyle.Action("Cancel", () => Close(null)), _save } };
         var buttons = new StackPanel { Spacing = 6, Children = { row1, row2 } };
         var root = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto,Auto"), Margin = new Thickness(18) };
@@ -77,6 +77,11 @@ public sealed class WorkbookEditorWindow : Window
         _tabs.Items.Add(new TabItem { Header = name, Content = draft.View });
         _tabs.SelectedIndex = _tabs.ItemCount - 1;
         SetStatus($"Created new sheet '{name}'. Press Ctrl+S to save it without closing the editor.");
+    }
+
+    private void ShowHelp()
+    {
+        ContextHelpWindow.Show(this, "DataEngine editor help", "Sheets: config controls testcase and step execution; request contains input rows; response contains expected values and assertions; README contains guidance.\n\nSelection: click a column letter or row number. Ctrl-click adds another selection. Shift-click selects a range. Click inside a cell to edit its text. Headers can be edited like normal cells.\n\nAutocomplete: type < for functions and From_ references, or { for assertion verbs. Ctrl+Space opens suggestions. Enter, Tab, or clicking a suggestion inserts it.\n\nOperations: use the row and column indexes for copy, paste, insert, delete, wrap, highlight, and auto-fit. The Add columns/rows at end controls use the quantities shown beside them.\n\nImports: Excel lets you choose individual sheets; JSON and XML are flattened into a new sheet. Press Ctrl+S to save and create a backup without closing the editor. The Save workbook button saves and closes.");
     }
 
     private void AddRowToCurrentSheet()
