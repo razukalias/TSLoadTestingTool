@@ -30,7 +30,10 @@ public sealed class WorkbookEditorWindow : Window
         var sheetHeaders = workbook.Worksheets.ToDictionary(x => x.Name,
             x => x.FirstRowUsed()?.CellsUsed().Select(c => c.GetString()).Where(x => !string.IsNullOrWhiteSpace(x)).ToArray() ?? [], StringComparer.OrdinalIgnoreCase);
         foreach (var pair in sheetHeaders) _sheetHeaders[pair.Key] = pair.Value;
-        foreach (var name in new[] { "config", "request", "response", "README" })
+        var orderedSheetNames = new[] { "config", "request", "response", "README" }
+            .Concat(workbook.Worksheets.Select(x => x.Name))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in orderedSheetNames)
         {
             var sheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
             if (sheet is null) continue;
@@ -245,7 +248,7 @@ public sealed class WorkbookEditorWindow : Window
             {
                 var column = _visibleColumns[n];
                 var index = DashboardStyle.Text(ColumnLetter(column), 11, true); index.TextAlignment = TextAlignment.Center; index.VerticalAlignment = VerticalAlignment.Center; index.Background = _selectedColumns.Contains(column) ? DashboardStyle.Brush("#275B8F") : Brushes.Transparent;
-                index.PointerPressed += (_, e) => { if (e.GetCurrentPoint(index).Properties.IsLeftButtonPressed) { SelectColumn(column, e); e.Handled = true; } };
+                index.PointerPressed += (_, e) => { if (e.GetCurrentPoint(index).Properties.PointerUpdateKind == PointerUpdateKind.LeftButtonPressed) { SelectColumn(column, e); e.Handled = true; } };
                 index.ContextMenu = ColumnMenu(column); Grid.SetColumn(index, n + 1); grid.Children.Add(index);
             }
             _rows.Children.Add(grid);
@@ -265,7 +268,7 @@ public sealed class WorkbookEditorWindow : Window
             var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("52," + string.Join(',', _visibleColumns.Select(i => ScaleWidth(_widths[i])))), Background = header ? DashboardStyle.Brush("#173559") : Brushes.Transparent };
             var number = DashboardStyle.Text(header ? "#" : row.ToString(), 11, header);
             number.Background = (_selectedRows.Contains(row) || (header && _selectedRows.Count == _values.Count - 1)) ? DashboardStyle.Brush("#275B8F") : Brushes.Transparent;
-            number.PointerPressed += (_, e) => { if (!header) SelectRow(row, e); else SelectAllRows(); }; number.ContextMenu = RowMenu(row, header); _rowHeaders[row] = number; Grid.SetColumn(number, 0); grid.Children.Add(number);
+            number.PointerPressed += (_, e) => { if (e.GetCurrentPoint(number).Properties.PointerUpdateKind != PointerUpdateKind.LeftButtonPressed) return; if (!header) SelectRow(row, e); else SelectAllRows(); }; number.ContextMenu = RowMenu(row, header); _rowHeaders[row] = number; Grid.SetColumn(number, 0); grid.Children.Add(number);
             for (var n = 0; n < _visibleColumns.Count; n++)
             {
                 var column = _visibleColumns[n];
