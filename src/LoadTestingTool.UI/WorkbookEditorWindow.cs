@@ -50,7 +50,7 @@ public sealed class WorkbookEditorWindow : Window
             DashboardStyle.Text("DataEngine Editor", 21, true),
             DashboardStyle.Text("Excel-style selection: click A/B/C column indexes or row numbers; Ctrl adds and Shift selects ranges. Edit headers directly. Drag column borders to resize. Type < or { for autocomplete; Ctrl+Space opens it.", 12, false, DashboardStyle.Muted) } };
         _status.Foreground = DashboardStyle.Red;
-        var row1 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 6, Children = { DashboardStyle.Action("New sheet", AddNewSheet), DashboardStyle.Action("Rename sheet", RenameCurrentSheet), DashboardStyle.Action("Import", ShowImportMenu), DashboardStyle.Action("Open raw workbook", () => SystemDefaultFileOpener.Open(_path)) } };
+        var row1 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 6, Children = { DashboardStyle.Action("New sheet", AddNewSheet), DashboardStyle.Action("Rename sheet", RenameCurrentSheet), DashboardStyle.Action("Add test step", () => OpenStepWizard(false), "primary"), DashboardStyle.Action("Edit selected step", () => OpenStepWizard(true)), DashboardStyle.Action("Import", ShowImportMenu), DashboardStyle.Action("Open raw workbook", () => SystemDefaultFileOpener.Open(_path)) } };
         var row2 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 6, Children = { DashboardStyle.Text("Columns", 11, false, DashboardStyle.Muted), _addColumnsCount, DashboardStyle.Action("Add columns at end", AddColumnsToCurrentSheet), DashboardStyle.Text("Rows", 11, false, DashboardStyle.Muted), _addRowsCount, DashboardStyle.Action("Add rows at end", AddRowsToCurrentSheet), DashboardStyle.Action("Cancel", () => Close(null)), _save } };
         var buttons = new StackPanel { Spacing = 6, Children = { row1, row2 } };
         var root = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto,Auto"), Margin = new Thickness(18) };
@@ -201,6 +201,19 @@ public sealed class WorkbookEditorWindow : Window
     }
 
     private void SetStatus(string message, bool error = false) { _status.Text = message; _status.Foreground = error ? DashboardStyle.Red : DashboardStyle.Muted; }
+
+    private void OpenStepWizard(bool edit)
+    {
+        if (_tabs.SelectedItem is not TabItem tab || tab.Header is not string sheetName || !sheetName.Equals("config", StringComparison.OrdinalIgnoreCase))
+        {
+            SetStatus("Select the config sheet before using the test-step wizard.", true); return;
+        }
+        if (!_sheets.TryGetValue(sheetName, out var draft)) return;
+        var existing = edit ? draft.SelectedConfigStep() : null;
+        if (edit && existing is null) { SetStatus("Select a config data row first, then choose Edit selected step.", true); return; }
+        var wizard = new TestStepWizardWindow(step => { draft.ApplyConfigStep(step); SetStatus(edit ? "Test step updated. Press Ctrl+S to save." : "Test step added. Press Ctrl+S to save."); }, existing);
+        wizard.Show(this);
+    }
 
     private void Save(bool close = true)
     {
@@ -356,6 +369,27 @@ public sealed class WorkbookEditorWindow : Window
         }
 
         public void Rename(string name) => SheetName = name;
+
+        public WizardStepDraft? SelectedConfigStep()
+        {
+            if (!SheetName.Equals("config", StringComparison.OrdinalIgnoreCase) || _selectedRow < 1 || _selectedRow >= _values.Count) return null;
+            var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            for (var column = 0; column < Headers.Length; column++) values[Headers[column]] = _values[_selectedRow][column];
+            return new WizardStepDraft(_selectedRow, values);
+        }
+
+        public void ApplyConfigStep(WizardStepDraft draft)
+        {
+            if (!SheetName.Equals("config", StringComparison.OrdinalIgnoreCase)) return;
+            var row = draft.Row ?? _values.Count;
+            while (_values.Count <= row) _values.Add(Enumerable.Repeat("", Headers.Length).ToList());
+            foreach (var pair in draft.Values)
+            {
+                var column = Array.FindIndex(Headers, h => h.Equals(pair.Key, StringComparison.OrdinalIgnoreCase));
+                if (column >= 0) _values[row][column] = pair.Value;
+            }
+            _selectedRow = row; _selectedRows.Clear(); _selectedRows.Add(row); Render();
+        }
 
         private static string ColumnLetter(int column)
         {
