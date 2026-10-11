@@ -130,7 +130,7 @@ public sealed partial class MainWindow : Window
     private InstanceRow GetOrCreateRow(InstanceInfo item)
     {
         if (_rows.TryGetValue(item.FolderPath, out var existing)) return existing;
-        var row = new InstanceRow(item, selected => { UiLog($"UI action: instance row clicked. instance={selected.Name}"); _instanceList.SelectedItem = selected; ShowDetails(selected); }, selected => OpenInstanceConfiguration(selected), selected => OpenStepWizardForInstance(selected), selected => EditWorkbookForInstance(selected), selected => OpenWorkbookForInstance(selected), UiLog);
+        var row = new InstanceRow(item, selected => { UiLog($"UI action: instance row clicked. instance={selected.Name}"); _instanceList.SelectedItem = selected; ShowDetails(selected); }, selected => OpenInstanceConfiguration(selected), selected => OpenStepWizardForInstance(selected), selected => EditStepForInstance(selected), selected => EditWorkbookForInstance(selected), selected => OpenWorkbookForInstance(selected), UiLog);
         row.SetEnvironmentOptions(item.EnvironmentOptions);
         _rows[item.FolderPath] = row;
         return row;
@@ -377,6 +377,32 @@ public sealed partial class MainWindow : Window
         _ = EditWorkbookAsync();
     }
 
+    private void EditStepForInstance(InstanceInfo item)
+    {
+        _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item);
+        if (item.TestcaseOptions.Count == 0) { SetStatusForInstance($"No editable steps found for {item.Name}.", true); return; }
+        var picker = new StepPickerWindow(item.Name, item.TestcaseOptions, (testcaseIndex, stepName) => OpenExistingStepWizard(item, testcaseIndex, stepName));
+        picker.Show(this);
+    }
+
+    private void OpenExistingStepWizard(InstanceInfo item, int testcaseIndex, string stepName)
+    {
+        try
+        {
+            using var workbook = new XLWorkbook(item.WorkbookPath);
+            var sheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("config", StringComparison.OrdinalIgnoreCase));
+            if (sheet is null) { SetStatusForInstance($"No config sheet found in {item.Name}.", true); return; }
+            var used = sheet.FirstRowUsed();
+            var headers = used?.CellsUsed().ToDictionary(c => c.GetString().Trim(), c => c.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase) ?? [];
+            var row = sheet.RowsUsed().Skip(1).FirstOrDefault(r => int.TryParse(r.Cell(headers.GetValueOrDefault("testcaseindex")).GetString(), out var index) && index == testcaseIndex && r.Cell(headers.GetValueOrDefault("stepname")).GetString().Trim().Equals(stepName, StringComparison.OrdinalIgnoreCase));
+            if (row is null) { SetStatusForInstance($"Could not locate config row for testcase {testcaseIndex}, step {stepName}.", true); return; }
+            var values = headers.ToDictionary(pair => pair.Key, pair => row.Cell(pair.Value).GetString(), StringComparer.OrdinalIgnoreCase);
+            var wizard = new TestStepWizardWindow(step => SaveWizardStep(item, step), new WizardStepDraft(row.RowNumber(), values));
+            wizard.Show(this);
+        }
+        catch (Exception ex) { SetStatusForInstance($"Could not open step editor: {ex.Message}", true); }
+    }
+
     private void OpenWorkbookForInstance(InstanceInfo item)
     {
         _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item);
@@ -391,7 +417,7 @@ public sealed partial class MainWindow : Window
             var sheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("config", StringComparison.OrdinalIgnoreCase)) ?? workbook.AddWorksheet("config");
             var headers = sheet.FirstRowUsed()?.CellsUsed().ToDictionary(c => c.GetString().Trim(), c => c.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase) ?? [];
             if (headers.Count == 0) { SetStatusForInstance($"Cannot add step to {item.Name}: config sheet has no headers.", true); return; }
-            var row = (sheet.RangeUsed()?.RangeAddress.LastAddress.RowNumber ?? 1) + 1;
+            var row = step.Row ?? ((sheet.RangeUsed()?.RangeAddress.LastAddress.RowNumber ?? 1) + 1);
             foreach (var pair in step.Values) if (headers.TryGetValue(pair.Key, out var column)) sheet.Cell(row, column).Value = pair.Value;
             var backup = $"{item.WorkbookPath}.backup.{DateTime.Now:yyyyMMdd_HHmmssfff}.xlsx";
             File.Copy(item.WorkbookPath, backup, overwrite: false); workbook.Save();

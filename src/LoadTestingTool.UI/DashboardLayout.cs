@@ -70,20 +70,20 @@ internal sealed class InstanceRow : Border
     private readonly TextBlock _order = DashboardStyle.Text("");
     private readonly TextBlock _environment = DashboardStyle.Text("");
     private readonly Border _badgeHost = new();
-    public InstanceRow(InstanceInfo item, Action<InstanceInfo> select, Action<InstanceInfo> configure, Action<InstanceInfo> addStep, Action<InstanceInfo> editWorkbook, Action<InstanceInfo> openWorkbook, Action<string> log)
+    public InstanceRow(InstanceInfo item, Action<InstanceInfo> select, Action<InstanceInfo> configure, Action<InstanceInfo> addStep, Action<InstanceInfo> editStep, Action<InstanceInfo> editWorkbook, Action<InstanceInfo> openWorkbook, Action<string> log)
     {
         _item = item;
         Padding = new Thickness(8, 12);
         HorizontalAlignment = HorizontalAlignment.Stretch;
         BorderBrush = DashboardStyle.Line;
         BorderThickness = new Thickness(0, 0, 0, 1);
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("30,*,62,80,82,90,92,360"), MinWidth = 980 };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("30,*,62,80,82,90,92,430"), MinWidth = 1160 };
         _check = new CheckBox { IsChecked = item.Selected, VerticalAlignment = VerticalAlignment.Center, MinWidth = 24 };
         _check.IsCheckedChanged += (_, _) => { item.Selected = _check.IsChecked == true; log($"Instance selection changed. instance={item.Name}; selected={item.Selected}"); select(item); Refresh(); };
         var name = DashboardStyle.Text(item.Name, 12, true);
         ToolTip.SetTip(name, item.WorkbookPath);
-        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3 };
-        foreach (var button in new[] { DashboardStyle.Action("Configure", () => configure(item), "primary"), DashboardStyle.Action("Add step", () => addStep(item)), DashboardStyle.Action("Edit workbook", () => editWorkbook(item)), DashboardStyle.Action("Open workbook", () => openWorkbook(item)) }) { button.Margin = new Thickness(0, 0, 3, 0); button.Padding = new Thickness(7, 5); actions.Children.Add(button); }
+        var actions = new WrapPanel { Orientation = Orientation.Horizontal, ItemWidth = double.NaN, ItemHeight = double.NaN };
+        foreach (var button in new[] { DashboardStyle.Action("Configure", () => configure(item), "primary"), DashboardStyle.Action("Add step", () => addStep(item)), DashboardStyle.Action("Edit step", () => editStep(item)), DashboardStyle.Action("Edit workbook", () => editWorkbook(item)), DashboardStyle.Action("Open workbook", () => openWorkbook(item)) }) { button.Margin = new Thickness(0, 0, 4, 4); button.Padding = new Thickness(7, 5); actions.Children.Add(button); }
         var cells = new Control[] { _check, name, _testcases, _mode, _order, _environment, _badgeHost, actions };
         for (var i = 0; i < cells.Length; i++) { Grid.SetColumn(cells[i], i); cells[i].Margin = new Thickness(0, 0, 6, 0); grid.Children.Add(cells[i]); }
         Child = grid;
@@ -186,7 +186,7 @@ public sealed partial class MainWindow
             DashboardStyle.Action("Clear", () => { foreach (var item in _instances) item.Selected = false; RefreshRows(); }) } };
         _search.Margin = new Thickness(0, 0, 8, 6); _search.TextChanged += (_, _) => FilterInstances();
         Grid.SetColumn(tools, 1); toolbar.Children.Add(tools);
-        var columnHeader = new Grid { ColumnDefinitions = new ColumnDefinitions("30,*,62,80,82,90,92,110"), Margin = new Thickness(8, 8), MinWidth = 740 };
+        var columnHeader = new Grid { ColumnDefinitions = new ColumnDefinitions("30,*,62,80,82,90,92,430"), Margin = new Thickness(8, 8), MinWidth = 1160 };
         var columns = new[] { "", "Instance", "Cases", "Mode", "Order", "Env.", "Status", "Actions" };
         for (var i = 0; i < columns.Length; i++) { var text = DashboardStyle.Text(columns[i], 11, false, DashboardStyle.Muted); Grid.SetColumn(text, i); columnHeader.Children.Add(text); }
         _instanceList.Background = Brushes.Transparent; _instanceList.BorderThickness = new Thickness(0);

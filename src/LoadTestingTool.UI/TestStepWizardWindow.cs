@@ -50,8 +50,12 @@ internal sealed class TestStepWizardWindow : Window
         if (existing is not null) Load(existing);
         _stepType.SelectionChanged += (_, _) => UpdateTypeFields();
         _stepConfig.TextChanged += (_, _) => UpdatePreview();
-        var common = new Grid { ColumnDefinitions = new ColumnDefinitions("170,*"), RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto") };
-        AddRow(common, 0, "Testcase index", _testcaseIndex); AddRow(common, 1, "Testcase", _testcase); AddRow(common, 2, "Step name", _stepName); AddRow(common, 3, "Step type", _stepType); AddRow(common, 4, "Stage", _stage); AddRow(common, 5, "Timeout (seconds)", _timeout); AddRow(common, 6, "Environments", _environments); AddRow(common, 7, "Enabled", _enabled); AddRow(common, 8, "Target URL", _targetUrl); AddRow(common, 9, "HTTP verb", _verb); AddRow(common, 10, "Template source", _template); AddRow(common, 11, "Content type", _contentType);
+        var common = new Grid { ColumnDefinitions = new ColumnDefinitions("170,*"), RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto") };
+        AddRow(common, 0, "Testcase index", _testcaseIndex); AddRow(common, 1, "Testcase", _testcase); AddRow(common, 2, "Step name", _stepName); AddRow(common, 3, "Step type", _stepType); AddRow(common, 4, "Stage", _stage); AddRow(common, 5, "Timeout (seconds)", _timeout); AddRow(common, 6, "Environments", _environments); AddRow(common, 7, "Enabled", _enabled);
+        _httpFields.Children.Add(Labeled("Target URL", _targetUrl));
+        _httpFields.Children.Add(Labeled("HTTP verb", _verb));
+        _httpFields.Children.Add(Labeled("Template source", _template));
+        _httpFields.Children.Add(Labeled("Content type", _contentType));
         _httpFields.Children.Add(Labeled("Expected status", _expectedStatus));
         var configPanel = new StackPanel { Spacing = 5, Children = { DashboardStyle.Text("StepConfig", 13, true), _stepConfig, _help, DashboardStyle.Text("Generated preview", 13, true), _preview } };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { DashboardStyle.Action("Help", ShowHelp), DashboardStyle.Action("Cancel", Close), DashboardStyle.Action(existing is null ? "Add step" : "Save step", Save, "primary") } };
@@ -75,7 +79,7 @@ internal sealed class TestStepWizardWindow : Window
     private static void Set(TextBox box, string value) => box.Text = value;
     private void UpdateTypeFields()
     {
-        var type = _stepType.SelectedItem?.ToString() ?? "HTTP"; _httpFields.IsVisible = type is "HTTP" or "GraphQL";
+        var type = _stepType.SelectedItem?.ToString() ?? "HTTP"; _httpFields.IsVisible = type == "HTTP";
         _typeFields.Children.Clear();
         _help.Text = type switch
         {
@@ -85,9 +89,9 @@ internal sealed class TestStepWizardWindow : Window
             "Script" => "Script StepConfig should identify the script source and inputs. Trusted scripts must be enabled in the instance.",
             "SQL" => "SQL StepConfig should identify the connection profile, command type, query, and parameters.", _ => ""
         };
-        if (type == "File") _typeFields.Children.Add(Labeled("File action", new TextBlock { Text = "Read / Json / Write / Append / ReadBinary / WriteBinary / AppendBinary", TextWrapping = TextWrapping.Wrap }));
-        if (type == "Script") _typeFields.Children.Add(Labeled("Security", new TextBlock { Text = "Trusted scripts are disabled by default and require explicit instance configuration.", TextWrapping = TextWrapping.Wrap }));
-        if (type == "GraphQL") { _typeFields.Children.Add(Labeled("Query", _graphqlQuery)); _typeFields.Children.Add(Labeled("Operation name", _graphqlOperation)); _typeFields.Children.Add(Labeled("Variables JSON", _graphqlVariables)); _typeFields.Children.Add(DashboardStyle.Action("Generate GraphQL StepConfig", GenerateStepConfig)); }
+        if (type == "File") _typeFields.Children.Add(Labeled("File actions", new TextBlock { Text = "Read, Json, Write, Append, ReadBinary, WriteBinary, AppendBinary", TextWrapping = TextWrapping.Wrap }));
+        if (type == "Script") _typeFields.Children.Add(Labeled("Security", new TextBlock { Text = "Trusted scripts must be enabled in the instance settings.", TextWrapping = TextWrapping.Wrap }));
+        if (type == "GraphQL") { _typeFields.Children.Add(Labeled("Target URL", _targetUrl)); _typeFields.Children.Add(Labeled("Content type", _contentType)); _typeFields.Children.Add(Labeled("Expected status", _expectedStatus)); _typeFields.Children.Add(Labeled("Query", _graphqlQuery)); _typeFields.Children.Add(Labeled("Operation name", _graphqlOperation)); _typeFields.Children.Add(Labeled("Variables JSON", _graphqlVariables)); _typeFields.Children.Add(DashboardStyle.Action("Generate GraphQL StepConfig", GenerateStepConfig)); }
         if (type == "File") { _typeFields.Children.Add(Labeled("Action", _fileAction)); _typeFields.Children.Add(Labeled("Path", _filePath)); _typeFields.Children.Add(Labeled("Output variable", _fileOutput)); _typeFields.Children.Add(Labeled("Output mode", _fileMode)); _typeFields.Children.Add(DashboardStyle.Action("Generate File StepConfig", GenerateStepConfig)); }
         if (type == "Script") { _typeFields.Children.Add(Labeled("Script source", _scriptSource)); _typeFields.Children.Add(DashboardStyle.Action("Generate Script StepConfig", GenerateStepConfig)); }
         if (type == "SQL") { _typeFields.Children.Add(Labeled("Connection", _sqlConnection)); _typeFields.Children.Add(Labeled("Query", _sqlQuery)); _typeFields.Children.Add(DashboardStyle.Action("Generate SQL StepConfig", GenerateStepConfig)); }
