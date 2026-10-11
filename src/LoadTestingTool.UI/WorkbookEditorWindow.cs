@@ -104,8 +104,44 @@ public sealed class WorkbookEditorWindow : Window
     {
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "Import Excel workbook", AllowMultiple = false, FileTypeFilter = new[] { new FilePickerFileType("Excel workbook") { Patterns = new[] { "*.xlsx", "*.xlsm" } } } });
         if (files.Count == 0) return;
-        try { using var workbook = new XLWorkbook(files[0].Path.LocalPath); foreach (var sheet in workbook.Worksheets) AddImportedSheet(sheet.Name, SheetTable(sheet)); SetStatus($"Imported {workbook.Worksheets.Count} Excel sheet(s). Press Ctrl+S to save."); }
+        try
+        {
+            using var workbook = new XLWorkbook(files[0].Path.LocalPath);
+            var selected = await ChooseExcelSheetsAsync(workbook.Worksheets.Select(x => x.Name).ToArray());
+            if (selected is null || selected.Count == 0) return;
+            foreach (var sheet in workbook.Worksheets.Where(x => selected.Contains(x.Name))) AddImportedSheet(sheet.Name, SheetTable(sheet));
+            SetStatus($"Imported {selected.Count} selected Excel sheet(s). Press Ctrl+S to save.");
+        }
         catch (Exception ex) { SetStatus($"Excel import failed: {ex.Message}", true); }
+    }
+
+    private async Task<HashSet<string>?> ChooseExcelSheetsAsync(IReadOnlyList<string> names)
+    {
+        var checks = names.Select(name => new CheckBox { Content = name, IsChecked = true, Margin = new Thickness(4) }).ToList();
+        var dialog = new Window { Title = "Choose Excel sheets to import", Width = 460, Height = 520, MinWidth = 360, MinHeight = 300, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        var listPanel = new StackPanel();
+        foreach (var check in checks) listPanel.Children.Add(check);
+        var list = new ScrollViewer { Content = listPanel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        var selectAll = DashboardStyle.Action("Select all", () => { foreach (var check in checks) check.IsChecked = true; });
+        var selectNone = DashboardStyle.Action("Select none", () => { foreach (var check in checks) check.IsChecked = false; });
+        var cancel = DashboardStyle.Action("Cancel", () => dialog.Close(false));
+        var import = DashboardStyle.Action("Import selected", () => dialog.Close(true), "primary");
+        var footer = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { cancel, import } };
+        var dialogGrid = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), Margin = new Thickness(16) };
+        dialogGrid.Children.Add(new StackPanel { Spacing = 6, Children = { DashboardStyle.Text("Select the worksheets to import", 17, true), DashboardStyle.Text("Each selected worksheet will be added as a new sheet.", 11, false, DashboardStyle.Muted), new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { selectAll, selectNone } } } });
+        dialogGrid.Children.Add(list);
+        dialogGrid.Children.Add(footer);
+        Grid.SetRow(list, 1); Grid.SetRow(footer, 2);
+        dialog.Content = dialogGrid;
+        /* legacy layout shape retained in source history:
+        new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), Margin = new Thickness(16), Children =
+        {
+            new StackPanel { Spacing = 6, Children = { DashboardStyle.Text("Select the worksheets to import", 17, true), DashboardStyle.Text("Each selected worksheet will be added as a new sheet.", 11, false, DashboardStyle.Muted), new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { selectAll, selectNone } } } },
+            list,
+            new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { cancel, import } }
+        }}; */
+        var accepted = await dialog.ShowDialog<bool?>(this);
+        return accepted == true ? checks.Where(x => x.IsChecked == true).Select(x => x.Content?.ToString() ?? "").Where(x => x.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase) : null;
     }
 
     private async Task ImportJsonAsync()
@@ -585,6 +621,9 @@ public sealed class WorkbookEditorWindow : Window
         {
             sheet.RangeUsed()?.Clear(XLClearOptions.All);
             for (var r = 0; r < _values.Count; r++) for (var c = 0; c < _values[r].Count; c++) { var cell = sheet.Cell(r + 1, c + 1); cell.Value = _values[r][c]; cell.Style.Alignment.WrapText = _wrap.TryGetValue((r, c), out var wrapped) && wrapped; cell.Style.Font.FontSize = _fontSize; if (_cellColors.TryGetValue((r, c), out var color) && color is not null) cell.Style.Fill.BackgroundColor = XLColor.FromHtml(color); }
+            // Keep intentionally blank appended rows visible after reopening. A row that contains no values
+            // is otherwise omitted by Excel/ClosedXML's used-range detection.
+            for (var r = 0; r < _values.Count; r++) sheet.Row(r + 1).Height = 22;
             for (var c = 0; c < _widths.Count; c++)
                 sheet.Column(c + 1).Width = Math.Clamp(_widths[c] / 7.5, 13.3, 93.3);
             sheet.Row(1).Style.Font.Bold = true; sheet.SheetView.FreezeRows(1);
