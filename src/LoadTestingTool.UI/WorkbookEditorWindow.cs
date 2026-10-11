@@ -5,8 +5,11 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using ClosedXML.Excel;
+using System.Text.Json;
+using System.Xml.Linq;
 
 namespace LoadTestingTool.UI;
 
@@ -18,6 +21,8 @@ public sealed class WorkbookEditorWindow : Window
     private readonly TabControl _tabs = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap };
     private readonly Button _save;
+    private readonly TextBox _addColumnsCount = new() { Text = "10", Width = 52 };
+    private readonly TextBox _addRowsCount = new() { Text = "10", Width = 52 };
     public string? SavedBackup { get; private set; }
 
     public WorkbookEditorWindow(string workbookPath)
@@ -45,8 +50,9 @@ public sealed class WorkbookEditorWindow : Window
             DashboardStyle.Text("DataEngine Editor", 21, true),
             DashboardStyle.Text("Excel-style selection: click A/B/C column indexes or row numbers; Ctrl adds and Shift selects ranges. Edit headers directly. Drag column borders to resize. Type < or { for autocomplete; Ctrl+Space opens it.", 12, false, DashboardStyle.Muted) } };
         _status.Foreground = DashboardStyle.Red;
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8,
-            Children = { DashboardStyle.Action("New sheet", AddNewSheet), DashboardStyle.Action("Rename sheet", RenameCurrentSheet), DashboardStyle.Action("Add row at end", AddRowToCurrentSheet), DashboardStyle.Action("Open raw workbook", () => SystemDefaultFileOpener.Open(_path)), DashboardStyle.Action("Cancel", () => Close(null)), _save } };
+        var row1 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 6, Children = { DashboardStyle.Action("New sheet", AddNewSheet), DashboardStyle.Action("Rename sheet", RenameCurrentSheet), DashboardStyle.Action("Import", ShowImportMenu), DashboardStyle.Action("Open raw workbook", () => SystemDefaultFileOpener.Open(_path)) } };
+        var row2 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 6, Children = { DashboardStyle.Text("Columns", 11, false, DashboardStyle.Muted), _addColumnsCount, DashboardStyle.Action("Add columns at end", AddColumnsToCurrentSheet), DashboardStyle.Text("Rows", 11, false, DashboardStyle.Muted), _addRowsCount, DashboardStyle.Action("Add rows at end", AddRowsToCurrentSheet), DashboardStyle.Action("Cancel", () => Close(null)), _save } };
+        var buttons = new StackPanel { Spacing = 6, Children = { row1, row2 } };
         var root = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto,Auto"), Margin = new Thickness(18) };
         root.Children.Add(top); Grid.SetRow(_tabs, 1); root.Children.Add(_tabs); Grid.SetRow(_status, 2); root.Children.Add(_status); Grid.SetRow(buttons, 3); root.Children.Add(buttons); Content = root;
         AddHandler(InputElement.KeyDownEvent, (_, e) =>
@@ -75,9 +81,68 @@ public sealed class WorkbookEditorWindow : Window
 
     private void AddRowToCurrentSheet()
     {
-        if (_tabs.SelectedItem is TabItem tab && tab.Header is string name && _sheets.TryGetValue(name, out var draft))
-            draft.AddRowAtEnd();
+        AddRowsToCurrentSheet(1);
     }
+
+    private void AddRowsToCurrentSheet() => AddRowsToCurrentSheet(ParseQuantity(_addRowsCount.Text));
+    private void AddRowsToCurrentSheet(int count) { if (CurrentSheet() is { } draft) draft.AddRowsAtEnd(count); }
+    private void AddColumnsToCurrentSheet() { if (CurrentSheet() is { } draft) draft.AddColumnsAtEnd(ParseQuantity(_addColumnsCount.Text)); }
+    private static int ParseQuantity(string? text) => int.TryParse(text, out var value) ? Math.Clamp(value, 1, 10000) : 10;
+    private SheetDraft? CurrentSheet() => _tabs.SelectedItem is TabItem tab && tab.Header is string name && _sheets.TryGetValue(name, out var draft) ? draft : null;
+
+    private void ShowImportMenu()
+    {
+        var menu = new ContextMenu();
+        menu.Items.Add(ImportItem("Import Excel workbook (.xlsx)", () => _ = ImportExcelAsync()));
+        menu.Items.Add(ImportItem("Import JSON (.json, flattened)", () => _ = ImportJsonAsync()));
+        menu.Items.Add(ImportItem("Import XML (.xml, flattened)", () => _ = ImportXmlAsync()));
+        menu.Open(this);
+    }
+    private static MenuItem ImportItem(string text, Action action) { var item = new MenuItem { Header = text }; item.Click += (_, _) => action(); return item; }
+
+    private async Task ImportExcelAsync()
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "Import Excel workbook", AllowMultiple = false, FileTypeFilter = new[] { new FilePickerFileType("Excel workbook") { Patterns = new[] { "*.xlsx", "*.xlsm" } } } });
+        if (files.Count == 0) return;
+        try { using var workbook = new XLWorkbook(files[0].Path.LocalPath); foreach (var sheet in workbook.Worksheets) AddImportedSheet(sheet.Name, SheetTable(sheet)); SetStatus($"Imported {workbook.Worksheets.Count} Excel sheet(s). Press Ctrl+S to save."); }
+        catch (Exception ex) { SetStatus($"Excel import failed: {ex.Message}", true); }
+    }
+
+    private async Task ImportJsonAsync()
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "Import JSON", AllowMultiple = false, FileTypeFilter = new[] { new FilePickerFileType("JSON") { Patterns = new[] { "*.json" } } } });
+        if (files.Count == 0) return;
+        try { var table = FlattenJson(await File.ReadAllTextAsync(files[0].Path.LocalPath)); AddImportedSheet(Path.GetFileNameWithoutExtension(files[0].Name), table); SetStatus($"Imported flattened JSON as a new sheet. Press Ctrl+S to save."); }
+        catch (Exception ex) { SetStatus($"JSON import failed: {ex.Message}", true); }
+    }
+
+    private async Task ImportXmlAsync()
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "Import XML", AllowMultiple = false, FileTypeFilter = new[] { new FilePickerFileType("XML") { Patterns = new[] { "*.xml" } } } });
+        if (files.Count == 0) return;
+        try { var table = FlattenXml(await File.ReadAllTextAsync(files[0].Path.LocalPath)); AddImportedSheet(Path.GetFileNameWithoutExtension(files[0].Name), table); SetStatus($"Imported flattened XML as a new sheet. Press Ctrl+S to save."); }
+        catch (Exception ex) { SetStatus($"XML import failed: {ex.Message}", true); }
+    }
+
+    private void AddImportedSheet(string baseName, (string[] Headers, List<List<string>> Rows) table)
+    {
+        var name = UniqueSheetName(baseName); var values = new List<List<string>> { table.Headers.ToList() }; values.AddRange(table.Rows.Select(r => r.Concat(Enumerable.Repeat("", Math.Max(0, table.Headers.Length - r.Count))).Take(table.Headers.Length).ToList()));
+        using var temporary = new XLWorkbook(); var source = temporary.AddWorksheet(name); for (var r = 0; r < values.Count; r++) for (var c = 0; c < values[r].Count; c++) source.Cell(r + 1, c + 1).Value = values[r][c];
+        var draft = new SheetDraft(source, name, _sheetHeaders, SetStatus, () => Save(close: false)); _sheets[name] = draft; _tabs.Items.Add(new TabItem { Header = name, Content = draft.View }); _tabs.SelectedIndex = _tabs.ItemCount - 1;
+    }
+    private string UniqueSheetName(string baseName) { var clean = string.IsNullOrWhiteSpace(baseName) ? "ImportedData" : new string(baseName.Select(c => char.IsLetterOrDigit(c) || c == '_' ? c : '_').ToArray()); if (clean.Length > 31) clean = clean[..31]; var name = clean; var i = 2; while (_sheets.ContainsKey(name)) { var suffix = $"_{i++}"; name = clean[..Math.Min(clean.Length, 31 - suffix.Length)] + suffix; } return name; }
+    private static (string[] Headers, List<List<string>> Rows) SheetTable(IXLWorksheet sheet) { var used = sheet.RangeUsed(); if (used is null) return (["Column1"], new List<List<string>> { new() { "" } }); var rows = used.Rows().Select(r => r.Cells().Select(c => c.GetString()).ToList()).ToList(); var width = rows.Max(r => r.Count); return (rows[0].Concat(Enumerable.Repeat("", width - rows[0].Count)).ToArray(), rows.Skip(1).Select(r => r.Concat(Enumerable.Repeat("", width - r.Count)).ToList()).ToList()); }
+    private static (string[] Headers, List<List<string>> Rows) FlattenJson(string text)
+    {
+        using var document = JsonDocument.Parse(text); var root = document.RootElement; var items = root.ValueKind == JsonValueKind.Array ? root.EnumerateArray().ToList() : root.ValueKind == JsonValueKind.Object && root.EnumerateObject().FirstOrDefault(p => p.Value.ValueKind == JsonValueKind.Array).Value.ValueKind == JsonValueKind.Array ? root.EnumerateObject().First(p => p.Value.ValueKind == JsonValueKind.Array).Value.EnumerateArray().ToList() : new List<JsonElement> { root }; var maps = items.Select(FlattenJsonElement).ToList(); var headers = maps.SelectMany(m => m.Keys).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(); return (headers.Length == 0 ? ["value"] : headers, maps.Select(m => headers.Select(h => m.TryGetValue(h, out var v) ? v : "").ToList()).ToList());
+    }
+    private static Dictionary<string, string> FlattenJsonElement(JsonElement element)
+    { var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); FlattenJsonValue(element, "", result); return result; }
+    private static void FlattenJsonValue(JsonElement value, string path, Dictionary<string, string> result)
+    { if (value.ValueKind == JsonValueKind.Object) foreach (var p in value.EnumerateObject()) FlattenJsonValue(p.Value, string.IsNullOrEmpty(path) ? p.Name : $"{path}.{p.Name}", result); else if (value.ValueKind == JsonValueKind.Array) { var i = 0; foreach (var item in value.EnumerateArray()) FlattenJsonValue(item, $"{path}[{i++}]", result); } else result[path.Length == 0 ? "value" : path] = value.ValueKind == JsonValueKind.Null ? "" : value.ToString(); }
+    private static (string[] Headers, List<List<string>> Rows) FlattenXml(string text)
+    { var root = XDocument.Parse(text).Root ?? throw new InvalidDataException("XML has no root element."); var repeated = root.Elements().GroupBy(x => x.Name.LocalName).FirstOrDefault(g => g.Count() > 1)?.ToList(); var records = repeated is { Count: > 0 } ? repeated : new List<XElement> { root }; var maps = records.Select(x => FlattenXmlElement(x, x == root ? "" : x.Name.LocalName)).ToList(); var headers = maps.SelectMany(m => m.Keys).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(); return (headers.Length == 0 ? ["value"] : headers, maps.Select(m => headers.Select(h => m.TryGetValue(h, out var v) ? v : "").ToList()).ToList()); }
+    private static Dictionary<string, string> FlattenXmlElement(XElement element, string path) { var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); foreach (var attr in element.Attributes()) result[$"{path}.@{attr.Name.LocalName}".TrimStart('.')] = attr.Value; var children = element.Elements().ToList(); if (children.Count == 0) result[path.Length == 0 ? element.Name.LocalName : path] = element.Value; else foreach (var group in children.GroupBy(x => x.Name.LocalName)) { var i = 0; foreach (var child in group) { var childPath = group.Count() > 1 ? $"{path}.{child.Name.LocalName}[{i++}]".TrimStart('.') : $"{path}.{child.Name.LocalName}".TrimStart('.'); foreach (var pair in FlattenXmlElement(child, childPath)) result[pair.Key] = pair.Value; } } return result; }
 
     private void RenameCurrentSheet()
     {
@@ -434,6 +499,14 @@ public sealed class WorkbookEditorWindow : Window
         private void Redo() { if (_redo.Count == 0) return; _undo.Add(_values.Select(x => x.ToList()).ToList()); _values.Clear(); _values.AddRange(_redo[^1].Select(x => x.ToList())); _redo.RemoveAt(_redo.Count - 1); Render(); }
         private void InsertRows(int row, bool below) { SaveUndo(); var at = Math.Clamp(row + (below ? 1 : 0), 1, _values.Count); _values.Insert(at, Enumerable.Repeat("", Headers.Length).ToList()); Render(); }
         public void AddRowAtEnd() { InsertRows(_values.Count, true); _status("Added a new row at the end of the current sheet.", false); }
+        public void AddRowsAtEnd(int count) { for (var i = 0; i < count; i++) InsertRows(_values.Count, true); _status($"Added {count} row(s) at the end of the current sheet.", false); }
+        public void AddColumnsAtEnd(int count)
+        {
+            SaveUndo();
+            var next = Headers.Length;
+            for (var i = 0; i < count; i++) { var header = $"Column{next + i + 1}"; while (Headers.Contains(header, StringComparer.OrdinalIgnoreCase)) header = $"Column{++next}"; foreach (var row in _values) row.Add(row == _values[0] ? header : ""); _widths.Add(190); }
+            Render(); _status($"Added {count} column(s) at the end of the current sheet.", false);
+        }
         private void DeleteRows() { SaveUndo(); var rows = TargetRows().Where(r => r > 0 && r < _values.Count).OrderByDescending(x => x).ToArray(); foreach (var r in rows) _values.RemoveAt(r); _selectedRows.Clear(); Render(); }
         private void CopyRows() { _copiedRows = TargetRows().Select(r => _values[r].ToList()).ToList(); _status("Copied rows internally. Select a row and choose Duplicate rows or press Ctrl+V.", false); }
         private void PasteRows() { SaveUndo(); if (_copiedRows is null) return; var at = _selectedRow > 0 ? _selectedRow : _values.Count; foreach (var row in _copiedRows.Select(x => x.ToList())) _values.Insert(Math.Min(at, _values.Count), row); Render(); }
