@@ -139,6 +139,9 @@ public sealed class TestRunner
         var result = new RequestResult { RunId = run.RunId, RequestId = requestId, TestcaseIndex = step.TestcaseIndex, Testcase = testcase.Testcase, DataId = dataId, StepName = step.StepName, StepType = step.StepType.WireName(), Thread = thread, Iteration = iteration, SequenceOrder = sequence, StartedAt = started, WaitMs = step.WaitMs, Verb = step.Verb, TargetUrl = step.TargetUrl, TemplateSource = step.TemplateSource, StepConfig = step.StepConfig, ContentType = ResolveContentType(step), RequestHeaders = string.Join("; ", step.Headers.Select(h => $"{h.Key}={h.Value}")), Variables = new Dictionary<string, string>(variables, StringComparer.OrdinalIgnoreCase), Environment = environment };
         try
         {
+            foreach (var runtimeVariable in executionContext.Snapshot())
+                if (runtimeVariable.Value is string runtimeText)
+                    variables[runtimeVariable.Key] = runtimeText;
             var resolvedUrl = await ResolveDynamicValueAsync(step.TargetUrl.Replace("{env}", environment, StringComparison.OrdinalIgnoreCase), correlation, requestReferences, executionContext, cancellationToken);
             result.TargetUrl = Substitute(resolvedUrl, variables); var resolvedTemplate = await ResolveDynamicValueAsync(File.ReadAllText(templatePath), correlation, requestReferences, executionContext, cancellationToken); var body = TemplateRenderer.Render(resolvedTemplate, result.ContentType, variables);
             using var request = new HttpRequestMessage(new HttpMethod(step.Verb), result.TargetUrl);
@@ -221,9 +224,13 @@ public sealed class TestRunner
             var templateText = string.Empty;
             result.TargetUrl = context.ResolveUrl(step.TargetUrl);
             _logger.Info($"STEP TEMPLATE LOAD [{requestId}] testcase={testcase.TestcaseIndex}; testcaseName={testcase.Testcase}; dataid={dataId}; stepName={step.StepName}; stepType={step.StepType.WireName()}; environment={environment}; template={templatePath}; templateExists={(!string.IsNullOrWhiteSpace(templatePath) && File.Exists(templatePath))}; configuredTargetUrl={step.TargetUrl}; resolvedTargetUrl={result.TargetUrl}; ignoreempty={step.IgnoreEmpty}; stepConfig={step.StepConfig}");
+            foreach (var runtimeVariable in context.Snapshot())
+                if (runtimeVariable.Value is string runtimeText)
+                    variables[runtimeVariable.Key] = runtimeText;
             if (!string.IsNullOrWhiteSpace(step.TemplateSource))
             {
                 templateText = await ResolveDynamicValueAsync(await File.ReadAllTextAsync(templatePath, timeout.Token), correlation, requestReferences, context, timeout.Token);
+                templateText = TemplateRenderer.Render(templateText, result.ContentType, variables);
             }
             _logger.Info($"STEP REQUEST [{requestId}]\nTYPE: {step.StepType.WireName()}\nSTEP: {step.StepName}\nENVIRONMENT: {environment}\nCONFIGURED URL: {step.TargetUrl}\nRESOLVED URL: {result.TargetUrl}\nTEMPLATE: {step.TemplateSource}\nREQUEST:\n{templateText}\nMETADATA:\n{step.StepConfig}");
             var execution = await _pipeline.ExecuteAsync(new StepExecutionRequest { Step = step, Context = context, WorkspaceRoot = _features.WorkspaceRoot, TemplateText = templateText, CancellationToken = timeout.Token });
