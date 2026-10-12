@@ -143,10 +143,17 @@ public sealed class TestRunner
                 if (runtimeVariable.Value is string runtimeText)
                     variables[runtimeVariable.Key] = runtimeText;
             var resolvedUrl = await ResolveDynamicValueAsync(step.TargetUrl.Replace("{env}", environment, StringComparison.OrdinalIgnoreCase), correlation, requestReferences, executionContext, cancellationToken);
-            result.TargetUrl = Substitute(resolvedUrl, variables); var resolvedTemplate = await ResolveDynamicValueAsync(File.ReadAllText(templatePath), correlation, requestReferences, executionContext, cancellationToken); var body = TemplateRenderer.Render(resolvedTemplate, result.ContentType, variables);
+            result.TargetUrl = Substitute(resolvedUrl, variables); var resolvedTemplate = await ResolveDynamicValueAsync(File.ReadAllText(templatePath), correlation, requestReferences, executionContext, cancellationToken);
+            var streamedTemplate = PrepareStreamingBinaryTemplate(resolvedTemplate, result.ContentType, variables, executionContext);
+            var body = streamedTemplate is null ? TemplateRenderer.Render(resolvedTemplate, result.ContentType, variables) : string.Empty;
             using var request = new HttpRequestMessage(new HttpMethod(step.Verb), result.TargetUrl);
             var binaryBody = ResolveBinaryHttpBody(step, executionContext);
-            if (binaryBody is not null)
+            if (streamedTemplate is not null)
+            {
+                request.Content = new StreamingBase64FileJsonContent(streamedTemplate.Value.Prefix, streamedTemplate.Value.Suffix, streamedTemplate.Value.File, ResolveHttpMediaType(result.ContentType));
+                result.RequestBody = streamedTemplate.Value.Summary;
+            }
+            else if (binaryBody is not null)
             {
                 request.Content = new StreamContent(File.OpenRead(binaryBody.Path));
                 request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(binaryBody.ContentType);
@@ -361,6 +368,27 @@ public sealed class TestRunner
         }
     }
     private static string Substitute(string value, IReadOnlyDictionary<string, string> vars) => Regex.Replace(value ?? "", @"_([\p{L}\p{N}._-]+)_", m => vars.TryGetValue(m.Groups[1].Value, out var v) ? v : throw new InvalidDataException($"Missing request variable '{m.Groups[1].Value}'."));
+    private static (string Prefix, string Suffix, BinaryFileReference File, string Summary)? PrepareStreamingBinaryTemplate(string template, string contentType, IReadOnlyDictionary<string, string> variables, LoadTestingTool.Domain.ExecutionContext context)
+    {
+        var source = template ?? string.Empty;
+        var match = Regex.Match(source, @"_\*([\p{L}\p{N}._-]+)\*_", RegexOptions.CultureInvariant);
+        if (!match.Success) return null;
+        var variableName = match.Groups[1].Value;
+        if (!context.TryGet(variableName, out var value) || value is not BinaryFileReference file)
+            throw new InvalidDataException($"Streaming template variable '{variableName}' is missing or is not a binary file reference.");
+        if (!File.Exists(file.Path)) throw new FileNotFoundException($"Streaming template file for '{variableName}' was not found.", file.Path);
+        var marker = match.Value;
+        var protectedTemplate = source.Replace(marker, "__STREAMED_BINARY_MARKER__", StringComparison.Ordinal);
+        protectedTemplate = TemplateRenderer.Render(protectedTemplate, contentType, variables);
+        var markerIndex = protectedTemplate.IndexOf("__STREAMED_BINARY_MARKER__", StringComparison.Ordinal);
+        if (markerIndex < 0) throw new InvalidDataException($"Streaming template marker for '{variableName}' was altered during template rendering.");
+        var prefix = protectedTemplate[..markerIndex];
+        var suffix = protectedTemplate[(markerIndex + "__STREAMED_BINARY_MARKER__".Length)..];
+        var encodedLength = 4L * ((file.SizeBytes + 2L) / 3L);
+        var summary = $"[NoLog streamed Base64 variable: {variableName}; bytes={file.SizeBytes}; base64Bytes={encodedLength}; sha256={file.Sha256}; contentType={file.ContentType}]";
+        return (prefix, suffix, file, summary);
+    }
+    private static string ResolveHttpMediaType(string contentType) => contentType.Equals("json", StringComparison.OrdinalIgnoreCase) ? "application/json" : contentType.Equals("xml", StringComparison.OrdinalIgnoreCase) ? "application/xml" : contentType;
     private static BinaryFileReference? ResolveBinaryHttpBody(RequestStep step, LoadTestingTool.Domain.ExecutionContext context)
     {
         if (string.IsNullOrWhiteSpace(step.StepConfig)) return null;
