@@ -10,6 +10,7 @@ namespace LoadTestingTool.UI;
 internal sealed class TestStepWizardWindow : Window
 {
     private readonly Action<WizardStepDraft> _saveStep;
+    private readonly string _templatesFolder;
     private readonly TextBox _testcaseIndex = Field("1");
     private readonly TextBox _testcase = Field("ExampleTest");
     private readonly TextBox _stepName = Field("NewStep");
@@ -38,12 +39,13 @@ internal sealed class TestStepWizardWindow : Window
     private readonly TextBlock _error = DashboardStyle.Text("", 11, false, DashboardStyle.Red);
     private readonly TextBlock _preview = DashboardStyle.Text("", 11, false, DashboardStyle.Muted);
     private readonly StackPanel _httpFields = new() { Spacing = 6 };
+    private readonly StackPanel _templateFields = new() { Spacing = 6 };
     private readonly StackPanel _typeFields = new() { Spacing = 6 };
     private readonly int? _editRow;
 
-    public TestStepWizardWindow(Action<WizardStepDraft> saveStep, WizardStepDraft? existing = null)
+    public TestStepWizardWindow(Action<WizardStepDraft> saveStep, WizardStepDraft? existing = null, string? templatesFolder = null)
     {
-        _saveStep = saveStep; _editRow = existing?.Row;
+        _saveStep = saveStep; _editRow = existing?.Row; _templatesFolder = Path.GetFullPath(templatesFolder ?? Path.Combine(Directory.GetCurrentDirectory(), "Templates"));
         Title = existing is null ? "Add test step" : "Edit test step";
         Width = 760; Height = 820; MinWidth = 620; MinHeight = 600;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -54,12 +56,13 @@ internal sealed class TestStepWizardWindow : Window
         AddRow(common, 0, "Testcase index", _testcaseIndex); AddRow(common, 1, "Testcase", _testcase); AddRow(common, 2, "Step name", _stepName); AddRow(common, 3, "Step type", _stepType); AddRow(common, 4, "Stage", _stage); AddRow(common, 5, "Timeout (seconds)", _timeout); AddRow(common, 6, "Environments", _environments); AddRow(common, 7, "Enabled", _enabled);
         _httpFields.Children.Add(Labeled("Target URL", _targetUrl));
         _httpFields.Children.Add(Labeled("HTTP verb", _verb));
-        _httpFields.Children.Add(Labeled("Template source", _template));
         _httpFields.Children.Add(Labeled("Content type", _contentType));
         _httpFields.Children.Add(Labeled("Expected status", _expectedStatus));
-        var configPanel = new StackPanel { Spacing = 5, Children = { DashboardStyle.Text("StepConfig", 13, true), _stepConfig, _help, DashboardStyle.Text("Generated preview", 13, true), _preview } };
+        _templateFields.Children.Add(Labeled("Template source", _template));
+        _templateFields.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { DashboardStyle.Action("New / edit template", EditTemplate, "primary"), DashboardStyle.Action("Validate template", ValidateTemplate) } });
+        var configPanel = new StackPanel { Spacing = 5, Children = { DashboardStyle.Text("StepConfig JSON", 13, true), _stepConfig, _help, DashboardStyle.Text("Generated preview", 13, true), _preview } };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { DashboardStyle.Action("Help", ShowHelp), DashboardStyle.Action("Cancel", Close), DashboardStyle.Action(existing is null ? "Add step" : "Save step", Save, "primary") } };
-        var body = new StackPanel { Margin = new Thickness(18), Spacing = 10, Children = { DashboardStyle.Text(existing is null ? "Add test step" : "Edit test step", 21, true), DashboardStyle.Text("This writes the same config-sheet columns and StepConfig JSON used by the runner.", 12, false, DashboardStyle.Muted), common, _httpFields, _typeFields, configPanel, _error, buttons } };
+        var body = new StackPanel { Margin = new Thickness(18), Spacing = 10, Children = { DashboardStyle.Text(existing is null ? "Add test step" : "Edit test step", 21, true), DashboardStyle.Text("Switching type changes only the executor section; other values remain intact.", 12, false, DashboardStyle.Muted), common, _httpFields, _templateFields, _typeFields, configPanel, _error, buttons } };
         Content = new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         UpdateTypeFields(); UpdatePreview();
     }
@@ -79,7 +82,7 @@ internal sealed class TestStepWizardWindow : Window
     private static void Set(TextBox box, string value) => box.Text = value;
     private void UpdateTypeFields()
     {
-        var type = _stepType.SelectedItem?.ToString() ?? "HTTP"; _httpFields.IsVisible = type == "HTTP";
+        var type = _stepType.SelectedItem?.ToString() ?? "HTTP"; _httpFields.IsVisible = type is "HTTP" or "GraphQL";
         _typeFields.Children.Clear();
         _help.Text = type switch
         {
@@ -91,7 +94,7 @@ internal sealed class TestStepWizardWindow : Window
         };
         if (type == "File") _typeFields.Children.Add(Labeled("File actions", new TextBlock { Text = "Read, Json, Write, Append, ReadBinary, WriteBinary, AppendBinary", TextWrapping = TextWrapping.Wrap }));
         if (type == "Script") _typeFields.Children.Add(Labeled("Security", new TextBlock { Text = "Trusted scripts must be enabled in the instance settings.", TextWrapping = TextWrapping.Wrap }));
-        if (type == "GraphQL") { _typeFields.Children.Add(Labeled("Target URL", _targetUrl)); _typeFields.Children.Add(Labeled("Content type", _contentType)); _typeFields.Children.Add(Labeled("Expected status", _expectedStatus)); _typeFields.Children.Add(Labeled("Query", _graphqlQuery)); _typeFields.Children.Add(Labeled("Operation name", _graphqlOperation)); _typeFields.Children.Add(Labeled("Variables JSON", _graphqlVariables)); _typeFields.Children.Add(DashboardStyle.Action("Generate GraphQL StepConfig", GenerateStepConfig)); }
+        if (type == "GraphQL") { _typeFields.Children.Add(Labeled("Query", _graphqlQuery)); _typeFields.Children.Add(Labeled("Operation name", _graphqlOperation)); _typeFields.Children.Add(Labeled("Variables JSON", _graphqlVariables)); _typeFields.Children.Add(DashboardStyle.Action("Generate GraphQL StepConfig", GenerateStepConfig)); }
         if (type == "File") { _typeFields.Children.Add(Labeled("Action", _fileAction)); _typeFields.Children.Add(Labeled("Path", _filePath)); _typeFields.Children.Add(Labeled("Output variable", _fileOutput)); _typeFields.Children.Add(Labeled("Output mode", _fileMode)); _typeFields.Children.Add(DashboardStyle.Action("Generate File StepConfig", GenerateStepConfig)); }
         if (type == "Script") { _typeFields.Children.Add(Labeled("Script source", _scriptSource)); _typeFields.Children.Add(DashboardStyle.Action("Generate Script StepConfig", GenerateStepConfig)); }
         if (type == "SQL") { _typeFields.Children.Add(Labeled("Connection", _sqlConnection)); _typeFields.Children.Add(Labeled("Query", _sqlQuery)); _typeFields.Children.Add(DashboardStyle.Action("Generate SQL StepConfig", GenerateStepConfig)); }
@@ -115,6 +118,26 @@ internal sealed class TestStepWizardWindow : Window
         try { _preview.Text = JsonSerializer.Serialize(JsonDocument.Parse(string.IsNullOrWhiteSpace(_stepConfig.Text) ? "{}" : _stepConfig.Text).RootElement, new JsonSerializerOptions { WriteIndented = true }); }
         catch { _preview.Text = "Invalid JSON in StepConfig"; }
     }
+    private void EditTemplate()
+    {
+        var source = string.IsNullOrWhiteSpace(_template.Text) ? $"{_stepName.Text?.Trim() ?? "step"}.json" : _template.Text!.Trim();
+        var editor = new TemplateEditorWindow(_templatesFolder, source, _stepType.SelectedItem?.ToString() ?? "HTTP", value => { _template.Text = value; _error.Text = "Template saved."; _error.Foreground = DashboardStyle.Green; });
+        editor.Show(this);
+    }
+
+    private void ValidateTemplate()
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(_template.Text)) throw new InvalidDataException("No template source configured.");
+            var path = Path.GetFullPath(Path.Combine(_templatesFolder, _template.Text.Replace('/', Path.DirectorySeparatorChar)));
+            var root = _templatesFolder.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase) || !File.Exists(path)) throw new InvalidDataException($"Template file was not found: {_template.Text}");
+            _error.Text = "Template file exists. Open the template editor to validate its content."; _error.Foreground = DashboardStyle.Green;
+        }
+        catch (Exception ex) { _error.Text = ex.Message; _error.Foreground = DashboardStyle.Red; }
+    }
+
     private void ShowHelp()
     {
         ContextHelpWindow.Show(this, "Test-step wizard help", "Testcase index identifies the testcase row in the workbook. Testcase and Step name are the stable names used by request/response headers.\n\nStep type selects the executor. Stage controls Setup, Test, or Teardown order. Timeout is per step in seconds; zero means no step timeout. Environments is a comma-separated filter such as local,staging.\n\nHTTP and GraphQL use Target URL, verb, template source, content type, and expected status. File uses StepConfig for Read, Write, Append, ReadBinary, WriteBinary, or AppendBinary. Script requires trusted scripts to be enabled. SQL uses StepConfig for the connection, command, and parameters.\n\nStepConfig must be valid JSON. Example HTTP: {\"Headers\":{\"Authorization\":\"Bearer _token_\"}}. Example binary file reference: {\"Action\":\"ReadBinary\",\"Path\":\"Files/image.png\",\"OutputVariable\":\"imageFile\",\"OutputMode\":\"Reference\"}. Use Advanced JSON when you need an executor option that is not shown as a form field.");
@@ -127,6 +150,12 @@ internal sealed class TestStepWizardWindow : Window
         if (string.IsNullOrWhiteSpace(_testcase.Text) || string.IsNullOrWhiteSpace(_stepName.Text)) { _error.Text = "Testcase and step name are required."; return; }
         if (!int.TryParse(_timeout.Text, out var timeout) || timeout < 0) { _error.Text = "Timeout must be zero or a positive number."; return; }
         if (type is "HTTP" or "GraphQL" && string.IsNullOrWhiteSpace(_targetUrl.Text)) { _error.Text = "Target URL is required for HTTP and GraphQL steps."; return; }
+        if (!string.IsNullOrWhiteSpace(_template.Text))
+        {
+            var templatePath = Path.GetFullPath(Path.Combine(_templatesFolder, _template.Text.Replace('/', Path.DirectorySeparatorChar)));
+            var templateRoot = _templatesFolder.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (!templatePath.StartsWith(templateRoot, StringComparison.OrdinalIgnoreCase) || !File.Exists(templatePath)) { _error.Text = "Template source does not exist. Use New / edit template first."; return; }
+        }
         try { using var _ = JsonDocument.Parse(string.IsNullOrWhiteSpace(_stepConfig.Text) ? "{}" : _stepConfig.Text); } catch { _error.Text = "StepConfig must contain valid JSON."; return; }
         var row = new WizardStepDraft(_editRow, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
             ["testcaseindex"] = index.ToString(), ["testcase"] = _testcase.Text?.Trim() ?? "", ["stepname"] = _stepName.Text?.Trim() ?? "", ["steptype"] = type, ["stage"] = _stage.SelectedItem?.ToString() ?? "Test", ["enabled"] = (_enabled.IsChecked == true).ToString().ToLowerInvariant(), ["timeout"] = timeout.ToString(), ["environments"] = _environments.Text?.Trim() ?? "", ["targeturl"] = _targetUrl.Text?.Trim() ?? "", ["verb"] = (_verb.Text?.Trim() ?? "POST").ToUpperInvariant(), ["templetsource"] = _template.Text?.Trim() ?? "", ["contenttype"] = _contentType.Text?.Trim() ?? "", ["expectedstatus"] = _expectedStatus.Text?.Trim() ?? "", ["stepconfig"] = string.IsNullOrWhiteSpace(_stepConfig.Text) ? "{}" : _stepConfig.Text!.Trim(), ["stoponfailure"] = "true", ["assert"] = "true", ["ignoreempty"] = "false", ["assertonlyresponse"] = "false", ["threads"] = "1", ["iterations"] = "1", ["threadintervalms"] = "0", ["iterationintervalms"] = "0", ["wait"] = "0" });

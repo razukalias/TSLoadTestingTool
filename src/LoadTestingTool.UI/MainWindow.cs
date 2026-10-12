@@ -367,7 +367,7 @@ public sealed partial class MainWindow : Window
     private void OpenStepWizardForInstance(InstanceInfo item)
     {
         _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item);
-        var wizard = new TestStepWizardWindow(step => SaveWizardStep(item, step));
+        var wizard = new TestStepWizardWindow(step => SaveWizardStep(item, step), templatesFolder: item.TemplatesFolder);
         wizard.Show(this);
     }
 
@@ -397,7 +397,7 @@ public sealed partial class MainWindow : Window
             var row = sheet.RowsUsed().Skip(1).FirstOrDefault(r => int.TryParse(r.Cell(headers.GetValueOrDefault("testcaseindex")).GetString(), out var index) && index == testcaseIndex && r.Cell(headers.GetValueOrDefault("stepname")).GetString().Trim().Equals(stepName, StringComparison.OrdinalIgnoreCase));
             if (row is null) { SetStatusForInstance($"Could not locate config row for testcase {testcaseIndex}, step {stepName}.", true); return; }
             var values = headers.ToDictionary(pair => pair.Key, pair => row.Cell(pair.Value).GetString(), StringComparer.OrdinalIgnoreCase);
-            var wizard = new TestStepWizardWindow(step => SaveWizardStep(item, step), new WizardStepDraft(row.RowNumber(), values));
+            var wizard = new TestStepWizardWindow(step => SaveWizardStep(item, step), new WizardStepDraft(row.RowNumber(), values), item.TemplatesFolder);
             wizard.Show(this);
         }
         catch (Exception ex) { SetStatusForInstance($"Could not open step editor: {ex.Message}", true); }

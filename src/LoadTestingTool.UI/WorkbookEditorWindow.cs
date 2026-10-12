@@ -216,7 +216,7 @@ public sealed class WorkbookEditorWindow : Window
         if (!_sheets.TryGetValue(sheetName, out var draft)) return;
         var existing = edit ? draft.SelectedConfigStep() : null;
         if (edit && existing is null) { SetStatus("Select a config data row first, then choose Edit selected step.", true); return; }
-        var wizard = new TestStepWizardWindow(step => { draft.ApplyConfigStep(step); SetStatus(edit ? "Test step updated. Press Ctrl+S to save." : "Test step added. Press Ctrl+S to save."); }, existing);
+        var wizard = new TestStepWizardWindow(step => { draft.ApplyConfigStep(step); SetStatus(edit ? "Test step updated. Press Ctrl+S to save." : "Test step added. Press Ctrl+S to save."); }, existing, Path.Combine(Path.GetDirectoryName(_path)!, "Templates"));
         wizard.Show(this);
     }
 
