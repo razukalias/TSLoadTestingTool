@@ -12,7 +12,7 @@ mkdir -p Artifacts History Logs Results
 dotnet ../../bin/Debug/net10.0/LoadTestingTool.dll --testcases 1,2,3
 ```
 
-Expected: the run passes; `Artifacts/text-output.txt` contains two lines and `Artifacts/upload-copy.bin` matches `Files/upload.bin`.
+Expected: the run passes; `Artifacts/text-output.txt` contains two lines and `Artifacts/upload-copy.bin` matches `Files/small.bin`.
 
 ## Run HTTP scenarios
 
