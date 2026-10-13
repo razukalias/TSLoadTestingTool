@@ -193,8 +193,12 @@ public sealed class FileStepExecutor : IStepExecutor
     private static async Task<byte[]> ResolveBinaryContentAsync(string? content, LoadTestingTool.Domain.ExecutionContext context, long maxBytes, CancellationToken cancellationToken)
     {
         var raw = content ?? string.Empty;
-        var match = System.Text.RegularExpressions.Regex.Match(raw.Trim(), "^_([\\p{L}\\p{N}._-]+)_$");
-        if (match.Success && context.TryGet(match.Groups[1].Value, out var value) && value is BinaryFileReference reference)
+        var trimmed = raw.Trim();
+        var match = System.Text.RegularExpressions.Regex.Match(trimmed, "^_\\*?([\\p{L}\\p{N}._-]+)\\*?_$");
+        var variableName = match.Success ? match.Groups[1].Value : string.Empty;
+        if (string.IsNullOrWhiteSpace(variableName) && trimmed.Length > 2 && trimmed[0] == '_' && trimmed[^1] == '_')
+            variableName = trimmed[1..^1].Trim('*').Trim();
+        if (!string.IsNullOrWhiteSpace(variableName) && context.TryGet(variableName, out var value) && value is BinaryFileReference reference)
         {
             EnsureSize(reference.SizeBytes, maxBytes, reference.Path);
             return await File.ReadAllBytesAsync(reference.Path, cancellationToken);

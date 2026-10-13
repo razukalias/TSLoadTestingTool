@@ -63,7 +63,14 @@ public sealed class TestRunner
                     {
                         variables = StepVariables(data, request.StepName);
                         if (!string.IsNullOrWhiteSpace(environment)) variables["env"] = environment;
-                        foreach (var pair in correlation) variables[pair.Key] = pair.Value;
+                        foreach (var pair in correlation)
+                        {
+                            // A binary File step publishes a typed reference into the execution
+                            // context. Do not replace it with the serialized response/correlation
+                            // string before a later HTTP step consumes _*variable*_ or BodyFileVariable.
+                            if (executionContext.TryGet(pair.Key, out var existing) && existing is not string) continue;
+                            variables[pair.Key] = pair.Value;
+                        }
                         foreach (var variable in variables) executionContext.Set(variable.Key, variable.Value, VariableScope.Iteration);
                         foreach (var key in variables.Keys.ToList()) variables[key] = await ResolveDynamicValueAsync(variables[key], correlation, requestReferences, executionContext, cancellationToken);
                     }
@@ -378,12 +385,12 @@ public sealed class TestRunner
             throw new InvalidDataException($"Streaming template variable '{variableName}' is missing or is not a binary file reference.");
         if (!File.Exists(file.Path)) throw new FileNotFoundException($"Streaming template file for '{variableName}' was not found.", file.Path);
         var marker = match.Value;
-        var protectedTemplate = source.Replace(marker, "__STREAMED_BINARY_MARKER__", StringComparison.Ordinal);
+        var protectedTemplate = source.Replace(marker, "STREAMEDBINARYMARKERTOKEN", StringComparison.Ordinal);
         protectedTemplate = TemplateRenderer.Render(protectedTemplate, contentType, variables);
-        var markerIndex = protectedTemplate.IndexOf("__STREAMED_BINARY_MARKER__", StringComparison.Ordinal);
+        var markerIndex = protectedTemplate.IndexOf("STREAMEDBINARYMARKERTOKEN", StringComparison.Ordinal);
         if (markerIndex < 0) throw new InvalidDataException($"Streaming template marker for '{variableName}' was altered during template rendering.");
         var prefix = protectedTemplate[..markerIndex];
-        var suffix = protectedTemplate[(markerIndex + "__STREAMED_BINARY_MARKER__".Length)..];
+        var suffix = protectedTemplate[(markerIndex + "STREAMEDBINARYMARKERTOKEN".Length)..];
         var encodedLength = 4L * ((file.SizeBytes + 2L) / 3L);
         var summary = $"[NoLog streamed Base64 variable: {variableName}; bytes={file.SizeBytes}; base64Bytes={encodedLength}; sha256={file.Sha256}; contentType={file.ContentType}]";
         return (prefix, suffix, file, summary);
