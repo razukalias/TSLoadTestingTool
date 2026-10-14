@@ -254,7 +254,9 @@ public sealed class WorkbookEditorWindow : Window
         private readonly List<double> _widths = [];
         private readonly Button _transposeButton;
         private readonly StackPanel _rows = new() { Spacing = 1 };
-        private readonly TextBox _columnFilter = new() { Watermark = "Filter columns by header…", Width = 280 };
+        private readonly TextBox _columnFilter = new() { Watermark = "Headers: header1 & header2…", Width = 280 };
+        private readonly TextBox _rowFilter = new() { Watermark = "Rows: 1,3,5…", Width = 130 };
+        private readonly TextBox _cellValueFilter = new() { Watermark = "Cell values: value1 & value2…", Width = 250 };
         private readonly TextBlock _position = DashboardStyle.Text("Select a cell, row, or column", 11, false, DashboardStyle.Muted);
         private readonly ComboBox _zoom = new() { Width = 90, ItemsSource = new[] { "80%", "90%", "100%", "110%", "125%", "150%" }, SelectedIndex = 2 };
         private readonly Popup _suggestionPopup = new() { PlacementMode = PlacementMode.BottomEdgeAlignedLeft, IsLightDismissEnabled = false };
@@ -303,12 +305,14 @@ public sealed class WorkbookEditorWindow : Window
             var storedFontSize = sheet.CellsUsed().Select(c => c.Style.Font.FontSize).FirstOrDefault(size => size > 0);
             if (storedFontSize > 0) _fontSize = Math.Clamp(storedFontSize, 8, 24);
             _columnFilter.TextChanged += (_, _) => Render();
+            _rowFilter.TextChanged += (_, _) => Render();
+            _cellValueFilter.TextChanged += (_, _) => Render();
             _zoom.SelectionChanged += (_, _) => { _fontSize = double.TryParse((_zoom.SelectedItem?.ToString() ?? "100%").TrimEnd('%'), out var z) ? 11 * z / 100 : 11; Render(); };
             _suggestions.SelectionChanged += (_, _) => { if (!_updatingSuggestions && _suggestionPopup.IsOpen && _suggestions.SelectedItem is string value) AcceptSuggestion(value); };
             _suggestions.PointerReleased += (_, _) => { if (_suggestions.SelectedItem is string value) AcceptSuggestion(value); };
             _suggestionPopup.Child = _suggestions;
-            var help = DashboardStyle.Text("Mouse: use column letters and row numbers; Ctrl adds selections; Shift selects ranges. Drag column borders to resize. Right-click cells, rows, or headers for operations. Wrap, copy, insert, delete, and auto-fit are available in context menus.", 11, false, DashboardStyle.Muted);
-            var zoomOut = DashboardStyle.Action("A−", () => ChangeFont(-1)); zoomOut.Padding = new Thickness(7, 5); var zoomIn = DashboardStyle.Action("A+", () => ChangeFont(1)); zoomIn.Padding = new Thickness(7, 5); _transposeButton = DashboardStyle.Action("Transpose view", ToggleTranspose); var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _columnFilter, DashboardStyle.Text("Zoom", 11, false, DashboardStyle.Muted), _zoom, zoomOut, zoomIn, _transposeButton, _position } };
+            var help = DashboardStyle.Text("Mouse: use column letters and row numbers; Ctrl adds selections; Shift selects ranges. Drag column borders to resize. Right-click cells, rows, or headers for operations. Wrap, copy, insert, delete, and auto-fit are available in context menus. Filters accept multiple terms with &: headers and cell values match any term; row numbers use the original DataEngine row index, for example 1,3,5.", 11, false, DashboardStyle.Muted);
+            var zoomOut = DashboardStyle.Action("A−", () => ChangeFont(-1)); zoomOut.Padding = new Thickness(7, 5); var zoomIn = DashboardStyle.Action("A+", () => ChangeFont(1)); zoomIn.Padding = new Thickness(7, 5); _transposeButton = DashboardStyle.Action("Transpose view", ToggleTranspose); var toolbar = new WrapPanel { Orientation = Orientation.Horizontal, Children = { _columnFilter, _rowFilter, _cellValueFilter, DashboardStyle.Text("Zoom", 11, false, DashboardStyle.Muted), _zoom, zoomOut, zoomIn, _transposeButton, _position } };
             var gridScroll = new ScrollViewer { Content = _rows, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             var table = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*"), Children = { toolbar, help, gridScroll } }; Grid.SetRow(help, 1); Grid.SetRow(gridScroll, 2);
             var editorHost = new Grid { Children = { table, _suggestionPopup } };
@@ -321,11 +325,21 @@ public sealed class WorkbookEditorWindow : Window
         private string ScaleWidth(double width) => Math.Clamp(width, 100, 700).ToString(System.Globalization.CultureInfo.InvariantCulture);
         private void Render()
         {
-            _rows.Children.Clear(); _cellBoxes.Clear(); _rowHeaders.Clear(); var filter = _columnFilter.Text?.Trim() ?? "";
+            _rows.Children.Clear(); _cellBoxes.Clear(); _rowHeaders.Clear(); var headerTerms = FilterTerms(_columnFilter.Text); var valueTerms = FilterTerms(_cellValueFilter.Text); var rowFilter = ParseRowFilter(_rowFilter.Text);
             if (_transposed) { RenderTransposed(); return; }
-            _visibleColumns = Enumerable.Range(0, Headers.Length).Where(i => string.IsNullOrWhiteSpace(filter) || Headers[i].Contains(filter, StringComparison.OrdinalIgnoreCase)).ToArray();
-            if (_visibleColumns.Count == 0) { _rows.Children.Add(DashboardStyle.Text("No columns match the filter. Clear the filter to restore the grid.", color: DashboardStyle.Muted)); return; }
-            AddColumnIndexView(); AddRowView(0, true); for (var r = 1; r < _values.Count; r++) AddRowView(r, false);
+            var visibleRows = Enumerable.Range(1, Math.Max(0, _values.Count - 1)).Where(r => !rowFilter.Any() || rowFilter.Contains(r)).ToArray();
+            _visibleColumns = Enumerable.Range(0, Headers.Length).Where(i => MatchesAny(Headers[i], headerTerms) && (!valueTerms.Any() || visibleRows.Any(r => MatchesAny(_values[r][i], valueTerms)))).ToArray();
+            if (_visibleColumns.Count == 0) { _rows.Children.Add(DashboardStyle.Text("No columns match the active header/value filters. Clear or adjust the filters to restore the grid.", color: DashboardStyle.Muted)); return; }
+            AddColumnIndexView(); AddRowView(0, true); foreach (var r in visibleRows) AddRowView(r, false);
+        }
+        private static string[] FilterTerms(string? text) => (text ?? string.Empty).Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        private static bool MatchesAny(string value, IReadOnlyList<string> terms) => terms.Count == 0 || terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
+        private static HashSet<int> ParseRowFilter(string? text)
+        {
+            var rows = new HashSet<int>();
+            foreach (var token in (text ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                if (int.TryParse(token, out var row) && row > 0) rows.Add(row);
+            return rows;
         }
 
         private void ToggleTranspose()

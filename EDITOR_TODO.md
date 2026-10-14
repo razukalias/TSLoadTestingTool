@@ -45,21 +45,32 @@ Recommended future implementation approach:
 
 ## Medium priority
 
-### 2. Improve cell and row height behavior
+### 2. Support `<From_...>` references for File-step outputs
+
+**Current status:** Deferred for later testing and implementation. File outputs can currently be injected into HTTP templates with `_*fileData*_` for streamed Base64, but there is no binary-aware `<From_...>` form.
+
+Required behavior:
+
+- Define and document a clear File-step reference syntax, without breaking existing request/response references.
+- Support large `BinaryFileReference` values without materializing the complete payload in Excel history or internal logs.
+- Preserve the existing `_*variable*_` streaming syntax as a compatible alternative.
+- Add an integration test covering `ReadBinary` followed by HTTP JSON injection.
+
+### 3. Improve cell and row height behavior
 
 - Add manual row-height resizing with the mouse.
 - Add automatic row-height / best-fit behavior.
 - Keep row heights stable when switching sheets or filtering columns.
 - Ensure wrapped cells do not show an internal vertical scrollbar.
 
-### 3. Complete Excel-like editing operations
+### 4. Complete Excel-like editing operations
 
 - Verify copy/paste for cells, rows, and columns across filtered and unfiltered views.
 - Preserve formatting, wrap state, and column widths when copying rows or columns.
 - Add undo/redo coverage for insert, delete, copy, paste, wrap, and resize actions.
 - Add a reliable context menu for row and column indexes.
 
-### 4. Autocomplete improvements
+### 5. Autocomplete improvements
 
 - Keep autocomplete working in normal cells and directly edited headers.
 - Verify `<From_...>` suggestions are filtered by the active sheet and headers.
