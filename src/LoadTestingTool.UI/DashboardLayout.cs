@@ -13,7 +13,7 @@ namespace LoadTestingTool.UI;
 
 internal static class DashboardStyle
 {
-    public const string Build = "Dashboard 2026.10.14.2";
+    public const string Build = "Dashboard 2026.10.14.3";
     public static IBrush Brush(string color) => new SolidColorBrush(Color.Parse(color));
     public static IBrush Panel => Brush("#101E2E");
     public static IBrush Muted => Brush("#8EA4BC");
@@ -83,7 +83,9 @@ internal sealed class InstanceRow : Border
         var name = DashboardStyle.Text(item.Name, 12, true);
         ToolTip.SetTip(name, item.WorkbookPath);
         var actions = new WrapPanel { Orientation = Orientation.Horizontal, ItemWidth = double.NaN, ItemHeight = double.NaN };
-        foreach (var button in new[] { DashboardStyle.Action("Run", () => run(item), "primary"), DashboardStyle.Action("Stop", () => stop(item)), DashboardStyle.Action("Configure", () => configure(item)), DashboardStyle.Action("Add step", () => addStep(item)), DashboardStyle.Action("Edit step", () => editStep(item)), DashboardStyle.Action("Edit workbook", () => editWorkbook(item)), DashboardStyle.Action("Open workbook", () => openWorkbook(item)), DashboardStyle.Action("Internal log", () => openLog(item)), DashboardStyle.Action("History", () => openHistory(item)) }) { button.Margin = new Thickness(0, 0, 4, 4); button.Padding = new Thickness(7, 5); actions.Children.Add(button); }
+        var runButton = DashboardStyle.Action("Run", () => run(item), "primary");
+        ToolTip.SetTip(runButton, "Run all enabled workbook steps using workbook defaults. Use Configure first for a custom selection.");
+        foreach (var button in new[] { runButton, DashboardStyle.Action("Stop", () => stop(item)), DashboardStyle.Action("Configure", () => configure(item)), DashboardStyle.Action("Add step", () => addStep(item)), DashboardStyle.Action("Edit step", () => editStep(item)), DashboardStyle.Action("Edit workbook", () => editWorkbook(item)), DashboardStyle.Action("Open workbook", () => openWorkbook(item)), DashboardStyle.Action("Internal log", () => openLog(item)), DashboardStyle.Action("History", () => openHistory(item)) }) { button.Margin = new Thickness(0, 0, 4, 4); button.Padding = new Thickness(7, 5); actions.Children.Add(button); }
         var cells = new Control[] { _check, name, _testcases, _mode, _order, _environment, _badgeHost, actions };
         for (var i = 0; i < cells.Length; i++) { Grid.SetColumn(cells[i], i); cells[i].Margin = new Thickness(0, 0, 6, 0); grid.Children.Add(cells[i]); }
         Child = grid;
@@ -163,7 +165,7 @@ public sealed partial class MainWindow
 
         var heading = new StackPanel { Spacing = 5, Children = { _pageTitle, DashboardStyle.Text("Manage test instances and inspect execution results", 12, false, DashboardStyle.Muted) } };
         _chooseButton = DashboardStyle.Action("Choose what to run", () => _ = ChooseRunSelectionAsync(_selectedInstance ?? _instances.FirstOrDefault(x => x.Selected)));
-        _runButton = DashboardStyle.Action("▶  Run selected", RunSelected, "primary");
+        _runButton = DashboardStyle.Action("▶  Run selected", () => RunSelected(), "primary");
         _stopButton = DashboardStyle.Action("Stop selected", () => StopSelected(false));
         _forceButton = DashboardStyle.Action("Force stop", () => StopSelected(true), "danger");
         var commands = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Children = { _chooseButton, _runButton, _stopButton, _forceButton } };

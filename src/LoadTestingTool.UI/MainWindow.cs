@@ -413,7 +413,7 @@ public sealed partial class MainWindow : Window
     private void RunSingleInstance(InstanceInfo item)
     {
         foreach (var other in _instances) other.Selected = false;
-        item.Selected = true; _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item); RunSelected();
+        item.Selected = true; _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item); RunSelected(promptForMissingSelection: false);
     }
     private void StopSingleInstance(InstanceInfo item)
     {
@@ -472,7 +472,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void RunSelected()
+    private async void RunSelected(bool promptForMissingSelection = true)
     {
         var selected = _instances.Where(x => x.Selected).ToList();
         UiLog($"Run selected started. selected={selected.Count}; runnable={selected.Count(x => x.Process is null || x.Process.HasExited)}");
@@ -480,7 +480,7 @@ public sealed partial class MainWindow : Window
         {
             try
             {
-                if (!item.HasAppliedSelection && !await ChooseRunSelectionAsync(item)) continue;
+                if (promptForMissingSelection && !item.HasAppliedSelection && !await ChooseRunSelectionAsync(item)) continue;
                 Directory.CreateDirectory(item.ResultsFolder);
                 var runner = Path.GetFullPath(_config.RunnerDll);
                 var selection = string.IsNullOrWhiteSpace(item.TestcaseSelection) ? "0" : item.TestcaseSelection;
