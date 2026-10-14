@@ -130,7 +130,7 @@ public sealed partial class MainWindow : Window
     private InstanceRow GetOrCreateRow(InstanceInfo item)
     {
         if (_rows.TryGetValue(item.FolderPath, out var existing)) return existing;
-        var row = new InstanceRow(item, selected => { UiLog($"UI action: instance row clicked. instance={selected.Name}"); _instanceList.SelectedItem = selected; ShowDetails(selected); }, selected => OpenInstanceConfiguration(selected), selected => OpenStepWizardForInstance(selected), selected => EditStepForInstance(selected), selected => EditWorkbookForInstance(selected), selected => OpenWorkbookForInstance(selected), UiLog);
+        var row = new InstanceRow(item, selected => { UiLog($"UI action: instance row clicked. instance={selected.Name}"); _instanceList.SelectedItem = selected; ShowDetails(selected); }, selected => OpenInstanceConfiguration(selected), selected => OpenStepWizardForInstance(selected), selected => EditStepForInstance(selected), selected => EditWorkbookForInstance(selected), selected => OpenWorkbookForInstance(selected), RunSingleInstance, StopSingleInstance, OpenInstanceLog, OpenInstanceHistory, UiLog);
         row.SetEnvironmentOptions(item.EnvironmentOptions);
         _rows[item.FolderPath] = row;
         return row;
@@ -155,11 +155,13 @@ public sealed partial class MainWindow : Window
         var values = _selectedInstance?.Assertions
             .Where(a => string.IsNullOrWhiteSpace(selectedEnvironment) || selectedEnvironment == "All environments" || a.Environment.Equals(selectedEnvironment, StringComparison.OrdinalIgnoreCase))
             .Where(a => !_failedOnly.IsChecked.GetValueOrDefault() || a.Result == "FAIL")
+            .Where(a => MatchesTerms($"{a.Environment} {a.Testcase} {a.DataId} {a.StepName} {a.ResponsePath} {a.AssertionVerb} {a.ExpectedValue} {a.ActualValue} {a.Result}", _assertionSearch.Text))
             .ToList() ?? [];
         _assertionItems.Children.Clear();
         foreach (var assertion in values) _assertionItems.Children.Add(CreateAssertionRow(assertion));
         UiLog($"Assertion list refreshed. instance={_selectedInstance?.Name ?? "<none>"}; environment={selectedEnvironment ?? "<none>"}; failedOnly={_failedOnly.IsChecked == true}; visible={values.Count}; total={_selectedInstance?.Assertions.Count ?? 0}");
     }
+    private static bool MatchesTerms(string value, string? filter) => (filter ?? string.Empty).Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).All(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
 
     private void UpdateEnvironmentFilterOptions()
     {
@@ -407,6 +409,23 @@ public sealed partial class MainWindow : Window
     {
         _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item);
         OpenExcelFile(item.WorkbookPath, "DataEngine workbook");
+    }
+    private void RunSingleInstance(InstanceInfo item)
+    {
+        foreach (var other in _instances) other.Selected = false;
+        item.Selected = true; _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item); RunSelected();
+    }
+    private void StopSingleInstance(InstanceInfo item)
+    {
+        item.Selected = true; _selectedInstance = item; _instanceList.SelectedItem = item; StopSelected(false);
+    }
+    private void OpenInstanceLog(InstanceInfo item)
+    {
+        _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item); OpenLatestInternalLog();
+    }
+    private void OpenInstanceHistory(InstanceInfo item)
+    {
+        _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item); OpenLatestResultWorkbook();
     }
 
     private void SaveWizardStep(InstanceInfo item, WizardStepDraft step)

@@ -13,7 +13,7 @@ namespace LoadTestingTool.UI;
 
 internal static class DashboardStyle
 {
-    public const string Build = "Dashboard 2026.10.14.1";
+    public const string Build = "Dashboard 2026.10.14.2";
     public static IBrush Brush(string color) => new SolidColorBrush(Color.Parse(color));
     public static IBrush Panel => Brush("#101E2E");
     public static IBrush Muted => Brush("#8EA4BC");
@@ -70,20 +70,20 @@ internal sealed class InstanceRow : Border
     private readonly TextBlock _order = DashboardStyle.Text("");
     private readonly TextBlock _environment = DashboardStyle.Text("");
     private readonly Border _badgeHost = new();
-    public InstanceRow(InstanceInfo item, Action<InstanceInfo> select, Action<InstanceInfo> configure, Action<InstanceInfo> addStep, Action<InstanceInfo> editStep, Action<InstanceInfo> editWorkbook, Action<InstanceInfo> openWorkbook, Action<string> log)
+    public InstanceRow(InstanceInfo item, Action<InstanceInfo> select, Action<InstanceInfo> configure, Action<InstanceInfo> addStep, Action<InstanceInfo> editStep, Action<InstanceInfo> editWorkbook, Action<InstanceInfo> openWorkbook, Action<InstanceInfo> run, Action<InstanceInfo> stop, Action<InstanceInfo> openLog, Action<InstanceInfo> openHistory, Action<string> log)
     {
         _item = item;
         Padding = new Thickness(8, 12);
         HorizontalAlignment = HorizontalAlignment.Stretch;
         BorderBrush = DashboardStyle.Line;
         BorderThickness = new Thickness(0, 0, 0, 1);
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("30,*,62,80,82,90,92,430"), MinWidth = 1160 };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("30,*,62,80,82,90,92,560"), MinWidth = 1290 };
         _check = new CheckBox { IsChecked = item.Selected, VerticalAlignment = VerticalAlignment.Center, MinWidth = 24 };
         _check.IsCheckedChanged += (_, _) => { item.Selected = _check.IsChecked == true; log($"Instance selection changed. instance={item.Name}; selected={item.Selected}"); select(item); Refresh(); };
         var name = DashboardStyle.Text(item.Name, 12, true);
         ToolTip.SetTip(name, item.WorkbookPath);
         var actions = new WrapPanel { Orientation = Orientation.Horizontal, ItemWidth = double.NaN, ItemHeight = double.NaN };
-        foreach (var button in new[] { DashboardStyle.Action("Configure", () => configure(item), "primary"), DashboardStyle.Action("Add step", () => addStep(item)), DashboardStyle.Action("Edit step", () => editStep(item)), DashboardStyle.Action("Edit workbook", () => editWorkbook(item)), DashboardStyle.Action("Open workbook", () => openWorkbook(item)) }) { button.Margin = new Thickness(0, 0, 4, 4); button.Padding = new Thickness(7, 5); actions.Children.Add(button); }
+        foreach (var button in new[] { DashboardStyle.Action("Run", () => run(item), "primary"), DashboardStyle.Action("Stop", () => stop(item)), DashboardStyle.Action("Configure", () => configure(item)), DashboardStyle.Action("Add step", () => addStep(item)), DashboardStyle.Action("Edit step", () => editStep(item)), DashboardStyle.Action("Edit workbook", () => editWorkbook(item)), DashboardStyle.Action("Open workbook", () => openWorkbook(item)), DashboardStyle.Action("Internal log", () => openLog(item)), DashboardStyle.Action("History", () => openHistory(item)) }) { button.Margin = new Thickness(0, 0, 4, 4); button.Padding = new Thickness(7, 5); actions.Children.Add(button); }
         var cells = new Control[] { _check, name, _testcases, _mode, _order, _environment, _badgeHost, actions };
         for (var i = 0; i < cells.Length; i++) { Grid.SetColumn(cells[i], i); cells[i].Margin = new Thickness(0, 0, 6, 0); grid.Children.Add(cells[i]); }
         Child = grid;
@@ -118,6 +118,8 @@ public sealed partial class MainWindow
     private readonly TextBlock _historyCompare = DashboardStyle.Text("Select two history files to compare.", 12, false, DashboardStyle.Muted);
     private bool _historyRefreshing;
     private readonly StackPanel _eventPanel = new() { Spacing = 3 };
+    private readonly TextBox _overviewFilter = new() { Watermark = "Filter overview: term1 & term2…", Width = 260 };
+    private readonly TextBox _assertionSearch = new() { Watermark = "Filter assertions: term1 & term2…", Width = 260 };
     private readonly TextBlock _selectedTitle = DashboardStyle.Text("Selected instance", 16, true);
     private readonly TextBlock _pageTitle = DashboardStyle.Text("Instances", 18, true);
     private readonly TextBlock _listTitle = DashboardStyle.Text("Test instances", 15, true);
@@ -213,7 +215,9 @@ public sealed partial class MainWindow
         _environmentFilter.Width = 175; _environmentFilter.Margin = new Thickness(0);
         _environmentFilter.SelectionChanged += (_, _) => RefreshAssertionList();
         _environmentFilter.ItemsSource = new[] { "All environments" }; _environmentFilter.SelectedIndex = 0;
-        var assertionActions = new WrapPanel { Children = { DashboardStyle.Action("Select failed", () => { if (_selectedInstance is not null) foreach (var a in _selectedInstance.Assertions.Where(a => a.Result == "FAIL")) a.Selected = true; RefreshAssertionList(); }),
+        _overviewFilter.TextChanged += (_, _) => RefreshDashboardDetails(true);
+        _assertionSearch.TextChanged += (_, _) => RefreshAssertionList();
+        var assertionActions = new WrapPanel { Children = { _assertionSearch, DashboardStyle.Action("Copy assertions", () => _ = CopyAssertionsAsync()), DashboardStyle.Action("Select failed", () => { if (_selectedInstance is not null) foreach (var a in _selectedInstance.Assertions.Where(a => a.Result == "FAIL")) a.Selected = true; RefreshAssertionList(); }),
             DashboardStyle.Action("Clear", () => { if (_selectedInstance is not null) foreach (var a in _selectedInstance.Assertions) a.Selected = false; RefreshAssertionList(); }),
             DashboardStyle.Action("Apply actual values", ApplySelectedFixes), DashboardStyle.Action("Export comparison", () => _ = GenerateAssertionComparisonAsync()) } };
         var assertionPanel = new DockPanel { Margin = new Thickness(12) };
@@ -224,15 +228,16 @@ public sealed partial class MainWindow
         {
             new TabItem { Header = "Overview", Content = Scroll(_overviewPanel) },
             new TabItem { Header = "Assertions", Content = assertionPanel },
-            new TabItem { Header = "Config", Content = Scroll(_configurationPanel) },
             new TabItem { Header = "Artifacts", Content = Scroll(_artifactPanel) }
         };
+        _overviewPanel.Children.Insert(0, new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _overviewFilter, DashboardStyle.Action("Copy overview", () => _ = CopyOverviewAsync()) } });
         var selectedHeader = new StackPanel { Spacing = 6, Margin = new Thickness(14), Children = { _selectedTitle,
             DashboardStyle.Text("Select a row to inspect. Tick a box to run.", 11, false, DashboardStyle.Muted) } };
         var right = new DockPanel(); DockPanel.SetDock(selectedHeader, Dock.Top); right.Children.Add(selectedHeader); right.Children.Add(_detailTabs);
         var rightCard = DashboardStyle.Card(right, new Thickness(0)); rightCard.Margin = new Thickness(14, 0, 0, 0);
-        _body = new Grid { ColumnDefinitions = new ColumnDefinitions("*,375") };
-        _body.Children.Add(left); Grid.SetColumn(rightCard, 1); _body.Children.Add(rightCard);
+        var splitter = new GridSplitter { Width = 5, Background = DashboardStyle.Line, ResizeDirection = GridResizeDirection.Columns, ResizeBehavior = GridResizeBehavior.PreviousAndNext, HorizontalAlignment = HorizontalAlignment.Stretch };
+        _body = new Grid { ColumnDefinitions = new ColumnDefinitions("*,5,375") };
+        _body.Children.Add(left); Grid.SetColumn(splitter, 1); _body.Children.Add(splitter); Grid.SetColumn(rightCard, 2); _body.Children.Add(rightCard);
         Grid.SetRow(_body, 1); _workspace.Children.Add(_body);
         _workspace.Margin = new Thickness(18, 0, 18, 0);
         _settingsPage = CreateSettingsPage(); _historyPage = Scroll(_historyPanel);
@@ -247,7 +252,7 @@ public sealed partial class MainWindow
         Navigate("Instances");
     }
 
-    private static ScrollViewer Scroll(Control control) => new() { Content = control, Padding = new Thickness(14), HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+    private static ScrollViewer Scroll(Control control) => new() { Content = control, Padding = new Thickness(14), HorizontalScrollBarVisibility = ScrollBarVisibility.Auto };
     private void Navigate(string page)
     {
         _page = page; _pageTitle.Text = page;
@@ -373,22 +378,24 @@ public sealed partial class MainWindow
         _selectedTitle.Text = item?.Name ?? "Selected instance";
         ToolTip.SetTip(_selectedTitle, item?.Name);
         _overviewPanel.Children.Clear();
+        _overviewPanel.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _overviewFilter, DashboardStyle.Action("Copy overview", () => _ = CopyOverviewAsync()) } });
         if (item is null)
         {
             _overviewPanel.Children.Add(DashboardStyle.Text("Select an instance to inspect its run.", color: DashboardStyle.Muted));
             _eventPanel.Children.Clear(); _eventPanel.Children.Add(DashboardStyle.Text("No selected instance.", color: DashboardStyle.Muted));
             _artifactPanel.Children.Clear(); return;
         }
-        _overviewPanel.Children.Add(DashboardStyle.Badge(item.Status));
-        _overviewPanel.Children.Add(KeyValue("Environment", string.IsNullOrWhiteSpace(item.EnvironmentSelection) ? "All workbook environments" : item.EnvironmentSelection));
-        _overviewPanel.Children.Add(KeyValue("Mode / order", $"{(item.ExecutionMode == "loop" ? "Loop" : "Threaded")} / {(item.RunScenariosInParallel ? "Parallel" : "Sequential")}"));
-        _overviewPanel.Children.Add(KeyValue("Started", item.StartedAt?.ToString("HH:mm:ss") ?? "Not started"));
-        _overviewPanel.Children.Add(KeyValue("Requests", (item.CompletedRequests ?? item.Requests.Count).ToString()));
+        void AddOverview(Control control, string searchable) { if (MatchesTerms(searchable, _overviewFilter.Text)) _overviewPanel.Children.Add(control); }
+        AddOverview(DashboardStyle.Badge(item.Status), item.Status);
+        AddOverview(KeyValue("Environment", string.IsNullOrWhiteSpace(item.EnvironmentSelection) ? "All workbook environments" : item.EnvironmentSelection), item.EnvironmentSelection);
+        AddOverview(KeyValue("Mode / order", $"{(item.ExecutionMode == "loop" ? "Loop" : "Threaded")} / {(item.RunScenariosInParallel ? "Parallel" : "Sequential")}"), $"{item.ExecutionMode} {(item.RunScenariosInParallel ? "Parallel" : "Sequential")}");
+        AddOverview(KeyValue("Started", item.StartedAt?.ToString("HH:mm:ss") ?? "Not started"), item.StartedAt?.ToString() ?? "Not started");
+        AddOverview(KeyValue("Requests", (item.CompletedRequests ?? item.Requests.Count).ToString()), $"{item.CompletedRequests} {item.Requests.Count}");
         var average = item.AverageMs ?? (item.Requests.Count == 0 ? (double?)null : item.Requests.Average(r => r.DurationMs));
-        _overviewPanel.Children.Add(KeyValue("Avg. latency", average is null ? "—" : $"{average:F1} ms"));
-        _overviewPanel.Children.Add(KeyValue("p95 latency", item.P95Ms is null ? "Available on completion" : $"{item.P95Ms} ms"));
-        _overviewPanel.Children.Add(KeyValue("Throughput", item.RequestsPerSecond is null ? "Available on completion" : $"{item.RequestsPerSecond:F2} requests / sec"));
-        _overviewPanel.Children.Add(KeyValue("Assertions", $"{item.Assertions.Count(a => a.Result == "PASS")} passed / {item.Assertions.Count(a => a.Result == "FAIL")} failed"));
+        AddOverview(KeyValue("Avg. latency", average is null ? "—" : $"{average:F1} ms"), average?.ToString() ?? "Available");
+        AddOverview(KeyValue("p95 latency", item.P95Ms is null ? "Available on completion" : $"{item.P95Ms} ms"), item.P95Ms?.ToString() ?? "Available");
+        AddOverview(KeyValue("Throughput", item.RequestsPerSecond is null ? "Available on completion" : $"{item.RequestsPerSecond:F2} requests / sec"), item.RequestsPerSecond?.ToString() ?? "Available");
+        AddOverview(KeyValue("Assertions", $"{item.Assertions.Count(a => a.Result == "PASS")} passed / {item.Assertions.Count(a => a.Result == "FAIL")} failed"), $"{item.Assertions.Count} pass fail");
         _overviewPanel.Children.Add(new Border { Height = 1, Background = DashboardStyle.Line });
         _overviewPanel.Children.Add(DashboardStyle.Text("Run timeline  /  completed steps", 14, true));
         if (item.Requests.Count == 0) _overviewPanel.Children.Add(DashboardStyle.Text("No completed steps yet. Run this instance to see results.", 12, false, DashboardStyle.Muted));
@@ -405,7 +412,7 @@ public sealed partial class MainWindow
             var line = new StackPanel { Spacing = 4, Children = { top, bottom } };
             if (!string.IsNullOrWhiteSpace(request.FailureCategory) && request.FailureCategory != "None")
                 line.Children.Add(DashboardStyle.Text($"{request.FailureCategory}: {request.Error}", 11, false, DashboardStyle.Red));
-            _overviewPanel.Children.Add(DashboardStyle.Card(line, new Thickness(10)));
+            if (MatchesTerms($"{request.StepType} {request.StepName} {request.Testcase} {request.DataId} {request.Result} {request.Error}", _overviewFilter.Text)) _overviewPanel.Children.Add(DashboardStyle.Card(line, new Thickness(10)));
         }
         if (item.Requests.Count > 0)
         {
@@ -435,6 +442,30 @@ public sealed partial class MainWindow
         _artifactPanel.Children.Add(KeyValue("Workbook", item.WorkbookPath));
         _artifactPanel.Children.Add(KeyValue("Results", item.ResultsFolder));
         _artifactPanel.Children.Add(KeyValue("Current run", item.CurrentRunFolder));
+    }
+    private async Task CopyOverviewAsync()
+    {
+        if (_selectedInstance is null) return;
+        var item = _selectedInstance;
+        var lines = new List<string>
+        {
+            $"Instance: {item.Name}", $"Status: {item.Status}", $"Environment: {item.EnvironmentSelection}",
+            $"Run ID: {item.CurrentRunId}", $"Last event: {item.LastEvent}"
+        };
+        lines.AddRange(item.Requests.Select(r => $"{r.Result} | {r.Testcase} | {r.DataId} | {r.StepType}/{r.StepName} | {r.DurationMs} ms | {r.Error}"));
+        await CopyTextAsync(string.Join(Environment.NewLine, lines));
+    }
+    private async Task CopyAssertionsAsync()
+    {
+        if (_selectedInstance is null) return;
+        var lines = _selectedInstance.Assertions.Select(a => $"{a.Result} | {a.Environment} | {a.Testcase} | {a.DataId} | {a.StepName} | {a.ResponsePath} {a.AssertionVerb} | expected={a.ExpectedValue} | actual={a.ActualValue}");
+        await CopyTextAsync(string.Join(Environment.NewLine, lines));
+    }
+    private async Task CopyTextAsync(string text)
+    {
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is not null) await clipboard.SetTextAsync(text);
+        _details.Text = "Copied dashboard details to the clipboard.";
     }
     private async void RefreshHistoryPanel()
     {

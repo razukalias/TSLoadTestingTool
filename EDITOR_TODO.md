@@ -92,3 +92,86 @@ Required behavior:
 - [ ] Confirm unwrapped rows return to normal height.
 - [ ] Run automated regression tests.
 - [ ] Test the packaged Windows build.
+
+## UI and instance-management backlog
+
+The following requirements were captured from the latest UI review and are intentionally recorded before implementation.
+
+### High priority: create and configure instances
+
+**Current status:** Implemented in the current source; manual UI verification remains.
+
+- [x] Fix **Create new instance** so the instance name is editable before creation.
+- [x] Use a clear unique default name beginning with `DataEngine_`.
+- Keep the instance display name, instance folder name, workbook name, and configuration paths synchronized.
+- Allow renaming an existing instance safely, with validation for invalid or duplicate folder names.
+- Prevent the create-instance flow from unexpectedly opening the configure-instance form.
+- [x] Add **Select all instances** and **Clear all instances** actions.
+- [x] Add suitable per-instance **Run**, **Stop**, and, where applicable, **Force stop** actions.
+- Preserve the legacy configuration route only where it is still needed internally; remove the obsolete legacy configuration panel from the right-side dashboard UI.
+
+### High priority: test-step editor and wizard
+
+**Current status:** Partially implemented; manual field-by-field UI verification remains.
+
+- [x] In **Edit / Add new test step**, allow double-clicking a list item to open the corresponding editor.
+- Show only fields relevant to the selected step type; switching types must not collapse or corrupt the window.
+- Review every supported step type and verify its complete field set, including at least:
+  - HTTP
+  - GraphQL
+  - Script
+  - SQL
+  - File
+  - Wait
+  - assertion-only-response behavior
+- [x] Add dropdowns for HTTP verbs, content types, File actions/modes, and SQL command type.
+- Add validation, required-field indicators, and useful defaults for each step type.
+- [x] Keep template editing step-aware and select the format from the step type/file extension.
+- [x] Add wizard Help guidance with field descriptions, valid values, examples, variable syntax, and common errors.
+- [x] Add guidance for Script, GraphQL, SQL, File, Wait, and assertion-related settings.
+- Validate template variables such as `_variable_`, references, and step-specific configuration before saving.
+
+### High priority: run behavior and instance actions
+
+**Current status:** Partially implemented; manual run/stop and artifact-opening verification remains.
+
+- Diagnose and fix why clicking **Run instance** opens the instance configuration form instead of starting the selected run or opening the intended run-selection flow.
+- Keep run selection separate from instance configuration.
+- [x] Make Run, Stop, and Force stop state-aware and disable actions when they are not applicable.
+- [x] Show the active run status on the instance item and retain the active run ID in the selected detail/artifact view.
+- [x] Add instance-item actions to open:
+  - The internal log for the selected run.
+  - History results for the selected run.
+  - Filtered testcase/environment results for that run ID.
+- Use a compact action area or overflow menu so instance rows remain readable.
+
+### Medium priority: dashboard detail panel
+
+**Current status:** Implemented in the current source; manual interaction and copy verification remains.
+
+- [x] Make the right-side detail panel resizable by dragging its divider with the mouse.
+- [x] Add horizontal scrolling where detail content is wider than the panel.
+- [x] Add Copy overview and Copy assertions actions for long detail content.
+- [x] Add a text filter for Overview items with `&` support for multiple terms.
+- [x] Add a text filter for Assertion items with `&` support for multiple terms.
+- Define multi-term behavior consistently: `term1 & term2` matches items containing any supplied term unless an explicit all-terms mode is later added.
+- Keep long values wrapped/readable without collapsing the dashboard.
+- [x] Remove the obsolete **Legacy config** section from the right-side panel.
+
+### Verification checklist
+
+- [ ] Create an instance and confirm the editable default name starts with `DataEngine_`.
+- [ ] Rename an instance and confirm folder, workbook, and UI references remain consistent.
+- [ ] Select all instances and clear all selections.
+- [ ] Double-click each step type and confirm the correct wizard opens.
+- [ ] Verify fields and dropdowns for HTTP, GraphQL, Script, SQL, File, Wait, and assertion-only-response configurations.
+- [ ] Confirm irrelevant template editors and fields are hidden.
+- [ ] Open each step-type Help view and verify examples.
+- [ ] Confirm Run instance starts the intended run instead of opening configuration unexpectedly.
+- [ ] Run, stop, and force-stop from an instance item where applicable.
+- [ ] Open internal log and history filtered by run ID, testcase, and environment.
+- [ ] Resize and horizontally scroll the right-side detail panel.
+- [ ] Copy long Overview and Assertion values.
+- [ ] Verify `&` filtering for Overview and Assertions.
+- [ ] Confirm Legacy config is absent from the right-side panel.
+- [ ] Build and test the packaged Windows version.

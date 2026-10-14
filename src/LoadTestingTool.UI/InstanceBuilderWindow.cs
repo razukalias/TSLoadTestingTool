@@ -8,7 +8,7 @@ namespace LoadTestingTool.UI;
 
 public sealed class InstanceBuilderWindow : Window
 {
-    private readonly TextBox _name = new() { Text = "NewDataEngineInstance" };
+    private readonly TextBox _name = new() { Text = "DataEngine_" };
     private readonly TextBox _folder = new() { Text = "" };
     private readonly ComboBox _template = new() { ItemsSource = new[] { "Full DataEngine template", "Minimal HTTP template" }, SelectedIndex = 0 };
     private readonly TextBox _message = new() { TextWrapping = Avalonia.Media.TextWrapping.Wrap };
@@ -20,10 +20,12 @@ public sealed class InstanceBuilderWindow : Window
         Title = "Create DataEngine instance";
         Width = 900; Height = 680; MinWidth = 760; MinHeight = 560;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        var suffix = 1;
+        while (Directory.Exists(Path.Combine(defaultRoot, _name.Text))) _name.Text = $"DataEngine_{suffix++}";
         _folder.Text = Path.Combine(defaultRoot, _name.Text);
         _name.TextChanged += (_, _) =>
         {
-            if (string.IsNullOrWhiteSpace(_folder.Text) || _folder.Text.EndsWith("NewDataEngineInstance", StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrWhiteSpace(_folder.Text) || _folder.Text.EndsWith(Path.DirectorySeparatorChar + "DataEngine_", StringComparison.OrdinalIgnoreCase) || _folder.Text.EndsWith("NewDataEngineInstance", StringComparison.OrdinalIgnoreCase))
                 _folder.Text = Path.Combine(defaultRoot, _name.Text.Trim());
             Validate();
         };
@@ -57,7 +59,8 @@ public sealed class InstanceBuilderWindow : Window
     private void Validate()
     {
         var name = _name.Text?.Trim() ?? ""; var folder = _folder.Text?.Trim() ?? "";
-        _message.Text = string.IsNullOrWhiteSpace(name) ? "Enter an instance name." : string.IsNullOrWhiteSpace(folder) ? "Choose an instance folder." : "";
+        var validName = name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
+        _message.Text = string.IsNullOrWhiteSpace(name) ? "Enter an instance name." : !validName ? "Instance name contains invalid filename characters." : string.IsNullOrWhiteSpace(folder) ? "Choose an instance folder." : "";
         _create.IsEnabled = string.IsNullOrWhiteSpace(_message.Text);
     }
     private void Create()

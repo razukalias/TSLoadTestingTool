@@ -15,11 +15,13 @@ internal sealed class StepPickerWindow : Window
         var list = new ListBox { ItemsSource = BuildItems(catalog), MinHeight = 280 };
         var allItems = (list.ItemsSource as IEnumerable<StepChoice>)?.ToList() ?? [];
         search.TextChanged += (_, _) => list.ItemsSource = allItems.Where(x => x.Label.Contains(search.Text ?? "", StringComparison.OrdinalIgnoreCase)).ToList();
-        var open = DashboardStyle.Action("Edit selected step", () =>
+        void OpenSelected()
         {
             if (list.SelectedItem is not StepChoice choice) return;
             selected(choice.TestcaseIndex, choice.StepName); Close();
-        }, "primary");
+        }
+        var open = DashboardStyle.Action("Edit selected step", OpenSelected, "primary");
+        list.DoubleTapped += (_, _) => OpenSelected();
         var cancel = DashboardStyle.Action("Cancel", Close);
         var help = DashboardStyle.Action("Help", () => ContextHelpWindow.Show(this, "Edit step picker help", "Choose the testcase and step to edit. The wizard then loads the existing config row, including its StepConfig JSON. Changes are written back to the config sheet and a workbook backup is created."));
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { help, cancel, open } };

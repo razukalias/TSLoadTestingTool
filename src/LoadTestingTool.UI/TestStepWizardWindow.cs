@@ -14,26 +14,31 @@ internal sealed class TestStepWizardWindow : Window
     private readonly TextBox _testcaseIndex = Field("1");
     private readonly TextBox _testcase = Field("ExampleTest");
     private readonly TextBox _stepName = Field("NewStep");
-    private readonly ComboBox _stepType = new() { Width = 230, ItemsSource = new[] { "HTTP", "GraphQL", "File", "Script", "SQL" }, SelectedIndex = 0 };
+    private readonly ComboBox _stepType = new() { Width = 230, ItemsSource = new[] { "HTTP", "GraphQL", "CaseQL", "File", "Script", "SQL" }, SelectedIndex = 0 };
     private readonly ComboBox _stage = new() { Width = 180, ItemsSource = new[] { "Setup", "Test", "Teardown" }, SelectedIndex = 1 };
     private readonly CheckBox _enabled = new() { Content = "Enabled", IsChecked = true };
     private readonly TextBox _timeout = Field("30");
     private readonly TextBox _targetUrl = Field("https://example.test/api");
-    private readonly TextBox _verb = Field("GET");
+    private readonly ComboBox _verb = new() { Width = 240, ItemsSource = new[] { "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS" }, SelectedIndex = 0 };
     private readonly TextBox _template = Field("request.json");
-    private readonly TextBox _contentType = Field("application/json");
+    private readonly ComboBox _contentType = new() { Width = 240, ItemsSource = new[] { "application/json", "application/xml", "text/plain", "application/graphql", "application/octet-stream" }, SelectedIndex = 0 };
     private readonly TextBox _expectedStatus = Field("200");
     private readonly TextBox _environments = Field("local");
     private readonly TextBox _graphqlQuery = Field("query Example { field }");
     private readonly TextBox _graphqlOperation = Field("Example");
     private readonly TextBox _graphqlVariables = Field("{}");
-    private readonly TextBox _fileAction = Field("ReadBinary");
+    private readonly ComboBox _fileAction = new() { Width = 240, ItemsSource = new[] { "Read", "Json", "ReadBinary", "Write", "Append", "WriteBinary", "AppendBinary" }, SelectedIndex = 2 };
     private readonly TextBox _filePath = Field("Files/image.png");
     private readonly TextBox _fileOutput = Field("fileData");
-    private readonly TextBox _fileMode = Field("Reference");
+    private readonly ComboBox _fileMode = new() { Width = 240, ItemsSource = new[] { "Value", "Reference" }, SelectedIndex = 1 };
     private readonly TextBox _scriptSource = Field("Scripts/setup.csx");
     private readonly TextBox _sqlConnection = Field("Default");
     private readonly TextBox _sqlQuery = Field("select 1");
+    private readonly ComboBox _sqlCommandType = new() { Width = 240, ItemsSource = new[] { "Text", "StoredProcedure" }, SelectedIndex = 0 };
+    private readonly TextBox _waitMs = Field("0");
+    private readonly CheckBox _assertEnabled = new() { Content = "Enable assertions", IsChecked = true };
+    private readonly CheckBox _assertOnlyResponse = new() { Content = "Assert only response fields", IsChecked = false };
+    private readonly CheckBox _stopOnFailure = new() { Content = "Stop on failure", IsChecked = true };
     private readonly TextBox _stepConfig = new() { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 120, FontFamily = new Avalonia.Media.FontFamily("Consolas") };
     private readonly TextBlock _help = DashboardStyle.Text("", 11, false, DashboardStyle.Muted);
     private readonly TextBlock _error = DashboardStyle.Text("", 11, false, DashboardStyle.Red);
@@ -52,8 +57,8 @@ internal sealed class TestStepWizardWindow : Window
         if (existing is not null) Load(existing);
         _stepType.SelectionChanged += (_, _) => UpdateTypeFields();
         _stepConfig.TextChanged += (_, _) => UpdatePreview();
-        var common = new Grid { ColumnDefinitions = new ColumnDefinitions("170,*"), RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto") };
-        AddRow(common, 0, "Testcase index", _testcaseIndex); AddRow(common, 1, "Testcase", _testcase); AddRow(common, 2, "Step name", _stepName); AddRow(common, 3, "Step type", _stepType); AddRow(common, 4, "Stage", _stage); AddRow(common, 5, "Timeout (seconds)", _timeout); AddRow(common, 6, "Environments", _environments); AddRow(common, 7, "Enabled", _enabled);
+        var common = new Grid { ColumnDefinitions = new ColumnDefinitions("170,*"), RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto") };
+        AddRow(common, 0, "Testcase index", _testcaseIndex); AddRow(common, 1, "Testcase", _testcase); AddRow(common, 2, "Step name", _stepName); AddRow(common, 3, "Step type", _stepType); AddRow(common, 4, "Stage", _stage); AddRow(common, 5, "Timeout (seconds)", _timeout); AddRow(common, 6, "Wait (milliseconds)", _waitMs); AddRow(common, 7, "Environments", _environments); AddRow(common, 8, "Enabled", _enabled); AddRow(common, 9, "Assertions", _assertEnabled); AddRow(common, 10, "Assert mode", _assertOnlyResponse); AddRow(common, 11, "Failure handling", _stopOnFailure);
         _httpFields.Children.Add(Labeled("Target URL", _targetUrl));
         _httpFields.Children.Add(Labeled("HTTP verb", _verb));
         _httpFields.Children.Add(Labeled("Content type", _contentType));
@@ -77,7 +82,7 @@ internal sealed class TestStepWizardWindow : Window
     private static void AddRow(Grid grid, int row, string label, Control control) { grid.Children.Add(DashboardStyle.Text(label, 12, false, DashboardStyle.Muted)); Grid.SetRow(grid.Children[^1], row); grid.Children.Add(control); Grid.SetRow(control, row); Grid.SetColumn(control, 1); }
     private void Load(WizardStepDraft existing)
     {
-        Set(_testcaseIndex, existing.Get("testcaseindex")); Set(_testcase, existing.Get("testcase")); Set(_stepName, existing.Get("stepname")); Set(_timeout, existing.Get("timeout", "30")); Set(_environments, existing.Get("environments")); Set(_targetUrl, existing.Get("targeturl")); Set(_verb, existing.Get("verb", "POST")); Set(_template, existing.Get("templetsource")); Set(_contentType, existing.Get("contenttype")); Set(_expectedStatus, existing.Get("expectedstatus")); _enabled.IsChecked = !existing.Get("enabled", "true").Equals("false", StringComparison.OrdinalIgnoreCase); _stage.SelectedItem = existing.Get("stage", "Test"); _stepType.SelectedItem = existing.Get("steptype", "HTTP"); _stepConfig.Text = existing.Get("stepconfig", "{}");
+        Set(_testcaseIndex, existing.Get("testcaseindex")); Set(_testcase, existing.Get("testcase")); Set(_stepName, existing.Get("stepname")); Set(_timeout, existing.Get("timeout", "30")); Set(_waitMs, existing.Get("wait", "0")); Set(_environments, existing.Get("environments")); Set(_targetUrl, existing.Get("targeturl")); _verb.SelectedItem = existing.Get("verb", "POST"); Set(_template, existing.Get("templetsource")); _contentType.SelectedItem = existing.Get("contenttype", "application/json"); Set(_expectedStatus, existing.Get("expectedstatus")); _assertEnabled.IsChecked = !existing.Get("assert", "true").Equals("false", StringComparison.OrdinalIgnoreCase); _assertOnlyResponse.IsChecked = existing.Get("assertonlyresponse", "false").Equals("true", StringComparison.OrdinalIgnoreCase); _stopOnFailure.IsChecked = !existing.Get("stoponfailure", "true").Equals("false", StringComparison.OrdinalIgnoreCase); _enabled.IsChecked = !existing.Get("enabled", "true").Equals("false", StringComparison.OrdinalIgnoreCase); _stage.SelectedItem = existing.Get("stage", "Test"); _stepType.SelectedItem = existing.Get("steptype", "HTTP"); _stepConfig.Text = existing.Get("stepconfig", "{}");
     }
     private static void Set(TextBox box, string value) => box.Text = value;
     private void UpdateTypeFields()
@@ -86,18 +91,19 @@ internal sealed class TestStepWizardWindow : Window
         _typeFields.Children.Clear();
         _help.Text = type switch
         {
-            "HTTP" => "HTTP uses Target URL, Verb, Template source, headers, and assertions from the response sheet.",
+            "HTTP" => "HTTP uses Target URL, HTTP verb, content type, template source, response assertions, and optional wait time.",
             "GraphQL" => "GraphQL uses Target URL and StepConfig such as Source, Query, Variables, and OperationName.",
             "File" => "File StepConfig examples: {\"Action\":\"ReadBinary\",\"Path\":\"Files/image.png\",\"OutputVariable\":\"imageFile\",\"OutputMode\":\"Reference\"}.",
             "Script" => "Script StepConfig should identify the script source and inputs. Trusted scripts must be enabled in the instance.",
-            "SQL" => "SQL StepConfig should identify the connection profile, command type, query, and parameters.", _ => ""
+            "SQL" => "SQL uses a connection profile, command type, query/template, and parameters.",
+            "CaseQL" => "CaseQL is a case-oriented GraphQL step and uses Target URL plus StepConfig.", _ => ""
         };
         if (type == "File") _typeFields.Children.Add(Labeled("File actions", new TextBlock { Text = "Read, Json, Write, Append, ReadBinary, WriteBinary, AppendBinary", TextWrapping = TextWrapping.Wrap }));
         if (type == "Script") _typeFields.Children.Add(Labeled("Security", new TextBlock { Text = "Trusted scripts must be enabled in the instance settings.", TextWrapping = TextWrapping.Wrap }));
         if (type == "GraphQL") { _typeFields.Children.Add(Labeled("Query", _graphqlQuery)); _typeFields.Children.Add(Labeled("Operation name", _graphqlOperation)); _typeFields.Children.Add(Labeled("Variables JSON", _graphqlVariables)); _typeFields.Children.Add(DashboardStyle.Action("Generate GraphQL StepConfig", GenerateStepConfig)); }
         if (type == "File") { _typeFields.Children.Add(Labeled("Action", _fileAction)); _typeFields.Children.Add(Labeled("Path", _filePath)); _typeFields.Children.Add(Labeled("Output variable", _fileOutput)); _typeFields.Children.Add(Labeled("Output mode", _fileMode)); _typeFields.Children.Add(DashboardStyle.Action("Generate File StepConfig", GenerateStepConfig)); }
         if (type == "Script") { _typeFields.Children.Add(Labeled("Script source", _scriptSource)); _typeFields.Children.Add(DashboardStyle.Action("Generate Script StepConfig", GenerateStepConfig)); }
-        if (type == "SQL") { _typeFields.Children.Add(Labeled("Connection", _sqlConnection)); _typeFields.Children.Add(Labeled("Query", _sqlQuery)); _typeFields.Children.Add(DashboardStyle.Action("Generate SQL StepConfig", GenerateStepConfig)); }
+        if (type == "SQL") { _typeFields.Children.Add(Labeled("Connection", _sqlConnection)); _typeFields.Children.Add(Labeled("Command type", _sqlCommandType)); _typeFields.Children.Add(Labeled("Query", _sqlQuery)); _typeFields.Children.Add(DashboardStyle.Action("Generate SQL StepConfig", GenerateStepConfig)); }
     }
     private void GenerateStepConfig()
     {
@@ -105,9 +111,9 @@ internal sealed class TestStepWizardWindow : Window
         object value = type switch
         {
             "GraphQL" => new { Query = _graphqlQuery.Text ?? "", OperationName = _graphqlOperation.Text ?? "", Variables = ParseObject(_graphqlVariables.Text) },
-            "File" => new { Action = _fileAction.Text ?? "ReadBinary", Path = _filePath.Text ?? "", OutputVariable = _fileOutput.Text ?? "", OutputMode = _fileMode.Text ?? "Reference" },
+            "File" => new { Action = _fileAction.SelectedItem?.ToString() ?? "ReadBinary", Path = _filePath.Text ?? "", OutputVariable = _fileOutput.Text ?? "", OutputMode = _fileMode.SelectedItem?.ToString() ?? "Reference" },
             "Script" => new { Source = _scriptSource.Text ?? "" },
-            "SQL" => new { Connection = _sqlConnection.Text ?? "", Query = _sqlQuery.Text ?? "" },
+            "SQL" => new { Connection = _sqlConnection.Text ?? "", CommandType = _sqlCommandType.SelectedItem?.ToString() ?? "Text", Query = _sqlQuery.Text ?? "" },
             _ => new { }
         };
         _stepConfig.Text = JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = true });
@@ -158,7 +164,7 @@ internal sealed class TestStepWizardWindow : Window
         }
         try { using var _ = JsonDocument.Parse(string.IsNullOrWhiteSpace(_stepConfig.Text) ? "{}" : _stepConfig.Text); } catch { _error.Text = "StepConfig must contain valid JSON."; return; }
         var row = new WizardStepDraft(_editRow, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
-            ["testcaseindex"] = index.ToString(), ["testcase"] = _testcase.Text?.Trim() ?? "", ["stepname"] = _stepName.Text?.Trim() ?? "", ["steptype"] = type, ["stage"] = _stage.SelectedItem?.ToString() ?? "Test", ["enabled"] = (_enabled.IsChecked == true).ToString().ToLowerInvariant(), ["timeout"] = timeout.ToString(), ["environments"] = _environments.Text?.Trim() ?? "", ["targeturl"] = _targetUrl.Text?.Trim() ?? "", ["verb"] = (_verb.Text?.Trim() ?? "POST").ToUpperInvariant(), ["templetsource"] = _template.Text?.Trim() ?? "", ["contenttype"] = _contentType.Text?.Trim() ?? "", ["expectedstatus"] = _expectedStatus.Text?.Trim() ?? "", ["stepconfig"] = string.IsNullOrWhiteSpace(_stepConfig.Text) ? "{}" : _stepConfig.Text!.Trim(), ["stoponfailure"] = "true", ["assert"] = "true", ["ignoreempty"] = "false", ["assertonlyresponse"] = "false", ["threads"] = "1", ["iterations"] = "1", ["threadintervalms"] = "0", ["iterationintervalms"] = "0", ["wait"] = "0" });
+            ["testcaseindex"] = index.ToString(), ["testcase"] = _testcase.Text?.Trim() ?? "", ["stepname"] = _stepName.Text?.Trim() ?? "", ["steptype"] = type, ["stage"] = _stage.SelectedItem?.ToString() ?? "Test", ["enabled"] = (_enabled.IsChecked == true).ToString().ToLowerInvariant(), ["timeout"] = timeout.ToString(), ["environments"] = _environments.Text?.Trim() ?? "", ["targeturl"] = _targetUrl.Text?.Trim() ?? "", ["verb"] = (_verb.SelectedItem?.ToString() ?? "POST").ToUpperInvariant(), ["templetsource"] = _template.Text?.Trim() ?? "", ["contenttype"] = (_contentType.SelectedItem?.ToString() ?? "application/json"), ["expectedstatus"] = _expectedStatus.Text?.Trim() ?? "", ["stepconfig"] = string.IsNullOrWhiteSpace(_stepConfig.Text) ? "{}" : _stepConfig.Text!.Trim(), ["stoponfailure"] = (_stopOnFailure.IsChecked == true).ToString().ToLowerInvariant(), ["assert"] = (_assertEnabled.IsChecked == true).ToString().ToLowerInvariant(), ["ignoreempty"] = "false", ["assertonlyresponse"] = (_assertOnlyResponse.IsChecked == true).ToString().ToLowerInvariant(), ["threads"] = "1", ["iterations"] = "1", ["threadintervalms"] = "0", ["iterationintervalms"] = "0", ["wait"] = int.TryParse(_waitMs.Text, out var wait) ? Math.Max(0, wait).ToString() : "0" });
         _saveStep(row); Close();
     }
 }
