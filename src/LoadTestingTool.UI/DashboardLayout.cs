@@ -378,6 +378,7 @@ public sealed partial class MainWindow
         _selectedTitle.Text = item?.Name ?? "Selected instance";
         ToolTip.SetTip(_selectedTitle, item?.Name);
         _overviewPanel.Children.Clear();
+        if (_overviewFilter.Parent is Panel previousParent) previousParent.Children.Remove(_overviewFilter);
         _overviewPanel.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _overviewFilter, DashboardStyle.Action("Copy overview", () => _ = CopyOverviewAsync()) } });
         if (item is null)
         {
