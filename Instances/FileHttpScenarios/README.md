@@ -30,7 +30,7 @@ mkdir -p Artifacts History Logs Results
 dotnet ../../bin/Debug/net10.0/LoadTestingTool.dll --testcases 4,5
 ```
 
-`StreamedBase64HttpFlow` verifies `ReadBinary` with `OutputMode: Reference` and the template marker `_*fileData*_`. The API receives Base64 inside nested JSON, while history/logs receive only a binary summary.
+`StreamedBase64HttpFlow` verifies `ReadBinary` with `OutputMode: Reference`. The preferred template marker is the ordinary `_fileData_` form; the runner detects the binary reference and streams Base64 automatically. The legacy `_*fileData*_` form remains supported. A binary runtime reference can also be written as `<From_response_ReadFile.fileData_r>`; the runner converts it internally to the streaming path. The API receives Base64 inside nested JSON, while history/logs receive only a binary summary.
 
 `HttpTextFlow` verifies ordinary `_textData_` and `_fileName_` substitutions.
 
@@ -45,7 +45,19 @@ Reference binary output:
 Streamed nested JSON marker:
 
 ```json
+{"fil":"_fileData_"}
+```
+
+Legacy equivalent:
+
+```json
 {"fil":"_*fileData*_"}
+```
+
+Binary `From` reference:
+
+```json
+{"fil":"<From_response_ReadFile.fileData_r>"}
 ```
 
 Normal string marker:

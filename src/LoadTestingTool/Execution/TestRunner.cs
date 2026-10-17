@@ -69,7 +69,8 @@ public sealed class TestRunner
                         {
                             // A binary File step publishes a typed reference into the execution
                             // context. Do not replace it with the serialized response/correlation
-                            // string before a later HTTP step consumes _*variable*_ or BodyFileVariable.
+                            // string before a later HTTP step consumes _variable_, _*variable*_,
+                            // or BodyFileVariable.
                             if (executionContext.TryGet(pair.Key, out var existing) && existing is not string) continue;
                             variables[pair.Key] = pair.Value;
                         }
@@ -314,12 +315,27 @@ public sealed class TestRunner
         if (exception is InvalidDataException) return FailureCategories.VariableResolution;
         return fallback;
     }
-    private static string ResolveRuntimeReferences(string value, IReadOnlyDictionary<string, string> correlation, IReadOnlyDictionary<string, string>? requestReferences = null)
+    private static string ResolveRuntimeReferences(string value, IReadOnlyDictionary<string, string> correlation, IReadOnlyDictionary<string, string>? requestReferences, LoadTestingTool.Domain.ExecutionContext context)
     {
         return Regex.Replace(value ?? string.Empty, @"<From_(?:(request|response)_)?([^_>]+)_(r|\d+)>", match =>
         {
             var source = match.Groups[1].Value;
             var key = match.Groups[2].Value;
+            var contextKey = key;
+            if (!context.TryGet(contextKey, out var typedValue) && key.Contains('.', StringComparison.Ordinal))
+            {
+                var lastPart = key[(key.LastIndexOf('.') + 1)..];
+                if (context.TryGet(lastPart, out typedValue)) contextKey = key;
+            }
+            if (typedValue is BinaryFileReference)
+            {
+                // Keep the binary reference typed in the execution context and
+                // convert only the internal template representation into the
+                // existing streaming marker. The workbook author still writes
+                // <From_response_Step.output_r>.
+                context.Set(contextKey, typedValue, VariableScope.Iteration);
+                return $"_*{contextKey}*_";
+            }
             var values = source.Equals("request", StringComparison.OrdinalIgnoreCase) ? requestReferences : correlation;
             return values is not null && values.TryGetValue(key, out var actual)
                 ? actual
@@ -328,7 +344,7 @@ public sealed class TestRunner
     }
     private async Task<string> ResolveDynamicValueAsync(string value, IReadOnlyDictionary<string, string> correlation, IReadOnlyDictionary<string, string>? requestReferences, LoadTestingTool.Domain.ExecutionContext context, CancellationToken cancellationToken)
     {
-        var resolved = ResolveRuntimeReferences(value, correlation, requestReferences);
+        var resolved = ResolveRuntimeReferences(value, correlation, requestReferences, context);
         return await InlineScriptRunner.ResolveTokensAsync(resolved, context, _features.WorkspaceRoot, _features, _logger, cancellationToken);
     }
     private async Task<IReadOnlyList<AssertionDefinition>> ResolveAssertionReferencesAsync(IReadOnlyList<AssertionDefinition> definitions, IReadOnlyDictionary<string, string> correlation, IReadOnlyDictionary<string, string>? requestReferences, LoadTestingTool.Domain.ExecutionContext context, CancellationToken cancellationToken)
@@ -391,11 +407,25 @@ public sealed class TestRunner
     private static (string Prefix, string Suffix, BinaryFileReference File, string Summary)? PrepareStreamingBinaryTemplate(string template, string contentType, IReadOnlyDictionary<string, string> variables, LoadTestingTool.Domain.ExecutionContext context)
     {
         var source = template ?? string.Empty;
-        var match = Regex.Match(source, @"_\*([\p{L}\p{N}._-]+)\*_", RegexOptions.CultureInvariant);
-        if (!match.Success) return null;
-        var variableName = match.Groups[1].Value;
-        if (!context.TryGet(variableName, out var value) || value is not BinaryFileReference file)
-            throw new InvalidDataException($"Streaming template variable '{variableName}' is missing or is not a binary file reference.");
+        var tokenPattern = @"_(?:\*(?<star>[\p{L}\p{N}._-]+)\*|(?<plain>[\p{L}\p{N}._-]+))_";
+        Match? match = null;
+        BinaryFileReference? file = null;
+        foreach (Match candidate in Regex.Matches(source, tokenPattern, RegexOptions.CultureInvariant))
+        {
+            var candidateName = candidate.Groups["star"].Success ? candidate.Groups["star"].Value : candidate.Groups["plain"].Value;
+            var explicitMarker = candidate.Groups["star"].Success;
+            if (context.TryGet(candidateName, out var candidateValue) && candidateValue is BinaryFileReference candidateFile)
+            {
+                match = candidate;
+                file = candidateFile;
+                break;
+            }
+            // A normal underscore token remains an ordinary string token. The
+            // explicit _*variable*_ form still fails fast when it is not binary.
+            if (explicitMarker) throw new InvalidDataException($"Streaming template variable '{candidateName}' is missing or is not a binary file reference.");
+        }
+        if (match is null || file is null) return null;
+        var variableName = match.Groups["star"].Success ? match.Groups["star"].Value : match.Groups["plain"].Value;
         if (!File.Exists(file.Path)) throw new FileNotFoundException($"Streaming template file for '{variableName}' was not found.", file.Path);
         var marker = match.Value;
         var protectedTemplate = source.Replace(marker, "STREAMEDBINARYMARKERTOKEN", StringComparison.Ordinal);
