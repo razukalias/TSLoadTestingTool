@@ -69,6 +69,7 @@ public sealed class RequestDataRow
     public string DataId { get; init; } = string.Empty;
     public IReadOnlyList<string> Dontrun { get; init; } = [];
     public IReadOnlyDictionary<string, string> Variables { get; init; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlySet<string> RedactedVariables { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 }
 
 public sealed class AssertionDefinition
@@ -217,6 +218,7 @@ public sealed class RequestResult
     public string ResponseBody { get; set; } = string.Empty;
     public long DurationMs { get; set; }
     public IReadOnlyDictionary<string, string> Variables { get; init; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlySet<string> RedactedVariables { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     public List<CorrelationRecord> Correlations { get; } = [];
     public List<AssertionResult> Assertions { get; } = [];
     public string ErrorMessage { get; set; } = string.Empty;

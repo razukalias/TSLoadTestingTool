@@ -52,6 +52,18 @@ public sealed class InternalLogger : IDisposable
             "$1$2********");
     }
 
+    public static string RedactVariableValues(string value, IReadOnlySet<string>? variableNames, IReadOnlyDictionary<string, string>? variables)
+    {
+        if (string.IsNullOrEmpty(value) || variableNames is null || variableNames.Count == 0 || variables is null) return value ?? string.Empty;
+        var result = value;
+        foreach (var name in variableNames.OrderByDescending(x => x.Length))
+        {
+            if (!variables.TryGetValue(name, out var replacement) || string.IsNullOrEmpty(replacement)) continue;
+            result = result.Replace(replacement, $"[redacted:{name}]", StringComparison.Ordinal);
+        }
+        return result;
+    }
+
     public void Info(string message) => Write("INFO", message);
     public void Warn(string message) => Write("WARN", message);
     public void Error(string message, Exception? exception = null) => Write("ERROR", exception is null ? message : $"{message} | {exception.GetType().Name}: {exception.Message}{Environment.NewLine}{exception.StackTrace}");

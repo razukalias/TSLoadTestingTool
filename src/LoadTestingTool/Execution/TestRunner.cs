@@ -59,9 +59,11 @@ public sealed class TestRunner
                     if (request.Iterations < iteration) { _logger.Info($"STEP SKIPPED | reason=iteration-limit | configured={request.Iterations} | current={iteration}"); continue; }
                     if (request.WaitMs > 0) { _logger.Info($"Waiting {request.WaitMs} ms before dataid={data.DataId}, step {request.StepName}."); await Task.Delay(request.WaitMs, cancellationToken); }
                     Dictionary<string, string> variables;
+                    IReadOnlySet<string> redactedVariables;
                     try
                     {
                         variables = StepVariables(data, request.StepName);
+                        redactedVariables = StepRedactedVariables(data, request.StepName);
                         if (!string.IsNullOrWhiteSpace(environment)) variables["env"] = environment;
                         foreach (var pair in correlation)
                         {
@@ -85,7 +87,7 @@ public sealed class TestRunner
                     foreach (var variable in variables) executionContext.Set(variable.Key, variable.Value, VariableScope.Iteration);
                     foreach (var source in correlationSources.Values) if (string.IsNullOrWhiteSpace(source.UsedByStepName) || !source.UsedByStepName.Split(',', StringSplitOptions.TrimEntries).Contains(request.StepName, StringComparer.OrdinalIgnoreCase)) source.UsedByStepName = string.IsNullOrWhiteSpace(source.UsedByStepName) ? request.StepName : $"{source.UsedByStepName},{request.StepName}";
                     var definitions = workbook.Assertions.GetValueOrDefault((request.TestcaseIndex, data.DataId, request.StepName)) ?? [];
-                    var result = await ExecuteRequestAsync(run, testcase, data.DataId, request, variables, definitions, requestReferences, ++stepOrder, threadId, iteration, correlation, correlationSources, executionContext, cancellationToken, environment);
+                    var result = await ExecuteRequestAsync(run, testcase, data.DataId, request, variables, redactedVariables, definitions, requestReferences, ++stepOrder, threadId, iteration, correlation, correlationSources, executionContext, cancellationToken, environment);
                     testcaseResult.Requests.Add(result);
                     if (result.FailureCategory.Equals("RuntimeReference", StringComparison.OrdinalIgnoreCase)) { _logger.Warn($"Stopping current data row after missing runtime reference. dataid={data.DataId}; step={request.StepName}; iteration={iteration}; remaining rows will continue."); break; }
                     if (result.Result == "FAIL" && request.StopOnFailure) { _logger.Warn($"Stopping testcase sequence after failed dataid={data.DataId}, step {request.StepName} because stopOnFailure=true."); break; }
@@ -104,6 +106,17 @@ public sealed class TestRunner
         foreach (var variable in data.Variables.Where(x => x.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
             variables[variable.Key[prefix.Length..]] = variable.Value;
         return variables;
+    }
+    private static IReadOnlySet<string> StepRedactedVariables(RequestDataRow data, string stepName)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var prefix = stepName + ".";
+        foreach (var name in data.RedactedVariables)
+        {
+            names.Add(name);
+            if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) names.Add(name[prefix.Length..]);
+        }
+        return names;
     }
 
     private RequestResult CreateRuntimeReferenceFailure(RunResult run, TestcaseDefinition testcase, string dataId, RequestStep step, int sequence, int thread, int iteration, string environment, RuntimeReferenceException exception)
@@ -138,12 +151,12 @@ public sealed class TestRunner
         };
     }
 
-    private async Task<RequestResult> ExecuteRequestAsync(RunResult run, TestcaseDefinition testcase, string dataId, RequestStep step, Dictionary<string, string> variables, IReadOnlyList<AssertionDefinition> definitions, IReadOnlyDictionary<string, string> requestReferences, int sequence, int thread, int iteration, Dictionary<string, string> correlation, Dictionary<string, CorrelationRecord> correlationSources, LoadTestingTool.Domain.ExecutionContext executionContext, CancellationToken cancellationToken, string environment)
+    private async Task<RequestResult> ExecuteRequestAsync(RunResult run, TestcaseDefinition testcase, string dataId, RequestStep step, Dictionary<string, string> variables, IReadOnlySet<string> redactedVariables, IReadOnlyList<AssertionDefinition> definitions, IReadOnlyDictionary<string, string> requestReferences, int sequence, int thread, int iteration, Dictionary<string, string> correlation, Dictionary<string, CorrelationRecord> correlationSources, LoadTestingTool.Domain.ExecutionContext executionContext, CancellationToken cancellationToken, string environment)
     {
-        if (step.StepType != StepType.Http) return await ExecuteNonHttpAsync(run, testcase, dataId, step, variables, definitions, requestReferences, sequence, thread, iteration, correlation, correlationSources, executionContext, cancellationToken, environment);
+        if (step.StepType != StepType.Http) return await ExecuteNonHttpAsync(run, testcase, dataId, step, variables, redactedVariables, definitions, requestReferences, sequence, thread, iteration, correlation, correlationSources, executionContext, cancellationToken, environment);
         var started = DateTimeOffset.Now; var sw = Stopwatch.StartNew(); var requestId = $"REQ-{Interlocked.Increment(ref _sequence):D8}"; var templatePath = Path.Combine(_templatesFolder, step.TemplateSource);
         _logger.Info($"Request starting. RequestId={requestId}; testcase={testcase.TestcaseIndex}; dataid={dataId}; stepName={step.StepName}; thread={thread}; iteration={iteration}; verb={step.Verb}; url={step.TargetUrl}; template={templatePath}; ignoreempty={step.IgnoreEmpty}");
-        var result = new RequestResult { RunId = run.RunId, RequestId = requestId, TestcaseIndex = step.TestcaseIndex, Testcase = testcase.Testcase, DataId = dataId, StepName = step.StepName, StepType = step.StepType.WireName(), Thread = thread, Iteration = iteration, SequenceOrder = sequence, StartedAt = started, WaitMs = step.WaitMs, Verb = step.Verb, TargetUrl = step.TargetUrl, TemplateSource = step.TemplateSource, StepConfig = step.StepConfig, ContentType = ResolveContentType(step), RequestHeaders = string.Join("; ", step.Headers.Select(h => $"{h.Key}={h.Value}")), Variables = new Dictionary<string, string>(variables, StringComparer.OrdinalIgnoreCase), Environment = environment };
+        var result = new RequestResult { RunId = run.RunId, RequestId = requestId, TestcaseIndex = step.TestcaseIndex, Testcase = testcase.Testcase, DataId = dataId, StepName = step.StepName, StepType = step.StepType.WireName(), Thread = thread, Iteration = iteration, SequenceOrder = sequence, StartedAt = started, WaitMs = step.WaitMs, Verb = step.Verb, TargetUrl = step.TargetUrl, TemplateSource = step.TemplateSource, StepConfig = step.StepConfig, ContentType = ResolveContentType(step), RequestHeaders = string.Join("; ", step.Headers.Select(h => $"{h.Key}={h.Value}")), Variables = new Dictionary<string, string>(variables, StringComparer.OrdinalIgnoreCase), RedactedVariables = redactedVariables, Environment = environment };
         try
         {
             foreach (var runtimeVariable in executionContext.Snapshot())
@@ -168,7 +181,7 @@ public sealed class TestRunner
             }
             else
             {
-                result.RequestBody = body;
+                result.RequestBody = InternalLogger.RedactVariableValues(body, redactedVariables, variables);
                 if (!step.Verb.Equals("HEAD", StringComparison.OrdinalIgnoreCase) || !string.IsNullOrWhiteSpace(body)) request.Content = new StringContent(body, Encoding.UTF8, result.ContentType.Equals("xml", StringComparison.OrdinalIgnoreCase) ? "application/xml" : "application/json");
             }
             var resolvedHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -177,7 +190,7 @@ public sealed class TestRunner
                 var value = await ResolveDynamicValueAsync(header.Value, correlation, requestReferences, executionContext, cancellationToken);
                 resolvedHeaders[header.Key] = Substitute(value, variables);
             }
-            result.RequestHeaders = string.Join("; ", resolvedHeaders.Select(h => $"{h.Key}={h.Value}")); foreach (var h in resolvedHeaders) if (!request.Headers.TryAddWithoutValidation(h.Key, h.Value)) request.Content?.Headers.TryAddWithoutValidation(h.Key, h.Value);
+            result.RequestHeaders = InternalLogger.RedactVariableValues(string.Join("; ", resolvedHeaders.Select(h => $"{h.Key}={h.Value}")), redactedVariables, variables); foreach (var h in resolvedHeaders) if (!request.Headers.TryAddWithoutValidation(h.Key, h.Value)) request.Content?.Headers.TryAddWithoutValidation(h.Key, h.Value);
             _logger.Info($"REQUEST SENT [{requestId}]\nURL: {result.TargetUrl}\nMETHOD: {step.Verb}\nHEADERS:\n{result.RequestHeaders}\nBODY:\n{result.RequestBody}");
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken); timeout.CancelAfter(TimeSpan.FromSeconds(step.TimeoutSeconds > 0 ? step.TimeoutSeconds : _timeoutSeconds)); using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseContentRead, timeout.Token);
             result.HttpStatus = (int)response.StatusCode; result.ResponseHeaders = string.Join("; ", response.Headers.Concat(response.Content.Headers).Select(h => $"{h.Key}={string.Join(",", h.Value)}")); result.ResponseBody = await response.Content.ReadAsStringAsync(timeout.Token);
@@ -226,11 +239,11 @@ public sealed class TestRunner
         _requestCompleted?.Invoke(result); return result;
     }
 
-    private async Task<RequestResult> ExecuteNonHttpAsync(RunResult run, TestcaseDefinition testcase, string dataId, RequestStep step, Dictionary<string, string> variables, IReadOnlyList<AssertionDefinition> definitions, IReadOnlyDictionary<string, string> requestReferences, int sequence, int thread, int iteration, Dictionary<string, string> correlation, Dictionary<string, CorrelationRecord> correlationSources, LoadTestingTool.Domain.ExecutionContext context, CancellationToken cancellationToken, string environment)
+    private async Task<RequestResult> ExecuteNonHttpAsync(RunResult run, TestcaseDefinition testcase, string dataId, RequestStep step, Dictionary<string, string> variables, IReadOnlySet<string> redactedVariables, IReadOnlyList<AssertionDefinition> definitions, IReadOnlyDictionary<string, string> requestReferences, int sequence, int thread, int iteration, Dictionary<string, string> correlation, Dictionary<string, CorrelationRecord> correlationSources, LoadTestingTool.Domain.ExecutionContext context, CancellationToken cancellationToken, string environment)
     {
         var started = DateTimeOffset.Now; var requestId = $"STEP-{Interlocked.Increment(ref _sequence):D8}";
         var templatePath = string.IsNullOrWhiteSpace(step.TemplateSource) ? string.Empty : Path.Combine(_templatesFolder, step.TemplateSource);
-        var result = new RequestResult { RunId = run.RunId, RequestId = requestId, TestcaseIndex = step.TestcaseIndex, Testcase = testcase.Testcase, DataId = dataId, StepName = step.StepName, StepType = step.StepType.WireName(), Thread = thread, Iteration = iteration, SequenceOrder = sequence, StartedAt = started, WaitMs = step.WaitMs, Verb = step.StepType.WireName(), TargetUrl = step.TargetUrl, TemplateSource = step.TemplateSource, StepConfig = step.StepConfig, ContentType = step.ContentType, Variables = new Dictionary<string, string>(variables, StringComparer.OrdinalIgnoreCase), Environment = environment };
+        var result = new RequestResult { RunId = run.RunId, RequestId = requestId, TestcaseIndex = step.TestcaseIndex, Testcase = testcase.Testcase, DataId = dataId, StepName = step.StepName, StepType = step.StepType.WireName(), Thread = thread, Iteration = iteration, SequenceOrder = sequence, StartedAt = started, WaitMs = step.WaitMs, Verb = step.StepType.WireName(), TargetUrl = step.TargetUrl, TemplateSource = step.TemplateSource, StepConfig = step.StepConfig, ContentType = step.ContentType, Variables = new Dictionary<string, string>(variables, StringComparer.OrdinalIgnoreCase), RedactedVariables = redactedVariables, Environment = environment };
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -246,12 +259,12 @@ public sealed class TestRunner
                 templateText = await ResolveDynamicValueAsync(await File.ReadAllTextAsync(templatePath, timeout.Token), correlation, requestReferences, context, timeout.Token);
                 templateText = TemplateRenderer.Render(templateText, result.ContentType, variables);
             }
-            _logger.Info($"STEP REQUEST [{requestId}]\nTYPE: {step.StepType.WireName()}\nSTEP: {step.StepName}\nENVIRONMENT: {environment}\nCONFIGURED URL: {step.TargetUrl}\nRESOLVED URL: {result.TargetUrl}\nTEMPLATE: {step.TemplateSource}\nREQUEST:\n{templateText}\nMETADATA:\n{step.StepConfig}");
+            _logger.Info($"STEP REQUEST [{requestId}]\nTYPE: {step.StepType.WireName()}\nSTEP: {step.StepName}\nENVIRONMENT: {environment}\nCONFIGURED URL: {step.TargetUrl}\nRESOLVED URL: {result.TargetUrl}\nTEMPLATE: {step.TemplateSource}\nREQUEST:\n{InternalLogger.RedactVariableValues(templateText, redactedVariables, variables)}\nMETADATA:\n{step.StepConfig}");
             var execution = await _pipeline.ExecuteAsync(new StepExecutionRequest { Step = step, Context = context, WorkspaceRoot = _features.WorkspaceRoot, TemplateText = templateText, CancellationToken = timeout.Token });
             StepExecutionResultMapper.PublishOutputs(execution, context);
-            result.RequestBody = execution.RequestText; result.ResponseBody = execution.ResponseText; result.HttpStatus = execution.StatusCode == 0 && execution.Succeeded ? 200 : execution.StatusCode; result.ErrorMessage = execution.ErrorMessage;
+            result.RequestBody = InternalLogger.RedactVariableValues(execution.RequestText, redactedVariables, variables); result.ResponseBody = execution.ResponseText; result.HttpStatus = execution.StatusCode == 0 && execution.Succeeded ? 200 : execution.StatusCode; result.ErrorMessage = execution.ErrorMessage;
             PublishResponseValues(step.StepName, result.ResponseBody, "json", correlation);
-            _logger.Info($"STEP RESPONSE [{requestId}]\nTYPE: {step.StepType.WireName()}\nSTATUS: {result.HttpStatus}\nREQUEST PAYLOAD:\n{execution.RequestText}\nRESPONSE PAYLOAD:\n{execution.ResponseText}\nERROR: {execution.ErrorMessage}");
+            _logger.Info($"STEP RESPONSE [{requestId}]\nTYPE: {step.StepType.WireName()}\nSTATUS: {result.HttpStatus}\nREQUEST PAYLOAD:\n{result.RequestBody}\nRESPONSE PAYLOAD:\n{execution.ResponseText}\nERROR: {execution.ErrorMessage}");
             if (!execution.Succeeded || !string.IsNullOrWhiteSpace(execution.ErrorMessage))
                 _logger.Error($"STEP EXECUTION FAILURE [{requestId}] testcase={testcase.TestcaseIndex}; testcaseName={testcase.Testcase}; dataid={dataId}; stepName={step.StepName}; stepType={step.StepType.WireName()}; template={templatePath}; templateExists={(!string.IsNullOrWhiteSpace(templatePath) && File.Exists(templatePath))}; targetUrl={step.TargetUrl}; status={result.HttpStatus}; error={execution.ErrorMessage}");
             foreach (var output in execution.Outputs) { var text = output.Value is string s ? s : JsonSerializer.Serialize(output.Value); var record = new CorrelationRecord { DataId = dataId, SourceStepName = step.StepName, ResponsePath = output.Key, Variable = output.Key, ExtractedValue = text }; correlation[output.Key] = text; correlationSources[output.Key] = record; result.Correlations.Add(record); }

@@ -41,7 +41,7 @@ public sealed class HistoryWriter
 
         var rh = workbook.AddWorksheet("RequestHistory");
         WriteTable(rh, "runid", "requestid", "testcaseindex", "testcase", "dataid", "stepname", "steptype", "thread", "iteration", "sequenceorder", "starttime", "endtime", "waitms", "verb", "targeturl", "templetsource", "stepconfig", "contenttype", "requestheaders", "requestbody", "httpstatus", "responseheaders", "responsebody", "durationms", "assertioncount", "passedassertions", "failedassertions", "assertionresult", "requestresult", "failurecategory", "runtimereference", "runtimereferencekey", "errormessage", "failureaction");
-        foreach (var r in requests) rh.AddRow(run.RunId, r.RequestId, r.TestcaseIndex, r.Testcase, r.DataId, r.StepName, r.StepType, r.Thread, r.Iteration, r.SequenceOrder, r.StartedAt, r.EndedAt, r.WaitMs, r.Verb, r.TargetUrl, r.TemplateSource, Mask(r.StepConfig), r.ContentType, Mask(r.RequestHeaders), _config.SaveRequestBodyToHistory ? Mask(r.RequestBody) : "[omitted]", r.HttpStatus, Mask(r.ResponseHeaders), _config.SaveResponseBodyToHistory ? Mask(r.ResponseBody) : "[omitted]", r.DurationMs, r.Assertions.Count, r.Assertions.Count(a => a.Result == "PASS"), r.Assertions.Count(a => a.Result == "FAIL"), r.Assertions.Count == 0 || r.Assertions.All(a => a.Result == "PASS") ? "PASS" : "FAIL", r.Result, r.FailureCategory, r.RuntimeReference, r.RuntimeReferenceKey, r.ErrorMessage, r.Result == "FAIL" ? (r.FailureCategory == "RuntimeReference" ? "Current data row stopped; remaining rows continued" : "Sequence stopped when configured") : "");
+        foreach (var r in requests) rh.AddRow(run.RunId, r.RequestId, r.TestcaseIndex, r.Testcase, r.DataId, r.StepName, r.StepType, r.Thread, r.Iteration, r.SequenceOrder, r.StartedAt, r.EndedAt, r.WaitMs, r.Verb, r.TargetUrl, r.TemplateSource, Mask(r.StepConfig), r.ContentType, MaskVariableContent(r.RequestHeaders, r.RedactedVariables, r.Variables), _config.SaveRequestBodyToHistory ? MaskVariableContent(r.RequestBody, r.RedactedVariables, r.Variables) : "[omitted]", r.HttpStatus, Mask(r.ResponseHeaders), _config.SaveResponseBodyToHistory ? Mask(r.ResponseBody) : "[omitted]", r.DurationMs, r.Assertions.Count, r.Assertions.Count(a => a.Result == "PASS"), r.Assertions.Count(a => a.Result == "FAIL"), r.Assertions.Count == 0 || r.Assertions.All(a => a.Result == "PASS") ? "PASS" : "FAIL", r.Result, r.FailureCategory, r.RuntimeReference, r.RuntimeReferenceKey, r.ErrorMessage, r.Result == "FAIL" ? (r.FailureCategory == "RuntimeReference" ? "Current data row stopped; remaining rows continued" : "Sequence stopped when configured") : "");
 
         var referenceErrors = workbook.AddWorksheet("RuntimeReferenceErrors");
         WriteTable(referenceErrors, "runid", "testcaseindex", "testcase", "dataid", "thread", "iteration", "sequenceorder", "stepname", "steptype", "environment", "requestid", "reference", "referencekey", "error", "timestamp");
@@ -57,9 +57,9 @@ public sealed class HistoryWriter
         foreach (var r in requests)
         {
             foreach (var variable in r.Variables)
-                vars.AddRow(run.RunId, r.RequestId, r.TestcaseIndex, r.Testcase, r.DataId, r.StepName, variable.Key, Mask($"{variable.Key}={variable.Value}"), "request/runtime");
+                vars.AddRow(run.RunId, r.RequestId, r.TestcaseIndex, r.Testcase, r.DataId, r.StepName, variable.Key, MaskVariableContent($"{variable.Key}={variable.Value}", r.RedactedVariables, r.Variables), "request/runtime");
             foreach (var correlation in r.Correlations)
-                corr.AddRow(run.RunId, r.RequestId, r.TestcaseIndex, r.DataId, correlation.SourceStepName, correlation.ResponsePath, correlation.Variable, Mask($"{correlation.Variable}={correlation.ExtractedValue}"), correlation.UsedByStepName);
+                corr.AddRow(run.RunId, r.RequestId, r.TestcaseIndex, r.DataId, correlation.SourceStepName, correlation.ResponsePath, correlation.Variable, MaskVariableContent($"{correlation.Variable}={correlation.ExtractedValue}", r.RedactedVariables, r.Variables), correlation.UsedByStepName);
         }
         if (workbookModel is not null)
         {
@@ -68,7 +68,7 @@ public sealed class HistoryWriter
             foreach (var row in workbookModel.RequestData.Values.OrderBy(x => x.TestcaseIndex).ThenBy(x => x.DataId))
             {
                 if (row.Variables.Count == 0) data.AddRow(row.TestcaseIndex, row.Testcase, row.DataId, string.Join(',', row.Dontrun), "", "", "DataEngine request row");
-                foreach (var variable in row.Variables.OrderBy(x => x.Key)) data.AddRow(row.TestcaseIndex, row.Testcase, row.DataId, string.Join(',', row.Dontrun), variable.Key, Mask(variable.Value), "DataEngine request row");
+                foreach (var variable in row.Variables.OrderBy(x => x.Key)) data.AddRow(row.TestcaseIndex, row.Testcase, row.DataId, string.Join(',', row.Dontrun), variable.Key, row.RedactedVariables.Contains(variable.Key) ? $"[redacted:{variable.Key}]" : Mask(variable.Value), "DataEngine request row");
             }
             var config = workbook.AddWorksheet("DataEngineConfig");
             WriteTable(config, "testcaseindex", "testcase", "stepname", "steptype", "stage", "enabled", "sequence", "templetsource", "targeturl", "verb", "contenttype", "stepconfig", "headers", "stoponfailure", "assertonlyresponse", "environments");
@@ -81,6 +81,8 @@ public sealed class HistoryWriter
     }
 
     private string Mask(string value) => InternalLogger.MaskSensitiveData(value, _config.MaskSensitiveData);
+    private string MaskVariableContent(string value, IReadOnlySet<string> redactedVariables, IReadOnlyDictionary<string, string> variables)
+        => Mask(InternalLogger.RedactVariableValues(value, redactedVariables, variables));
     private static void WriteTable(IXLWorksheet sheet, params string[] headers) { for (var i = 0; i < headers.Length; i++) sheet.Cell(1, i + 1).Value = headers[i]; }
 }
 

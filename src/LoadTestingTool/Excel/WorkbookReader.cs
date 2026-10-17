@@ -71,18 +71,21 @@ public sealed class WorkbookReader
             var key = (index, dataId);
             if (result.ContainsKey(key)) throw new InvalidDataException($"Duplicate request row for testcaseindex + dataid: {index} + {dataId}.");
             var vars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var redacted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var column in h.OrderBy(x => x.Value))
             {
                 if (column.Key is "testcaseindex" or "testcase" or "dataid" or "dontrun") continue;
+                var variableName = CanonicalRequestVariableName(column.Key);
                 var cellKey = $"{sheet.Name}!{column.Key}!{row.RowNumber()}";
                 if (!compiledCellCache.TryGetValue(cellKey, out var compiledValue))
                 {
                     compiledValue = Compile(Text(h, row, column.Key), workbook, sheet, compiledCellCache, row.RowNumber());
                     compiledCellCache[cellKey] = compiledValue;
                 }
-                vars[column.Key] = compiledValue;
+                vars[variableName] = compiledValue;
+                if (ShouldRedactRequestVariable(column.Key)) redacted.Add(variableName);
             }
-            result[key] = new RequestDataRow { TestcaseIndex = index, Testcase = Text(h, row, "testcase"), DataId = dataId, Dontrun = SplitValues(Text(h, row, "dontrun")), Variables = vars };
+            result[key] = new RequestDataRow { TestcaseIndex = index, Testcase = Text(h, row, "testcase"), DataId = dataId, Dontrun = SplitValues(Text(h, row, "dontrun")), Variables = vars, RedactedVariables = redacted };
         }
         return result;
     }
@@ -158,6 +161,20 @@ public sealed class WorkbookReader
     private static Dictionary<string, int> Headers(IXLWorksheet sheet) => sheet.FirstRowUsed()?.CellsUsed().ToDictionary(c => c.GetString().Trim().ToLowerInvariant(), c => c.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase) ?? throw new InvalidDataException($"Worksheet '{sheet.Name}' has no header row.");
     private static void Require(Dictionary<string, int> h, string key, string sheet) { if (!h.ContainsKey(key)) throw new InvalidDataException($"Worksheet '{sheet}' is missing required column '{key}'."); }
     private static string Text(Dictionary<string, int> h, IXLRow row, string key, string fallback = "") => h.TryGetValue(key, out var col) ? row.Cell(col).GetString().Trim() : fallback;
+    private static string CanonicalRequestVariableName(string header)
+    {
+        var value = header.Trim();
+        if (value.EndsWith("_Log", StringComparison.OrdinalIgnoreCase) || value.EndsWith("_NoLog", StringComparison.OrdinalIgnoreCase))
+            value = value[..value.LastIndexOf('_')];
+        return value;
+    }
+    private static bool ShouldRedactRequestVariable(string header)
+    {
+        var value = header.Trim();
+        if (value.EndsWith("_Log", StringComparison.OrdinalIgnoreCase)) return false;
+        if (value.EndsWith("_NoLog", StringComparison.OrdinalIgnoreCase)) return true;
+        return CanonicalRequestVariableName(value).StartsWith("fileData", StringComparison.OrdinalIgnoreCase);
+    }
     private static int Int(Dictionary<string, int> h, IXLRow row, string key, int fallback) => int.TryParse(Text(h, row, key), out var value) ? value : fallback;
     private static bool Bool(Dictionary<string, int> h, IXLRow row, string key, bool fallback) => bool.TryParse(Text(h, row, key), out var value) ? value : fallback;
     private static bool IsBlank(IXLRow row) => row.CellsUsed().All(c => string.IsNullOrWhiteSpace(c.GetString()));
