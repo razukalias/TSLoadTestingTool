@@ -14,7 +14,7 @@ for d in ['Templates', 'Files', 'Artifacts', 'History', 'Logs', 'Results']:
 
 (root / 'Templates' / 'upload-base64.json').write_text(json.dumps({
     'metadata': {'option': '_option_'},
-    'handlingar': [{'metadata': {}, 'filer': [{'filnamn': '_fileName_', 'fil': '_*fileData*_'}]}],
+    'handlingar': [{'metadata': {}, 'filer': [{'filnamn': '_fileName_', 'fil': '_fileData_'}]}],
     'arbetsdokument': []
 }, indent=2) + '\n', encoding='utf-8')
 (root / 'Templates' / 'echo-text.json').write_text(json.dumps({'value': '_textData_', 'fileName': '_fileName_'}, indent=2) + '\n', encoding='utf-8')
@@ -69,11 +69,11 @@ readme.append(['Testcase','Coverage','Expected'])
 readme.append(['TextFileFlow','File Write, Append, Read, output variable','Pass; Artifacts/text-output.txt contains both lines'])
 readme.append(['JsonFileFlow','JSON file read + JsonPath extraction','Pass; customerId is extracted'])
 readme.append(['BinaryCopyFlow','ReadBinary Base64 + WriteBinary copy','Pass; Artifacts/upload-copy.bin matches Files/small.bin'])
-readme.append(['StreamedBase64HttpFlow','Reference file embedded as _*fileData*_ in nested JSON and streamed Base64 to HTTP','Pass with local verify_server.py'])
+readme.append(['StreamedBase64HttpFlow','Reference file embedded as _fileData_ in nested JSON and streamed Base64 to HTTP','Pass with local verify_server.py'])
 readme.append(['HttpTextFlow','Normal HTTP template variables and assertions','Pass with local verify_server.py'])
 readme.append([])
 readme.append(['Important syntax'])
-readme.append(['Reference binary marker','_*fileData*_'])
+readme.append(['Reference binary marker','_fileData_ (legacy _*fileData*_ also supported)'])
 readme.append(['Normal string marker','_textData_'])
 readme.append(['Large binary mode','ReadBinary + OutputMode Reference; do not use Base64 mode'])
 readme.append(['Run order','File step must appear before the HTTP step'])

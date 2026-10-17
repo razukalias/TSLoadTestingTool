@@ -8,7 +8,7 @@
       "filer": [
         {
           "filnamn": "_fileName_",
-          "fil": "_*fileData*_"
+          "fil": "_fileData_"
         }
       ]
     }
