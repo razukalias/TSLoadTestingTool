@@ -20,9 +20,9 @@ public static class TemplateRenderer
         foreach (var pair in variables.Where(x => string.IsNullOrEmpty(x.Value)))
         {
             var escaped = Regex.Escape(pair.Key);
-            if (contentType.Equals("json", StringComparison.OrdinalIgnoreCase))
+            if (IsJsonContentType(contentType))
                 value = RemoveJsonProperty(value, escaped);
-            else if (contentType.Equals("xml", StringComparison.OrdinalIgnoreCase))
+            else if (IsXmlContentType(contentType))
                 value = Regex.Replace(value, $@"\s*<(?<tag>[\w:.-]+)>\s*_{escaped}_\s*</\k<tag>>", string.Empty, RegexOptions.IgnoreCase);
         }
 
@@ -30,9 +30,25 @@ public static class TemplateRenderer
             variables.TryGetValue(match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value, out var replacement)
                 ? replacement
                 : throw new InvalidDataException($"Missing request variable '{(match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value)}'."));
-        return contentType.Equals("json", StringComparison.OrdinalIgnoreCase)
+        return IsJsonContentType(contentType)
             ? RemoveEmptyJsonObjects(rendered)
             : rendered;
+    }
+
+    private static bool IsJsonContentType(string? contentType)
+    {
+        var value = contentType?.Trim() ?? string.Empty;
+        return value.Equals("json", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("application/json", StringComparison.OrdinalIgnoreCase)
+            || value.EndsWith("+json", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsXmlContentType(string? contentType)
+    {
+        var value = contentType?.Trim() ?? string.Empty;
+        return value.Equals("xml", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("application/xml", StringComparison.OrdinalIgnoreCase)
+            || value.EndsWith("+xml", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string RemoveJsonProperty(string json, string escapedVariable)
