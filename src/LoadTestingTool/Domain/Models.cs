@@ -19,11 +19,26 @@ public sealed class AppConfig
     public bool PromptForTestcaseSelection { get; set; }
     public bool SaveRequestBodyToHistory { get; set; } = true;
     public bool SaveResponseBodyToHistory { get; set; } = true;
+    public Dictionary<string, bool> HistorySheets { get; set; } = HistorySheetCatalog.CreateDefaults();
     public bool MaskSensitiveData { get; set; } = true;
     public string WorkspaceRoot { get; set; } = ".";
     public Dictionary<string, SqlConnectionProfile> Connections { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public bool AllowTrustedScripts { get; set; }
     public int ScriptTimeoutSeconds { get; set; } = 30;
+}
+
+public static class HistorySheetCatalog
+{
+    public static readonly string[] Names =
+    [
+        "RunSummary", "Metrics", "TestcaseSummary", "RequestHistory", "RuntimeReferenceErrors",
+        "AssertionHistory", "Variables", "CorrelationHistory", "DataEngineRequestRows", "DataEngineConfig"
+    ];
+
+    public static Dictionary<string, bool> CreateDefaults() => Names.ToDictionary(x => x, _ => true, StringComparer.OrdinalIgnoreCase);
+
+    public static bool IsEnabled(IReadOnlyDictionary<string, bool>? settings, string name)
+        => settings is null || !settings.TryGetValue(name, out var enabled) || enabled;
 }
 
 public sealed class TestcaseDefinition

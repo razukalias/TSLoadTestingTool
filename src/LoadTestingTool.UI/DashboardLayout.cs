@@ -13,7 +13,7 @@ namespace LoadTestingTool.UI;
 
 internal static class DashboardStyle
 {
-    public const string Build = "Dashboard 2026.10.20.2";
+    public const string Build = "Dashboard 2026.10.23.5";
     public static IBrush Brush(string color) => new SolidColorBrush(Color.Parse(color));
     public static IBrush Panel => Brush("#101E2E");
     public static IBrush Muted => Brush("#8EA4BC");
@@ -437,6 +437,8 @@ public sealed partial class MainWindow
         if (item is null) return;
         _artifactPanel.Children.Add(DashboardStyle.Text("Workbooks and run artifacts", 16, true));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open DataEngine", OpenSelectedDataEngine));
+        _artifactPanel.Children.Add(DashboardStyle.Action("Try new spreadsheet editor", OpenSpreadsheetPreview));
+        _artifactPanel.Children.Add(DashboardStyle.Action("Configure history sheets", () => new HistorySettingsWindow(item.FolderPath).Show(this)));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open latest result workbook", OpenLatestResultWorkbook));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open runner log", OpenLatestInternalLog));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open Templates folder", OpenTemplatesFolder));
@@ -445,6 +447,11 @@ public sealed partial class MainWindow
         _artifactPanel.Children.Add(KeyValue("Workbook", item.WorkbookPath));
         _artifactPanel.Children.Add(KeyValue("Results", item.ResultsFolder));
         _artifactPanel.Children.Add(KeyValue("Current run", item.CurrentRunFolder));
+    }
+    private void OpenSpreadsheetPreview()
+    {
+        if (_selectedInstance is null) { _details.Text = "Select an instance first."; return; }
+        new SpreadsheetPreviewWindow(_selectedInstance.WorkbookPath).Show(this);
     }
     private async Task CopyOverviewAsync()
     {
@@ -603,13 +610,13 @@ public sealed partial class MainWindow
 
     private static HistoryEntry ReadHistoryEntry(InstanceInfo item, string path)
     {
-        using var workbook = new XLWorkbook(path); var summary = workbook.Worksheet("RunSummary"); var metrics = workbook.Worksheet("Metrics"); var requestSheet = workbook.Worksheet("RequestHistory");
-        var headers = requestSheet.FirstRowUsed()!.CellsUsed().ToDictionary(c => c.GetString(), c => c.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase);
+        using var workbook = new XLWorkbook(path); var summary = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("RunSummary", StringComparison.OrdinalIgnoreCase)); var metrics = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("Metrics", StringComparison.OrdinalIgnoreCase)); var requestSheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("RequestHistory", StringComparison.OrdinalIgnoreCase));
+        var headers = requestSheet?.FirstRowUsed()?.CellsUsed().ToDictionary(c => c.GetString(), c => c.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase) ?? [];
         string Cell(IXLRow row, string name) => headers.TryGetValue(name, out var c) ? row.Cell(c).GetString() : "";
-        var requests = requestSheet.RowsUsed().Skip(1).Select(row => new HistoryRequest(Cell(row, "testcase"), Cell(row, "dataid"), Cell(row, "stepname"), Cell(row, "requestresult"), long.TryParse(Cell(row, "durationms"), out var d) ? d : 0, int.TryParse(Cell(row, "httpstatus"), out var s) ? s : 0, Cell(row, "requestbody"), Cell(row, "responsebody"), Cell(row, "requestheaders"), Cell(row, "responseheaders"), Cell(row, "stepconfig"))).ToList();
-        var assertionSheet = workbook.Worksheet("AssertionHistory"); var ah = assertionSheet.FirstRowUsed()!.CellsUsed().ToDictionary(c => c.GetString(), c => c.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase); string ACell(IXLRow row, string name) => ah.TryGetValue(name, out var c) ? row.Cell(c).GetString() : "";
-        var assertions = assertionSheet.RowsUsed().Skip(1).Select(row => new HistoryAssertion(ACell(row, "testcase"), ACell(row, "dataid"), ACell(row, "stepname"), ACell(row, "responsepath"), ACell(row, "assertionverb"), ACell(row, "expectedvalue"), ACell(row, "actualvalue"), ACell(row, "result"))).ToList();
-        var result = summary.Cell(2, 16).GetString(); var runId = summary.Cell(2, 1).GetString(); var started = DateTime.TryParse(summary.Cell(2, 2).GetString(), out var date) ? date : File.GetLastWriteTime(path); var p95 = metrics.RowsUsed().FirstOrDefault(r => r.Cell(1).GetString().Equals("p95DurationMs", StringComparison.OrdinalIgnoreCase))?.Cell(2).GetString() ?? "0";
+        var requests = requestSheet is null ? [] : requestSheet.RowsUsed().Skip(1).Select(row => new HistoryRequest(Cell(row, "testcase"), Cell(row, "dataid"), Cell(row, "stepname"), Cell(row, "requestresult"), long.TryParse(Cell(row, "durationms"), out var d) ? d : 0, int.TryParse(Cell(row, "httpstatus"), out var s) ? s : 0, Cell(row, "requestbody"), Cell(row, "responsebody"), Cell(row, "requestheaders"), Cell(row, "responseheaders"), Cell(row, "stepconfig"))).ToList();
+        var assertionSheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("AssertionHistory", StringComparison.OrdinalIgnoreCase)); var ah = assertionSheet?.FirstRowUsed()?.CellsUsed().ToDictionary(c => c.GetString(), c => c.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase) ?? []; string ACell(IXLRow row, string name) => ah.TryGetValue(name, out var c) ? row.Cell(c).GetString() : "";
+        var assertions = assertionSheet is null ? [] : assertionSheet.RowsUsed().Skip(1).Select(row => new HistoryAssertion(ACell(row, "testcase"), ACell(row, "dataid"), ACell(row, "stepname"), ACell(row, "responsepath"), ACell(row, "assertionverb"), ACell(row, "expectedvalue"), ACell(row, "actualvalue"), ACell(row, "result"))).ToList();
+        var result = summary?.Cell(2, 16).GetString() ?? "UNKNOWN"; var runId = summary?.Cell(2, 1).GetString() ?? Path.GetFileNameWithoutExtension(path); var started = DateTime.TryParse(summary?.Cell(2, 2).GetString(), out var date) ? date : File.GetLastWriteTime(path); var p95 = metrics?.RowsUsed().FirstOrDefault(r => r.Cell(1).GetString().Equals("p95DurationMs", StringComparison.OrdinalIgnoreCase))?.Cell(2).GetString() ?? "0";
         return new HistoryEntry(path, item.Name, result, runId, started, requests, assertions, requests.Count(x => x.Result == "PASS"), requests.Count(x => x.Result == "FAIL"), p95, string.Join(" ", item.Name, result, runId, requests.Select(x => $"{x.Testcase} {x.DataId} {x.Step}")));
     }
     private static void RecordDashboardEvent(InstanceInfo item, JsonElement e)

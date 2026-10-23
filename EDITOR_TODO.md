@@ -72,11 +72,50 @@ Required behavior:
 
 ### 5. Autocomplete improvements
 
+**New preview editor status:** Implemented for the new Spreadalonia editor; manual interaction testing remains.
+
+- [x] Add `<From_...>`, function, and `{assertion}` suggestions to normal cells and header cells in the new editor.
+- [x] Add Up/Down selection, Enter/Tab accept, Escape close, and Ctrl+Space force-open behavior in the new editor.
+- [ ] Test autocomplete in a header cell after filtering and while editing an existing token.
+- [ ] Test `<From_request_..._r>` and `<From_response_..._r>` insertion against the runner.
+
 - Keep autocomplete working in normal cells and directly edited headers.
 - Verify `<From_...>` suggestions are filtered by the active sheet and headers.
 - Verify `{assertion}` suggestions are filtered by the active response/header context.
 - Add keyboard navigation with Up/Down, Enter, Tab, and Escape.
 - Add regression tests for autocomplete before existing values.
+
+### 6. Externalize request and response bodies from history Excel
+
+**Current status:** Suggestion recorded for later; not implemented yet.
+
+Goal: keep large request and response bodies out of Excel cells while making the detailed content easy to open.
+
+Proposed behavior:
+
+- Write request and response bodies to separate files beside the history workbook, using relative paths for portability.
+- Add `RequestBodyFile` and `ResponseBodyFile` columns to `RequestHistory`, or equivalent clickable file-path cells.
+- Add Excel hyperlinks so clicking a path opens the body with the operating system's default application.
+- Keep the existing body columns for compatibility, storing a short placeholder such as `[External file]` when the body is externalized.
+- Add configurable externalization settings, including enable/disable, a size threshold, and the body folder name.
+- Preserve `NoLog` and `fileData` redaction in external files as well as in Excel and internal logs.
+- Never write streamed binary Base64 payloads to external text files; write the existing safe binary summary instead.
+- Use deterministic, sanitized filenames containing run ID, testcase, request ID, step name, and request/response direction.
+- Add UI actions to open the request/response file, copy its path, and handle missing files without collapsing the UI.
+- Update history comparison to load external body files when available and show a clear missing-file state otherwise.
+- Add integration coverage for normal bodies, large bodies, missing files, relative paths, and streamed binary summaries.
+
+### 7. Select history worksheets
+
+**Current status:** Implemented in Dashboard 2026.10.23.5; manual UI verification remains.
+
+- [x] Add `HistorySheets` settings to runner `appsettings.json` with all supported sheets enabled by default.
+- [x] Add **Configure history sheets** to the selected instance’s artifact actions.
+- [x] Add All, Clear, Minimal, Debug, and Full presets.
+- [x] Make the runner omit disabled worksheets while preserving selected worksheet content.
+- [x] Make the dashboard history explorer tolerate omitted `RequestHistory`, `AssertionHistory`, `Metrics`, or `RunSummary` sheets.
+- [ ] Open the settings window from the packaged UI and verify saving/reloading settings.
+- [ ] Run one instance with `RequestHistory` disabled and confirm the generated workbook has no such sheet.
 
 ## Verification checklist for the future wrapping fix
 

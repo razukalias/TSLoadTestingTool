@@ -77,7 +77,7 @@ public sealed class InstanceBuilderWindow : Window
                 CreateConfig(workbook); CreateRequest(workbook); CreateResponse(workbook); CreateReadme(workbook);
                 workbook.SaveAs(workbookPath);
             }
-            File.WriteAllText(Path.Combine(folder, "appsettings.json"), JsonSerializer.Serialize(new { AllowTrustedScripts = false, WorkspaceRoot = ".", InstanceName = name }, new JsonSerializerOptions { WriteIndented = true }));
+            File.WriteAllText(Path.Combine(folder, "appsettings.json"), JsonSerializer.Serialize(new { AllowTrustedScripts = false, WorkspaceRoot = ".", InstanceName = name, HistorySheets = UiHistorySheetCatalog.CreateDefaults() }, new JsonSerializerOptions { WriteIndented = true }));
             File.WriteAllText(Path.Combine(folder, "Templates", "login.json"), "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}\n");
             File.WriteAllText(Path.Combine(folder, "README.md"), $"# {name}\n\nCreated by LoadTestingTool. Open the DataEngine workbook or use the guided editor.\n");
             CreatedFolder = folder; Close();
