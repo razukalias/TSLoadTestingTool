@@ -131,6 +131,21 @@ Proposed behavior:
 - [x] Verify one central-config instance run and one runner-only `--run-all` child process.
 - [ ] Verify central instance creation and history settings through the packaged Windows UI.
 
+### 9. New spreadsheet editor persistence and autocomplete
+
+**Current status:** Implemented in the current source; manual packaged-UI verification remains.
+
+- [x] Keep autocomplete suggestions visible until the user accepts them with Enter, Tab, or the mouse.
+- [x] Use the live editing TextBox text for `<From_...>`, function, and `{assertion}` suggestions.
+- [x] Make the popup use the same host layout as the working legacy editor.
+- [x] Save edits directly to the original workbook instead of creating a preview workbook.
+- [x] Create a `.bak` backup before overwriting the original workbook.
+- [x] Persist changed and cleared cell values, including cut and paste.
+- [x] Persist tracked bold, italic, text-color, and highlight styles.
+- [x] Persist row and column insertion/deletion in the workbook model.
+- [ ] Verify save/reopen manually for cell values, styles, cut/paste, and row/column operations.
+- [ ] Verify autocomplete acceptance and keyboard navigation in the packaged Windows build.
+
 ## Verification checklist for the future wrapping fix
 
 - [ ] Wrap one selected row.
