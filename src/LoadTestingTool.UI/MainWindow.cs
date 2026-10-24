@@ -319,9 +319,25 @@ public sealed partial class MainWindow : Window
         foreach (var candidate in candidates)
         {
             var folder = candidate.Folder;
-            var workbook = string.IsNullOrWhiteSpace(candidate.Workbook) ? Directory.GetFiles(folder, "*.xlsx", SearchOption.TopDirectoryOnly)
-                .Where(x => !Path.GetFileName(x).StartsWith("~$", StringComparison.Ordinal)).OrderBy(x => x).FirstOrDefault() : Path.GetFullPath(candidate.Workbook, folder);
-            if (workbook is null) continue;
+            if (!Directory.Exists(folder))
+            {
+                UiLog($"Skipping registered instance '{candidate.Name}': folder does not exist: {folder}");
+                continue;
+            }
+
+            var discoveredWorkbook = Directory.GetFiles(folder, "*.xlsx", SearchOption.TopDirectoryOnly)
+                .Where(x => !Path.GetFileName(x).StartsWith("~$", StringComparison.Ordinal))
+                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+            var configuredWorkbook = string.IsNullOrWhiteSpace(candidate.Workbook) ? null : Path.GetFullPath(candidate.Workbook, folder);
+            var workbook = configuredWorkbook is not null && File.Exists(configuredWorkbook) ? configuredWorkbook : discoveredWorkbook;
+            if (workbook is null)
+            {
+                UiLog($"Skipping registered instance '{candidate.Name}': no XLSX workbook exists in {folder}");
+                continue;
+            }
+            if (configuredWorkbook is not null && !File.Exists(configuredWorkbook))
+                UiLog($"Configured workbook is missing for '{candidate.Name}'; using discovered workbook: {workbook}");
             var item = previous.GetValueOrDefault(folder) ?? new InstanceInfo { Name = candidate.Name, FolderPath = folder, WorkbookPath = workbook };
             item.Name = candidate.Name;
             item.WorkbookPath = workbook;

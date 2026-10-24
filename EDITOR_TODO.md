@@ -207,6 +207,17 @@ Proposed behavior:
 - [x] Keep central names and workbook paths authoritative when a discovered folder is already registered.
 - [ ] Verify `StyleSaveRepro` appears after extraction in the packaged UI.
 
+### 15. Stale instance paths and insert-column performance
+
+**Current status:** Fixed in Dashboard 2026.10.24.8; manual packaged verification remains.
+
+- [x] Skip central registry entries whose configured folder no longer exists, with a diagnostic log entry.
+- [x] Fall back to an existing `.xlsx` in a registered folder when its configured workbook filename is stale.
+- [x] Continue discovering newly copied workbook folders automatically.
+- [x] Remove the row×column Cartesian allocation from filtered-cell synchronization.
+- [ ] Test insert/delete row and column on the user’s older large workbook.
+- [ ] Inspect the actual older workbook after a Save failure to identify its incompatible `styles.xml` structure.
+
 ## Verification checklist for the future wrapping fix
 
 - [ ] Wrap one selected row.

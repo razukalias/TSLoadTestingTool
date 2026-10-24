@@ -620,8 +620,12 @@ public sealed class SpreadsheetPreviewWindow : Window
             visibleCells[(selected.Left, selected.Top)] = editor.Text ?? string.Empty;
         }
 
-        foreach (var original in view.DisplayRows.Values.SelectMany(row => view.DisplayColumns.Values.Select(column => (column, row))).ToArray())
-            view.Cells.Remove(original);
+        // Remove only currently visible cells. The previous row×column Cartesian
+        // allocation could freeze the UI for large sheets during insert/delete.
+        var visibleOriginalKeys = view.Cells.Keys
+            .Where(key => view.DisplayRows.ContainsKey(key.Row) && view.DisplayColumns.ContainsKey(key.Col))
+            .ToArray();
+        foreach (var original in visibleOriginalKeys) view.Cells.Remove(original);
         var originalRows = view.DisplayRows.ToDictionary(x => x.Value, x => x.Key);
         var originalColumns = view.DisplayColumns.ToDictionary(x => x.Value, x => x.Key);
         foreach (var cell in visibleCells)
