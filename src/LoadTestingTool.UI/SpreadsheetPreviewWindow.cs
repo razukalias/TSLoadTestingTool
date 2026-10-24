@@ -274,6 +274,7 @@ public sealed class SpreadsheetPreviewWindow : Window
         editor.CaretBrush = Brushes.Black;
         editor.Opacity = 1;
         editor.TextChanged += (_, _) => Dispatcher.UIThread.Post(() => UpdateSuggestions(grid, view, liveText: editor.Text), DispatcherPriority.Input);
+        editor.TextChanged += (_, _) => SyncEditingCell(grid, view, editor.Text ?? string.Empty);
     }
 
     private ContextMenu BuildGridMenu(Spreadsheet grid)
@@ -320,7 +321,11 @@ public sealed class SpreadsheetPreviewWindow : Window
         {
             action(grid);
             var view = _sheets.Values.ElementAtOrDefault(_tabs.SelectedIndex);
-            if (view is not null) SyncView(view);
+            if (view is not null)
+            {
+                SyncView(view);
+                Dispatcher.UIThread.Post(() => SyncView(view), DispatcherPriority.Background);
+            }
             _status.Foreground = DashboardStyle.Green;
             _status.Text = "Cell changes applied. Save workbook to write them to the original file.";
         }
@@ -337,7 +342,11 @@ public sealed class SpreadsheetPreviewWindow : Window
         {
             await grid.Paste(false);
             var view = _sheets.Values.ElementAtOrDefault(_tabs.SelectedIndex);
-            if (view is not null) SyncView(view);
+            if (view is not null)
+            {
+                SyncView(view);
+                Dispatcher.UIThread.Post(() => SyncView(view), DispatcherPriority.Background);
+            }
             _status.Foreground = DashboardStyle.Green;
             _status.Text = "Pasted cells applied. Save workbook to write them to the original file.";
         }
@@ -615,6 +624,18 @@ public sealed class SpreadsheetPreviewWindow : Window
         }, DispatcherPriority.Render);
         grid.AttachedToVisualTree += (_, _) => Load();
         grid.Loaded += (_, _) => Load();
+    }
+
+    private static void SyncEditingCell(Spreadsheet grid, SheetView view, string value)
+    {
+        if (grid.Selection.Count == 0) return;
+        var selection = grid.Selection[0];
+        if (!view.DisplayRows.TryGetValue(selection.Top, out var originalRow) ||
+            !view.DisplayColumns.TryGetValue(selection.Left, out var originalColumn)) return;
+
+        var key = (originalColumn, originalRow);
+        if (string.IsNullOrEmpty(value)) view.Cells.Remove(key);
+        else view.Cells[key] = value;
     }
 
     private static void SyncView(SheetView view)

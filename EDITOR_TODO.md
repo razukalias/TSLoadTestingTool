@@ -229,6 +229,16 @@ Proposed behavior:
 - [x] Bound whole-row/whole-column structural selections to one workbook column/row instead of Spreadalonia’s virtual grid size.
 - [ ] Verify Save and Insert column manually in the packaged build using the uploaded workbook.
 
+### 17. New-sheet and clipboard persistence
+
+**Current status:** Implemented; build and all regression checks pass.
+
+- [x] Synchronize the live editing TextBox directly into the sheet model on every cell edit.
+- [x] Persist values entered into newly added sheets, including cells that were initially blank.
+- [x] Synchronize cut/paste once immediately and once after Spreadalonia’s background clipboard update.
+- [x] Preserve cleared cells by removing them from the model instead of allowing stale values to be rewritten.
+- [ ] Verify new-sheet values and copy/cut/paste after closing and reopening the packaged editor.
+
 ## Verification checklist for the future wrapping fix
 
 - [ ] Wrap one selected row.
