@@ -27,12 +27,14 @@ public sealed class SpreadsheetPreviewWindow : Window
             public string? Highlight { get; set; }
         }
 
-        public required string Name { get; init; }
+        public required string Name { get; set; }
+        public string? OriginalName { get; init; }
         public required Dictionary<(int Col, int Row), string> Cells { get; init; }
         public Spreadsheet Grid { get; set; } = null!;
         public required TabItem Tab { get; init; }
         public int RowCount { get; set; }
         public int ColumnCount { get; set; }
+        public bool StructureDirty { get; set; }
         public Dictionary<int, int> DisplayRows { get; set; } = [];
         public Dictionary<int, int> DisplayColumns { get; set; } = [];
         public Dictionary<(int Col, int Row), CellStyle> Styles { get; } = [];
@@ -41,6 +43,7 @@ public sealed class SpreadsheetPreviewWindow : Window
     private readonly string _sourcePath;
     private readonly TabControl _tabs = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
     private readonly Dictionary<string, SheetView> _sheets = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _removedSheetNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly TextBox _headerFilter = new() { Watermark = "Headers: header1 & header2…", MinWidth = 230 };
     private readonly TextBox _rowFilter = new() { Watermark = "Rows: 1,3,5…", MinWidth = 150 };
     private readonly TextBox _valueFilter = new() { Watermark = "Cell values: term1 & term2…", MinWidth = 230 };
@@ -68,7 +71,7 @@ public sealed class SpreadsheetPreviewWindow : Window
                 var used = worksheet.RangeUsed();
                 var cells = ReadCells(worksheet).ToDictionary(x => (x.Key.Item1, x.Key.Item2), x => x.Value);
                 var tab = new TabItem { Header = worksheet.Name };
-                var view = new SheetView { Name = worksheet.Name, Cells = cells, Tab = tab,
+                var view = new SheetView { Name = worksheet.Name, OriginalName = worksheet.Name, Cells = cells, Tab = tab,
                     RowCount = Math.Max(1, used?.RangeAddress.LastAddress.RowNumber ?? 1),
                     ColumnCount = Math.Max(1, used?.RangeAddress.LastAddress.ColumnNumber ?? 1) };
                 _sheets[worksheet.Name] = view;
@@ -89,6 +92,14 @@ public sealed class SpreadsheetPreviewWindow : Window
         _suggestionPopup.Child = _suggestions;
         _textColor.SelectionChanged += (_, _) => ApplyTextColor();
         _highlightColor.SelectionChanged += (_, _) => ApplyHighlight();
+        AddHandler(InputElement.KeyDownEvent, (_, e) =>
+        {
+            if ((e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control && e.Key == Key.S)
+            {
+                SaveWorkbook();
+                e.Handled = true;
+            }
+        }, RoutingStrategies.Tunnel);
 
         var heading = new StackPanel { Spacing = 4, Children =
         {
@@ -117,7 +128,11 @@ public sealed class SpreadsheetPreviewWindow : Window
             DashboardStyle.Action("Delete column", () => ApplyStructuralCommand("Deleted column", false, -1)),
             DashboardStyle.Action("Auto-fit width", () => ApplyFormatCommand("Auto-fit columns", g => g.AutoFitWidth())),
             DashboardStyle.Action("Auto-fit height", () => ApplyFormatCommand("Auto-fit rows", g => g.AutoFitHeight())),
-            DashboardStyle.Action("Reset format", ResetSelectedFormat)
+            DashboardStyle.Action("Reset format", ResetSelectedFormat),
+            DashboardStyle.Text("Sheets", 10, false, DashboardStyle.Muted),
+            DashboardStyle.Action("Add sheet", AddSheet),
+            DashboardStyle.Action("Remove sheet", RemoveSheet),
+            DashboardStyle.Action("Rename sheet", RenameSheet)
         }};
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 6, Children =
         {
@@ -135,7 +150,7 @@ public sealed class SpreadsheetPreviewWindow : Window
         Content = new Grid { Children = { root, _suggestionPopup } };
         _tabs.SelectionChanged += (_, _) => RefreshStatus();
         _tabs.SelectedIndex = 0;
-        Dispatcher.UIThread.Post(RefreshFilteredViews, DispatcherPriority.Loaded);
+        Dispatcher.UIThread.Post(() => RefreshFilteredViews(), DispatcherPriority.Loaded);
     }
 
     private static Control Labeled(string label, Control field) => new StackPanel { Spacing = 3, Children = { DashboardStyle.Text(label, 10, false, DashboardStyle.Muted), field } };
@@ -153,7 +168,7 @@ public sealed class SpreadsheetPreviewWindow : Window
             yield return new KeyValuePair<(int, int), string>((cell.Address.ColumnNumber - 1, cell.Address.RowNumber - 1), cell.GetString());
     }
 
-    private void RefreshFilteredViews()
+    private void RefreshFilteredViews(bool syncExisting = true)
     {
         if (_refreshing) return;
         _refreshing = true;
@@ -161,7 +176,7 @@ public sealed class SpreadsheetPreviewWindow : Window
         {
             foreach (var view in _sheets.Values)
             {
-                SyncView(view);
+                if (syncExisting) SyncView(view);
                 var rows = Enumerable.Range(0, Math.Max(1, view.RowCount)).ToArray();
                 var columns = Enumerable.Range(0, Math.Max(1, view.ColumnCount)).ToArray();
                 var selectedRows = ParseRows(_rowFilter.Text, rows);
@@ -177,7 +192,7 @@ public sealed class SpreadsheetPreviewWindow : Window
                     foreach (var col in selectedColumns)
                         if (view.Cells.TryGetValue((col, row), out var value) && !string.IsNullOrEmpty(value))
                             projected[(view.DisplayColumns[col], view.DisplayRows[row])] = value;
-                ReplaceGrid(view, projected);
+                ReplaceGrid(view, projected, syncExisting);
             }
             RefreshStatus();
         }
@@ -216,9 +231,9 @@ public sealed class SpreadsheetPreviewWindow : Window
     private static string Cell(Dictionary<(int Col, int Row), string> cells, int col, int row) => cells.TryGetValue((col, row), out var value) ? value : "";
     private static string RowText(Dictionary<(int Col, int Row), string> cells, int row) => string.Join(" ", cells.Where(x => x.Key.Row == row).OrderBy(x => x.Key.Col).Select(x => x.Value));
 
-    private void ReplaceGrid(SheetView view, Dictionary<(int, int), string> projected)
+    private void ReplaceGrid(SheetView view, Dictionary<(int, int), string> projected, bool syncExisting = true)
     {
-        if (view.Grid is not null) SyncView(view);
+        if (syncExisting && view.Grid is not null) SyncView(view);
         var grid = new Spreadsheet
         {
             Foreground = Brushes.Black,
@@ -354,9 +369,10 @@ public sealed class SpreadsheetPreviewWindow : Window
                 ShiftColumns(view, start, direction * count);
                 view.ColumnCount = Math.Max(1, view.ColumnCount + direction * count);
             }
-            RefreshFilteredViews();
+            view.StructureDirty = true;
+            RefreshFilteredViews(syncExisting: false);
             _status.Foreground = DashboardStyle.Green;
-            _status.Text = message + ". Changes will be written to the original workbook when saved.";
+            _status.Text = $"{message} at {(rows ? $"row {start + 1}" : $"column {start + 1}")}. Changes will be written to the original workbook when saved.";
         }
         catch (Exception ex)
         {
@@ -404,11 +420,19 @@ public sealed class SpreadsheetPreviewWindow : Window
         }
     }
 
-    private static int OriginalRowAt(SheetView view, int displayRow) =>
-        view.DisplayRows.FirstOrDefault(x => x.Value == displayRow).Key;
+    private static int OriginalRowAt(SheetView view, int displayRow)
+    {
+        foreach (var pair in view.DisplayRows)
+            if (pair.Value == displayRow) return pair.Key;
+        return Math.Clamp(displayRow, 0, Math.Max(0, view.RowCount - 1));
+    }
 
-    private static int OriginalColumnAt(SheetView view, int displayColumn) =>
-        view.DisplayColumns.FirstOrDefault(x => x.Value == displayColumn).Key;
+    private static int OriginalColumnAt(SheetView view, int displayColumn)
+    {
+        foreach (var pair in view.DisplayColumns)
+            if (pair.Value == displayColumn) return pair.Key;
+        return Math.Clamp(displayColumn, 0, Math.Max(0, view.ColumnCount - 1));
+    }
 
     private void ApplyTypeface(FontWeight weight)
     {
@@ -615,27 +639,112 @@ public sealed class SpreadsheetPreviewWindow : Window
         _status.Foreground = DashboardStyle.Muted;
     }
 
+    private SheetView? SelectedSheet() => _sheets.Values.ElementAtOrDefault(_tabs.SelectedIndex);
+
+    private void AddSheet()
+    {
+        var number = 1;
+        string name;
+        do name = $"Sheet{number++}"; while (_sheets.ContainsKey(name));
+
+        var tab = new TabItem { Header = name };
+        var view = new SheetView { Name = name, Cells = [], Tab = tab, RowCount = 1, ColumnCount = 1 };
+        _sheets.Add(name, view);
+        _tabs.Items.Add(tab);
+        _tabs.SelectedIndex = _tabs.ItemCount - 1;
+        RefreshFilteredViews(syncExisting: false);
+        _status.Foreground = DashboardStyle.Green;
+        _status.Text = $"Added sheet '{name}'. Press Ctrl+S or click Save workbook to write it.";
+    }
+
+    private void RemoveSheet()
+    {
+        var view = SelectedSheet();
+        if (view is null) return;
+        if (_sheets.Count <= 1)
+        {
+            _status.Foreground = DashboardStyle.Red;
+            _status.Text = "A workbook must contain at least one worksheet.";
+            return;
+        }
+
+        SyncView(view);
+        _sheets.Remove(view.Name);
+        if (view.OriginalName is not null) _removedSheetNames.Add(view.OriginalName);
+        _tabs.Items.Remove(view.Tab);
+        _tabs.SelectedIndex = Math.Clamp(_tabs.SelectedIndex, 0, _tabs.ItemCount - 1);
+        RefreshFilteredViews(syncExisting: false);
+        _status.Foreground = DashboardStyle.Green;
+        _status.Text = $"Removed sheet '{view.Name}'. Press Ctrl+S or click Save workbook to write it.";
+    }
+
+    private void RenameSheet()
+    {
+        var view = SelectedSheet();
+        if (view is null) return;
+        var input = new TextBox { Text = view.Name, Width = 300 };
+        var dialog = new Window { Title = "Rename sheet", Width = 440, Height = 190, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        var error = DashboardStyle.Text("", 11, false, DashboardStyle.Red);
+        var ok = DashboardStyle.Action("Rename", () =>
+        {
+            var name = input.Text?.Trim() ?? "";
+            if (!IsValidSheetName(name)) { error.Text = "Use 1–31 characters and do not use : \\ / ? * [ ]."; return; }
+            if (!name.Equals(view.Name, StringComparison.OrdinalIgnoreCase) && _sheets.ContainsKey(name)) { error.Text = $"A sheet named '{name}' already exists."; return; }
+            var oldName = view.Name;
+            _sheets.Remove(oldName);
+            view.Name = name;
+            view.Tab.Header = name;
+            _sheets.Add(name, view);
+            dialog.Close();
+            RefreshFilteredViews(syncExisting: false);
+            _status.Foreground = DashboardStyle.Green;
+            _status.Text = $"Renamed sheet '{oldName}' to '{name}'. Press Ctrl+S or click Save workbook to write it.";
+        }, "primary");
+        var cancel = DashboardStyle.Action("Cancel", () => dialog.Close());
+        dialog.Content = new StackPanel { Margin = new Thickness(18), Spacing = 8, Children =
+        {
+            DashboardStyle.Text("New sheet name", 14, true), input, error,
+            new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { cancel, ok } }
+        }};
+        dialog.Show(this);
+        input.Focus(); input.SelectAll();
+    }
+
+    private static bool IsValidSheetName(string name) => name.Length is >= 1 and <= 31 && name.IndexOfAny([':', '\\', '/', '?', '*', '[', ']']) < 0;
+
     private void SaveWorkbook()
     {
         var temp = _sourcePath + ".saving.xlsx";
         var backup = _sourcePath + ".bak.xlsx";
         try
         {
-            foreach (var view in _sheets.Values) SyncView(view);
+            foreach (var view in _sheets.Values)
+                if (!view.StructureDirty) SyncView(view);
             using (var workbook = new XLWorkbook(_sourcePath))
             {
-                foreach (var pair in _sheets)
+                foreach (var removedName in _removedSheetNames.ToArray())
                 {
-                    var sheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(pair.Key, StringComparison.OrdinalIgnoreCase));
-                    if (sheet is null) continue;
+                    var removed = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(removedName, StringComparison.OrdinalIgnoreCase));
+                    removed?.Delete();
+                }
+
+                foreach (var view in _sheets.Values)
+                {
+                    var sheet = view.OriginalName is not null
+                        ? workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(view.OriginalName, StringComparison.OrdinalIgnoreCase))
+                        : null;
+                    sheet ??= workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(view.Name, StringComparison.OrdinalIgnoreCase));
+                    sheet ??= workbook.Worksheets.Add(view.Name);
+                    if (!sheet.Name.Equals(view.Name, StringComparison.Ordinal)) sheet.Name = view.Name;
+
                     var used = sheet.RangeUsed();
                     used?.Clear(XLClearOptions.Contents);
-                    foreach (var cell in pair.Value.Cells)
+                    foreach (var cell in view.Cells)
                     {
-                        if (cell.Key.Row >= pair.Value.RowCount || cell.Key.Col >= pair.Value.ColumnCount) continue;
+                        if (cell.Key.Row >= view.RowCount || cell.Key.Col >= view.ColumnCount) continue;
                         var target = sheet.Cell(cell.Key.Row + 1, cell.Key.Col + 1);
                         target.Value = cell.Value;
-                        if (!pair.Value.Styles.TryGetValue(cell.Key, out var style)) continue;
+                        if (!view.Styles.TryGetValue(cell.Key, out var style)) continue;
                         target.Style.Font.Bold = style.Bold;
                         target.Style.Font.Italic = style.Italic;
                         if (!string.IsNullOrWhiteSpace(style.TextColor)) target.Style.Font.FontColor = XLColor.FromHtml(style.TextColor);
@@ -646,6 +755,8 @@ public sealed class SpreadsheetPreviewWindow : Window
             }
             File.Copy(_sourcePath, backup, true);
             File.Move(temp, _sourcePath, true);
+            _removedSheetNames.Clear();
+            foreach (var view in _sheets.Values) view.StructureDirty = false;
             _status.Foreground = DashboardStyle.Green;
             _status.Text = $"Workbook saved: {_sourcePath}. Backup: {backup}";
         }

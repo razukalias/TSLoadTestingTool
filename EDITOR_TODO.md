@@ -172,6 +172,20 @@ Proposed behavior:
 - [x] Keep the header visible when the cell-value filter is also active.
 - [x] Bound range expansion to the workbook size to avoid expensive or invalid input causing a freeze.
 
+### 12. New editor Save and worksheet management
+
+**Current status:** Implemented and isolated-tested; packaged UI verification remains.
+
+- [x] Make the visible Save workbook button and Ctrl+S use the same direct-save path.
+- [x] Save edited cells to the original workbook and create an openable `.bak.xlsx` backup.
+- [x] Prevent Save from synchronizing stale grid coordinates over structural changes.
+- [x] Persist inserted and deleted rows and columns.
+- [x] Add visible **Add sheet**, **Remove sheet**, and **Rename sheet** controls.
+- [x] Persist added sheets, removed sheets, and renamed sheets.
+- [x] Validate sheet names for Excel length and invalid characters.
+- [x] Keep at least one worksheet in every workbook.
+- [ ] Verify the final packaged Windows build with Save, row/column operations, and sheet operations.
+
 ## Verification checklist for the future wrapping fix
 
 - [ ] Wrap one selected row.
