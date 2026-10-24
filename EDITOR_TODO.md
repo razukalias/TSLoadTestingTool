@@ -161,6 +161,17 @@ Proposed behavior:
 - [ ] Test Save, insert/delete, cut/paste, and style persistence in the packaged build.
 - [ ] Replace Spreadalonia’s border-only live selection highlight with a true per-cell visual fill; Excel fill is already written to the workbook on Save, but Spreadalonia 1.1.0 has no public per-cell background API.
 
+### 11. Row-filter correction
+
+**Current status:** Implemented and live-tested in Dashboard 2026.10.24.4.
+
+- [x] Keep the workbook header row visible whenever a row filter is active.
+- [x] Support individual rows such as `2`.
+- [x] Support comma-separated rows such as `3,5`.
+- [x] Support inclusive ranges such as `1-2,3,5`.
+- [x] Keep the header visible when the cell-value filter is also active.
+- [x] Bound range expansion to the workbook size to avoid expensive or invalid input causing a freeze.
+
 ## Verification checklist for the future wrapping fix
 
 - [ ] Wrap one selected row.

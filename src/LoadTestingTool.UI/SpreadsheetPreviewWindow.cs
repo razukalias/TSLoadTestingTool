@@ -168,7 +168,7 @@ public sealed class SpreadsheetPreviewWindow : Window
                 var headerTerms = Terms(_headerFilter.Text);
                 var valueTerms = Terms(_valueFilter.Text);
                 var selectedColumns = columns.Where(col => headerTerms.Length == 0 || headerTerms.All(term => Cell(view.Cells, col, 0).Contains(term, StringComparison.OrdinalIgnoreCase))).ToArray();
-                selectedRows = selectedRows.Where(row => valueTerms.Length == 0 || valueTerms.All(term => RowText(view.Cells, row).Contains(term, StringComparison.OrdinalIgnoreCase))).ToArray();
+                selectedRows = selectedRows.Where(row => row == 0 || valueTerms.Length == 0 || valueTerms.All(term => RowText(view.Cells, row).Contains(term, StringComparison.OrdinalIgnoreCase))).ToArray();
 
                 view.DisplayRows = selectedRows.Select((row, index) => (row, index)).ToDictionary(x => x.row, x => x.index);
                 view.DisplayColumns = selectedColumns.Select((col, index) => (col, index)).ToDictionary(x => x.col, x => x.index);
@@ -188,9 +188,29 @@ public sealed class SpreadsheetPreviewWindow : Window
 
     private static int[] ParseRows(string? text, int[] allRows)
     {
-        var requested = (text ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(x => int.TryParse(x, out var n) ? n - 1 : -1).Where(x => x >= 0).ToHashSet();
-        return requested.Count == 0 ? allRows : allRows.Where(x => requested.Contains(x)).ToArray();
+        var filter = (text ?? "").Trim();
+        if (filter.Length == 0) return allRows;
+
+        var requested = new HashSet<int>();
+        foreach (var part in filter.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var range = part.Split('-', StringSplitOptions.TrimEntries);
+            if (range.Length == 2 && int.TryParse(range[0], out var first) && int.TryParse(range[1], out var last))
+            {
+                var lower = Math.Max(1, Math.Min(first, last));
+                var upper = Math.Min(allRows.Length, Math.Max(first, last));
+                for (var number = lower; number <= upper; number++) requested.Add(number - 1);
+            }
+            else if (range.Length == 1 && int.TryParse(part, out var number) && number >= 1)
+            {
+                requested.Add(number - 1);
+            }
+        }
+
+        // Row 0 is the workbook header and must stay visible for every row filter.
+        return requested.Count == 0
+            ? allRows
+            : allRows.Where(row => row == 0 || requested.Contains(row)).ToArray();
     }
 
     private static string Cell(Dictionary<(int Col, int Row), string> cells, int col, int row) => cells.TryGetValue((col, row), out var value) ? value : "";
