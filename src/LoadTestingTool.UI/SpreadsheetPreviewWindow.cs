@@ -357,8 +357,16 @@ public sealed class SpreadsheetPreviewWindow : Window
         {
             SyncView(view);
             var range = grid.Selection[0];
-            var count = rows ? Math.Max(1, range.Height) : Math.Max(1, range.Width);
             var start = rows ? OriginalRowAt(view, range.Top) : OriginalColumnAt(view, range.Left);
+            var reportedCount = rows ? range.Height : range.Width;
+            // Spreadalonia reports a whole row/column header selection as the
+            // full Excel grid (over a million rows or thousands of columns).
+            // Structural editing must operate on the selected workbook area,
+            // never on the virtual grid dimensions.
+            var workbookCount = rows ? view.RowCount : view.ColumnCount;
+            var count = reportedCount is > 0 and <= 256
+                ? Math.Min(reportedCount, Math.Max(1, workbookCount - start))
+                : 1;
             if (rows)
             {
                 ShiftRows(view, start, direction * count);
@@ -735,8 +743,12 @@ public sealed class SpreadsheetPreviewWindow : Window
             {
                 if (File.Exists(temp)) File.Delete(temp);
                 using var recoveryWorkbook = new XLWorkbook(_sourcePath);
-                WriteWorkbookChanges(recoveryWorkbook, includeEditorStyles: false);
-                recoveryWorkbook.SaveAs(temp, true);
+                WriteWorkbookChanges(recoveryWorkbook, includeEditorStyles: true);
+                // Older workbooks can contain legacy font/color ordering that
+                // ClosedXML reads but rejects during strict OpenXML validation.
+                // Validation-disabled output remains readable by Excel and keeps
+                // the workbook contents and editor changes.
+                recoveryWorkbook.SaveAs(temp, false);
                 formattingSkipped = true;
             }
             catch (Exception recoveryException)
@@ -763,7 +775,7 @@ public sealed class SpreadsheetPreviewWindow : Window
             foreach (var view in _sheets.Values) view.StructureDirty = false;
             _status.Foreground = DashboardStyle.Green;
             _status.Text = formattingSkipped
-                ? $"Workbook saved: {_sourcePath}. Backup: {backup}. Formatting was skipped because the source workbook styles were not schema-compatible."
+                ? $"Workbook saved: {_sourcePath}. Backup: {backup}. Legacy styles were preserved using non-strict validation."
                 : $"Workbook saved: {_sourcePath}. Backup: {backup}";
         }
         catch (Exception ex)

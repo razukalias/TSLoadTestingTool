@@ -218,6 +218,17 @@ Proposed behavior:
 - [ ] Test insert/delete row and column on the user’s older large workbook.
 - [ ] Inspect the actual older workbook after a Save failure to identify its incompatible `styles.xml` structure.
 
+### 16. DataEngine_IntegrationScenarios compatibility fix
+
+**Current status:** Reproduced against the uploaded workbook; fix implemented, packaged verification pending.
+
+- [x] Reproduce the Save error outside the UI with `DataEngine_IntegrationScenarios.xlsx`.
+- [x] Confirm the error occurs even with no editor changes and is caused by legacy `xl/styles.xml` font/color ordering.
+- [x] Save legacy-style workbooks through ClosedXML’s non-strict package-validation path after the strict path fails.
+- [x] Preserve editor values, styles, sheet operations, and the `.bak.xlsx` backup in the recovery path.
+- [x] Bound whole-row/whole-column structural selections to one workbook column/row instead of Spreadalonia’s virtual grid size.
+- [ ] Verify Save and Insert column manually in the packaged build using the uploaded workbook.
+
 ## Verification checklist for the future wrapping fix
 
 - [ ] Wrap one selected row.
