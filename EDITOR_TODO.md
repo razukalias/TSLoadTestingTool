@@ -197,6 +197,16 @@ Proposed behavior:
 - [x] Report clearly when data was saved but editor-only formatting had to be skipped.
 - [ ] Reproduce with the user’s exact workbook after installing the packaged 2026.10.24.6 build and confirm the recovery message.
 
+### 14. Automatic discovery of copied instances
+
+**Current status:** Implemented in the next build.
+
+- [x] Continue reading enabled registered instances from central `appsettings.json`.
+- [x] Merge central instances with folders copied manually under `Instances`.
+- [x] Detect folders by the presence of an `.xlsx` workbook, not only by the `DataEngine_` name prefix.
+- [x] Keep central names and workbook paths authoritative when a discovered folder is already registered.
+- [ ] Verify `StyleSaveRepro` appears after extraction in the packaged UI.
+
 ## Verification checklist for the future wrapping fix
 
 - [ ] Wrap one selected row.

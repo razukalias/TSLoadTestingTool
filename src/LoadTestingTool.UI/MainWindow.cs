@@ -297,9 +297,25 @@ public sealed partial class MainWindow : Window
         var previous = _instances.ToDictionary(x => x.FolderPath, StringComparer.OrdinalIgnoreCase);
         _instances.Clear();
         var centralBase = Path.GetDirectoryName(_config.SettingsFile)!;
-        var candidates = _config.Instances.Count > 0
-            ? _config.Instances.Where(pair => pair.Value.Enabled).Select(pair => (Name: pair.Key, Folder: Path.GetFullPath(pair.Value.Folder, centralBase), Workbook: pair.Value.Workbook)).ToList()
-            : Directory.GetDirectories(root, $"{_config.InstancePrefix}*", SearchOption.TopDirectoryOnly).OrderBy(x => x).Select(folder => (Name: Path.GetFileName(folder), Folder: folder, Workbook: string.Empty)).ToList();
+        var candidateMap = new Dictionary<string, (string Name, string Folder, string Workbook)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in _config.Instances.Where(pair => pair.Value.Enabled))
+        {
+            var folder = Path.GetFullPath(pair.Value.Folder, centralBase);
+            candidateMap[folder] = (pair.Key, folder, pair.Value.Workbook);
+        }
+
+        // Central settings remain authoritative for registered folders, while newly copied
+        // legacy folders are also discovered without requiring an appsettings edit first.
+        foreach (var folder in Directory.GetDirectories(root, "*", SearchOption.TopDirectoryOnly)
+                     .Where(folder => Directory.EnumerateFiles(folder, "*.xlsx", SearchOption.TopDirectoryOnly)
+                         .Any(file => !Path.GetFileName(file).StartsWith("~$", StringComparison.Ordinal)))
+                     .OrderBy(x => x))
+        {
+            var fullFolder = Path.GetFullPath(folder);
+            candidateMap.TryAdd(fullFolder, (Path.GetFileName(fullFolder), fullFolder, string.Empty));
+        }
+
+        var candidates = candidateMap.Values.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase).ToList();
         foreach (var candidate in candidates)
         {
             var folder = candidate.Folder;
