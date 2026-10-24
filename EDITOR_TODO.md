@@ -146,6 +146,21 @@ Proposed behavior:
 - [ ] Verify save/reopen manually for cell values, styles, cut/paste, and row/column operations.
 - [ ] Verify autocomplete acceptance and keyboard navigation in the packaged Windows build.
 
+### 10. Spreadsheet editor stability follow-up
+
+**Current status:** Fixed in Dashboard 2026.10.24.3; packaged manual verification remains.
+
+- [x] Fix ClosedXML save failure caused by the temporary `.saving` extension; temporary files now use `.saving.xlsx`.
+- [x] Dispose the loaded workbook before replacing the original file.
+- [x] Use `.bak.xlsx` for a directly openable backup.
+- [x] Remove the unsafe double row/column mutation that delegated to Spreadalonia and then shifted the model again.
+- [x] Correct row/column coordinate mapping when filters are active.
+- [x] Make filtered-cell synchronization robust for missing display coordinates.
+- [x] Confirm the UI remains alive after insert/delete row and column operations.
+- [x] Confirm the corrected ClosedXML path can write and reopen an `.xlsx` file.
+- [ ] Test Save, insert/delete, cut/paste, and style persistence in the packaged build.
+- [ ] Replace Spreadalonia’s border-only live selection highlight with a true per-cell visual fill; Excel fill is already written to the workbook on Save, but Spreadalonia 1.1.0 has no public per-cell background API.
+
 ## Verification checklist for the future wrapping fix
 
 - [ ] Wrap one selected row.

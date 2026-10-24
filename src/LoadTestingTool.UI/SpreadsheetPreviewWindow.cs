@@ -13,7 +13,7 @@ using Spreadalonia;
 namespace LoadTestingTool.UI;
 
 /// <summary>
-/// Experimental spreadsheet preview. It deliberately never writes to the source workbook.
+/// Experimental spreadsheet editor. Changes are saved to the source workbook after a backup is created.
 /// </summary>
 public sealed class SpreadsheetPreviewWindow : Window
 {
@@ -56,7 +56,7 @@ public sealed class SpreadsheetPreviewWindow : Window
     public SpreadsheetPreviewWindow(string workbookPath)
     {
         _sourcePath = workbookPath;
-        Title = $"Spreadsheet preview — {Path.GetFileName(workbookPath)}";
+        Title = $"Spreadsheet editor — {Path.GetFileName(workbookPath)}";
         Width = 1320; Height = 900; MinWidth = 900; MinHeight = 600;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
@@ -92,8 +92,8 @@ public sealed class SpreadsheetPreviewWindow : Window
 
         var heading = new StackPanel { Spacing = 4, Children =
         {
-            DashboardStyle.Text("New spreadsheet editor preview", 21, true),
-            DashboardStyle.Text("Separate test editor. The original DataEngine editor remains unchanged. Filters are visual only and do not delete workbook data.", 12, false, DashboardStyle.Muted)
+            DashboardStyle.Text("Spreadsheet editor", 21, true),
+            DashboardStyle.Text("Edits save to the original DataEngine workbook after creating a .bak.xlsx backup. Filters are visual only and do not delete workbook data.", 12, false, DashboardStyle.Muted)
         }};
         var filterBar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 10, 0, 8), Children =
         {
@@ -111,10 +111,10 @@ public sealed class SpreadsheetPreviewWindow : Window
             DashboardStyle.Action("Paste", () => { var g = ActiveGrid(); if (g is not null) _ = PasteAndSync(g); }),
             DashboardStyle.Action("Undo", () => ApplyFormatCommand("Undo", g => g.Undo())),
             DashboardStyle.Action("Redo", () => ApplyFormatCommand("Redo", g => g.Redo())),
-            DashboardStyle.Action("Insert row", () => ApplyStructuralCommand("Inserted row", g => g.InsertRows(), true, 1)),
-            DashboardStyle.Action("Delete row", () => ApplyStructuralCommand("Deleted row", g => g.DeleteRows(), true, -1)),
-            DashboardStyle.Action("Insert column", () => ApplyStructuralCommand("Inserted column", g => g.InsertColumns(), false, 1)),
-            DashboardStyle.Action("Delete column", () => ApplyStructuralCommand("Deleted column", g => g.DeleteColumns(), false, -1)),
+            DashboardStyle.Action("Insert row", () => ApplyStructuralCommand("Inserted row", true, 1)),
+            DashboardStyle.Action("Delete row", () => ApplyStructuralCommand("Deleted row", true, -1)),
+            DashboardStyle.Action("Insert column", () => ApplyStructuralCommand("Inserted column", false, 1)),
+            DashboardStyle.Action("Delete column", () => ApplyStructuralCommand("Deleted column", false, -1)),
             DashboardStyle.Action("Auto-fit width", () => ApplyFormatCommand("Auto-fit columns", g => g.AutoFitWidth())),
             DashboardStyle.Action("Auto-fit height", () => ApplyFormatCommand("Auto-fit rows", g => g.AutoFitHeight())),
             DashboardStyle.Action("Reset format", ResetSelectedFormat)
@@ -254,8 +254,8 @@ public sealed class SpreadsheetPreviewWindow : Window
             Menu("Highlight selection", () => ApplyFormatCommand("Highlight", g => { g.SelectionAccent = new SolidColorBrush(Color.Parse("#3B6EA8")); CaptureSelectionStyle(g, highlight: "#3B6EA8"); })),
             Menu("Reset format", ResetSelectedFormat),
             new Separator(),
-            Menu("Insert row", () => ApplyStructuralCommand("Inserted row", g => g.InsertRows(), true, 1)), Menu("Delete row", () => ApplyStructuralCommand("Deleted row", g => g.DeleteRows(), true, -1)),
-            Menu("Insert column", () => ApplyStructuralCommand("Inserted column", g => g.InsertColumns(), false, 1)), Menu("Delete column", () => ApplyStructuralCommand("Deleted column", g => g.DeleteColumns(), false, -1)),
+            Menu("Insert row", () => ApplyStructuralCommand("Inserted row", true, 1)), Menu("Delete row", () => ApplyStructuralCommand("Deleted row", true, -1)),
+            Menu("Insert column", () => ApplyStructuralCommand("Inserted column", false, 1)), Menu("Delete column", () => ApplyStructuralCommand("Deleted column", false, -1)),
             Menu("Auto-fit width", () => grid.AutoFitWidth()), Menu("Auto-fit height", () => grid.AutoFitHeight()),
             Menu("Undo", () => grid.Undo()), Menu("Redo", () => grid.Redo())
         }) menu.Items.Add(item);
@@ -313,7 +313,7 @@ public sealed class SpreadsheetPreviewWindow : Window
         }
     }
 
-    private void ApplyStructuralCommand(string message, Action<Spreadsheet> action, bool rows, int direction)
+    private void ApplyStructuralCommand(string message, bool rows, int direction)
     {
         var view = _sheets.Values.ElementAtOrDefault(_tabs.SelectedIndex);
         var grid = view?.Grid;
@@ -323,8 +323,7 @@ public sealed class SpreadsheetPreviewWindow : Window
             SyncView(view);
             var range = grid.Selection[0];
             var count = rows ? Math.Max(1, range.Height) : Math.Max(1, range.Width);
-            var start = rows ? view.DisplayRows.GetValueOrDefault(range.Top, range.Top) : view.DisplayColumns.GetValueOrDefault(range.Left, range.Left);
-            action(grid);
+            var start = rows ? OriginalRowAt(view, range.Top) : OriginalColumnAt(view, range.Left);
             if (rows)
             {
                 ShiftRows(view, start, direction * count);
@@ -384,6 +383,12 @@ public sealed class SpreadsheetPreviewWindow : Window
             view.Styles[rows ? (style.Key.Col, coordinate) : (coordinate, style.Key.Row)] = style.Value;
         }
     }
+
+    private static int OriginalRowAt(SheetView view, int displayRow) =>
+        view.DisplayRows.FirstOrDefault(x => x.Value == displayRow).Key;
+
+    private static int OriginalColumnAt(SheetView view, int displayColumn) =>
+        view.DisplayColumns.FirstOrDefault(x => x.Value == displayColumn).Key;
 
     private void ApplyTypeface(FontWeight weight)
     {
@@ -485,10 +490,11 @@ public sealed class SpreadsheetPreviewWindow : Window
     private void UpdateSuggestions(Spreadsheet grid, SheetView view, bool force = false, string? liveText = null)
     {
         AttachEditingAutocomplete(grid, view);
-        if (grid.Selection.Count == 0 || grid.Data is null) { _suggestionPopup.IsOpen = false; return; }
+        var data = grid.Data;
+        if (grid.Selection.Count == 0 || data is null) { _suggestionPopup.IsOpen = false; return; }
         var selection = grid.Selection[0];
         var editor = grid.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(x => x.Name == "EditingBox" && x.IsVisible);
-        var text = liveText ?? (grid.IsEditing && editor is not null ? editor.Text : grid.Data.TryGetValue((selection.Left, selection.Top), out var value) ? value ?? "" : "");
+        var text = liveText ?? (grid.IsEditing && editor is not null ? editor.Text ?? "" : data.TryGetValue((selection.Left, selection.Top), out var value) ? value ?? "" : "");
         var caret = text.Length;
         var before = text[..caret];
         var lt = before.LastIndexOf('<'); var brace = before.LastIndexOf('{');
@@ -567,16 +573,16 @@ public sealed class SpreadsheetPreviewWindow : Window
         if (view.Grid.IsEditing && editor is not null && view.Grid.Selection.Count > 0)
         {
             var selected = view.Grid.Selection[0];
-            visibleCells[(selected.Left, selected.Top)] = editor.Text;
+            visibleCells[(selected.Left, selected.Top)] = editor.Text ?? string.Empty;
         }
 
         foreach (var original in view.DisplayRows.Values.SelectMany(row => view.DisplayColumns.Values.Select(column => (column, row))).ToArray())
             view.Cells.Remove(original);
+        var originalRows = view.DisplayRows.ToDictionary(x => x.Value, x => x.Key);
+        var originalColumns = view.DisplayColumns.ToDictionary(x => x.Value, x => x.Key);
         foreach (var cell in visibleCells)
         {
-            var row = view.DisplayRows.FirstOrDefault(x => x.Value == cell.Key.Item2).Key;
-            var col = view.DisplayColumns.FirstOrDefault(x => x.Value == cell.Key.Item1).Key;
-            if (!view.DisplayRows.ContainsKey(row) || !view.DisplayColumns.ContainsKey(col)) continue;
+            if (!originalRows.TryGetValue(cell.Key.Item2, out var row) || !originalColumns.TryGetValue(cell.Key.Item1, out var col)) continue;
             if (!string.IsNullOrEmpty(cell.Value)) view.Cells[(col, row)] = cell.Value;
         }
     }
@@ -591,32 +597,34 @@ public sealed class SpreadsheetPreviewWindow : Window
 
     private void SaveWorkbook()
     {
-        var temp = _sourcePath + ".saving";
-        var backup = _sourcePath + ".bak";
+        var temp = _sourcePath + ".saving.xlsx";
+        var backup = _sourcePath + ".bak.xlsx";
         try
         {
             foreach (var view in _sheets.Values) SyncView(view);
-            using var workbook = new XLWorkbook(_sourcePath);
-            foreach (var pair in _sheets)
+            using (var workbook = new XLWorkbook(_sourcePath))
             {
-                var sheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(pair.Key, StringComparison.OrdinalIgnoreCase));
-                if (sheet is null) continue;
-                var used = sheet.RangeUsed();
-                used?.Clear(XLClearOptions.Contents);
-                foreach (var cell in pair.Value.Cells)
+                foreach (var pair in _sheets)
                 {
-                    if (cell.Key.Row >= pair.Value.RowCount || cell.Key.Col >= pair.Value.ColumnCount) continue;
-                    var target = sheet.Cell(cell.Key.Row + 1, cell.Key.Col + 1);
-                    target.Value = cell.Value;
-                    if (!pair.Value.Styles.TryGetValue(cell.Key, out var style)) continue;
-                    target.Style.Font.Bold = style.Bold;
-                    target.Style.Font.Italic = style.Italic;
-                    if (!string.IsNullOrWhiteSpace(style.TextColor)) target.Style.Font.FontColor = XLColor.FromHtml(style.TextColor);
-                    if (!string.IsNullOrWhiteSpace(style.Highlight)) target.Style.Fill.BackgroundColor = XLColor.FromHtml(style.Highlight);
+                    var sheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(pair.Key, StringComparison.OrdinalIgnoreCase));
+                    if (sheet is null) continue;
+                    var used = sheet.RangeUsed();
+                    used?.Clear(XLClearOptions.Contents);
+                    foreach (var cell in pair.Value.Cells)
+                    {
+                        if (cell.Key.Row >= pair.Value.RowCount || cell.Key.Col >= pair.Value.ColumnCount) continue;
+                        var target = sheet.Cell(cell.Key.Row + 1, cell.Key.Col + 1);
+                        target.Value = cell.Value;
+                        if (!pair.Value.Styles.TryGetValue(cell.Key, out var style)) continue;
+                        target.Style.Font.Bold = style.Bold;
+                        target.Style.Font.Italic = style.Italic;
+                        if (!string.IsNullOrWhiteSpace(style.TextColor)) target.Style.Font.FontColor = XLColor.FromHtml(style.TextColor);
+                        if (!string.IsNullOrWhiteSpace(style.Highlight)) target.Style.Fill.BackgroundColor = XLColor.FromHtml(style.Highlight);
+                    }
                 }
+                workbook.SaveAs(temp, true);
             }
             File.Copy(_sourcePath, backup, true);
-            workbook.SaveAs(temp, true);
             File.Move(temp, _sourcePath, true);
             _status.Foreground = DashboardStyle.Green;
             _status.Text = $"Workbook saved: {_sourcePath}. Backup: {backup}";
