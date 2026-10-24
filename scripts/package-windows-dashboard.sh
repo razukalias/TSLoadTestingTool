@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NAME="TSLoadTestingTool-Dashboard-2026.10.23.5-win-x64"
+NAME="TSLoadTestingTool-Dashboard-2026.10.24.1-win-x64"
 DIST="$ROOT/dist/$NAME"
 # This script replaces only its own generated distribution.
 rm -rf "$DIST" "$ROOT/dist/$NAME.zip"
@@ -31,18 +31,27 @@ for instance in (root / 'Instances').glob('DataEngine_*'):
 manual = root / 'APPLICATION_GUIDE.pdf'
 if manual.is_file():
     shutil.copy2(manual, target / manual.name)
+central = root / 'appsettings.json'
+if central.is_file():
+    shutil.copy2(central, target / 'appsettings.json')
+    central_json = json.loads(central.read_text())
+    ui_settings_path = target / 'UI' / 'appsettings.json'
+    ui_settings = json.loads(ui_settings_path.read_text())
+    ui_settings['SettingsFile'] = '../appsettings.json'
+    ui_settings['Instances'] = central_json.get('Instances', ui_settings.get('Instances', {}))
+    ui_settings_path.write_text(json.dumps(ui_settings, indent=2) + '\n')
 manifest = {
-    'build': 'Dashboard 2026.10.23.5',
+    'build': 'Dashboard 2026.10.24.1',
     'sourceCommit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
     'runtime': 'win-x64', 'selfContained': True, 'configuration': 'Release'
 }
 (target / 'BUILD_INFO.json').write_text(json.dumps(manifest, indent=2) + '\n')
-(target / 'README.md').write_text('''# Load Testing Tool — Dashboard 2026.10.23.5
+(target / 'README.md').write_text('''# Load Testing Tool — Dashboard 2026.10.24.1
 
 Extract the entire archive to a NEW folder, then launch `UI/LoadTestingTool.UI.exe`.
 Do not download or copy only the EXE: its sibling DLLs and bundled runtime are required.
 
-The sidebar and title identify this build as **Dashboard 2026.10.23.5**.
+The sidebar and title identify this build as **Dashboard 2026.10.24.1**.
 The package includes the .NET runtime, `UI/`, `Runner/`, `Instances/`, the manual, and build metadata.
 The UI launches `Runner/LoadTestingTool.exe` directly, without system `dotnet`.
 
@@ -54,7 +63,7 @@ The UI launches `Runner/LoadTestingTool.exe` directly, without system `dotnet`.
 3. Use **Active runs** for processes currently running, **History** for saved result workbooks,
    and **Settings** for resolved paths and the internal-log switch.
 4. Use **Overview**, **Assertions** and **Artifacts** for selected-run details.
-
+5. The central `appsettings.json` at the archive root contains the instance registry. To run without the UI, use `Runner/LoadTestingTool.exe --config appsettings.json --instance DataEngine_IntegrationScenarios`, or run all registered instances with `Runner/LoadTestingTool.exe --config appsettings.json --run-all`.
 **Force stop** terminates the process tree and may leave incomplete artifacts.
 Files and folders open with your system default applications (no forced Excel or PDF reader).
 Path changes are made in `UI/appsettings.json`, followed by restarting the UI.

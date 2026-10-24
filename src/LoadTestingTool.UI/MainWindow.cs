@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ClosedXML.Excel;
 using Avalonia;
 using Avalonia.Controls;
@@ -16,9 +17,9 @@ namespace LoadTestingTool.UI;
 public sealed class InstanceInfo
 {
     public bool Selected { get; set; }
-    public string Name { get; init; } = string.Empty;
-    public string FolderPath { get; init; } = string.Empty;
-    public string WorkbookPath { get; init; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string FolderPath { get; set; } = string.Empty;
+    public string WorkbookPath { get; set; } = string.Empty;
     public string Status { get; set; } = "Ready";
     public string LastEvent { get; set; } = "No results yet";
     public string TestcaseSelection { get; set; } = "0";
@@ -295,13 +296,19 @@ public sealed partial class MainWindow : Window
         Directory.CreateDirectory(root);
         var previous = _instances.ToDictionary(x => x.FolderPath, StringComparer.OrdinalIgnoreCase);
         _instances.Clear();
-        foreach (var folder in Directory.GetDirectories(root, $"{_config.InstancePrefix}*", SearchOption.TopDirectoryOnly).OrderBy(x => x))
+        var centralBase = Path.GetDirectoryName(_config.SettingsFile)!;
+        var candidates = _config.Instances.Count > 0
+            ? _config.Instances.Where(pair => pair.Value.Enabled).Select(pair => (Name: pair.Key, Folder: Path.GetFullPath(pair.Value.Folder, centralBase), Workbook: pair.Value.Workbook)).ToList()
+            : Directory.GetDirectories(root, $"{_config.InstancePrefix}*", SearchOption.TopDirectoryOnly).OrderBy(x => x).Select(folder => (Name: Path.GetFileName(folder), Folder: folder, Workbook: string.Empty)).ToList();
+        foreach (var candidate in candidates)
         {
-            var workbook = Directory.GetFiles(folder, "*.xlsx", SearchOption.TopDirectoryOnly)
-                .Where(x => !Path.GetFileName(x).StartsWith("~$", StringComparison.Ordinal))
-                .OrderBy(x => x).FirstOrDefault();
+            var folder = candidate.Folder;
+            var workbook = string.IsNullOrWhiteSpace(candidate.Workbook) ? Directory.GetFiles(folder, "*.xlsx", SearchOption.TopDirectoryOnly)
+                .Where(x => !Path.GetFileName(x).StartsWith("~$", StringComparison.Ordinal)).OrderBy(x => x).FirstOrDefault() : Path.GetFullPath(candidate.Workbook, folder);
             if (workbook is null) continue;
-            var item = previous.GetValueOrDefault(folder) ?? new InstanceInfo { Name = Path.GetFileName(folder), FolderPath = folder, WorkbookPath = workbook };
+            var item = previous.GetValueOrDefault(folder) ?? new InstanceInfo { Name = candidate.Name, FolderPath = folder, WorkbookPath = workbook };
+            item.Name = candidate.Name;
+            item.WorkbookPath = workbook;
             try
             {
                 var profile = Path.Combine(folder, ".run-selection.json");
@@ -357,6 +364,7 @@ public sealed partial class MainWindow : Window
         {
             var createdFolder = builder.CreatedFolder;
             if (string.IsNullOrWhiteSpace(createdFolder)) return;
+            RegisterCentralInstance(createdFolder);
             RefreshInstances();
             var created = _instances.FirstOrDefault(x => x.FolderPath.Equals(Path.GetFullPath(createdFolder), StringComparison.OrdinalIgnoreCase));
             if (created is not null) { created.Selected = true; _instanceList.SelectedItem = created; ShowDetails(created); RefreshRows(); }
@@ -364,6 +372,25 @@ public sealed partial class MainWindow : Window
         };
         builder.Show(this);
         await Task.CompletedTask;
+    }
+
+    private void RegisterCentralInstance(string folder)
+    {
+        try
+        {
+            var root = File.Exists(_config.SettingsFile) ? JsonNode.Parse(File.ReadAllText(_config.SettingsFile)) as JsonObject : new JsonObject();
+            root ??= new JsonObject();
+            var instances = root["Instances"] as JsonObject ?? new JsonObject();
+            var name = Path.GetFileName(folder);
+            var workbook = Directory.GetFiles(folder, "*.xlsx", SearchOption.TopDirectoryOnly).FirstOrDefault(x => !Path.GetFileName(x).StartsWith("~$", StringComparison.Ordinal));
+            var relativeFolder = Path.GetRelativePath(Path.GetDirectoryName(_config.SettingsFile)!, folder).Replace('\\', '/');
+            instances[name] = new JsonObject { ["Folder"] = relativeFolder, ["Workbook"] = workbook is null ? $"{name}.xlsx" : Path.GetFileName(workbook), ["Enabled"] = true };
+            root["Instances"] = instances;
+            File.WriteAllText(_config.SettingsFile, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
+            _config.Instances[name] = new UiInstanceDefinition { Folder = relativeFolder, Workbook = workbook is null ? $"{name}.xlsx" : Path.GetFileName(workbook), Enabled = true };
+            UiLog($"Registered instance centrally. instance={name}; settings={_config.SettingsFile}");
+        }
+        catch (Exception ex) { UiLog($"Could not register instance centrally: {ex}"); _details.Text = $"Instance created, but central registration failed: {ex.Message}"; }
     }
 
     private void OpenStepWizardForInstance(InstanceInfo item)
@@ -497,6 +524,7 @@ public sealed partial class MainWindow : Window
                 { WorkingDirectory = item.FolderPath, UseShellExecute = false, CreateNoWindow = true };
                 if (runnerIsDll) start.ArgumentList.Add(runner);
                 void Arg(string name, string value) { start.ArgumentList.Add(name); start.ArgumentList.Add(value); }
+                Arg("--config", _config.SettingsFile); Arg("--instance", item.Name);
                 Arg("--excel", item.WorkbookPath); Arg("--templates", item.TemplatesFolder);
                 Arg("--history", item.HistoryFolder); Arg("--logs", item.LogsFolder); Arg("--results", item.ResultsFolder);
                 Arg("--instance-id", item.InstanceId); Arg("--run-id", item.CurrentRunId);
@@ -942,6 +970,7 @@ public sealed partial class MainWindow : Window
         var config = new UiConfig(); root.Bind(config);
         config.InstancesRoot = Path.GetFullPath(config.InstancesRoot, basePath);
         config.RunnerDll = Path.GetFullPath(config.RunnerDll, basePath);
+        config.SettingsFile = Path.GetFullPath(config.SettingsFile, basePath);
         config.DocumentationFile = Path.GetFullPath(config.DocumentationFile, basePath);
         config.UiLogFile = Path.GetFullPath(config.UiLogFile, basePath);
         return config;

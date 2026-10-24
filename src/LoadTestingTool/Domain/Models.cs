@@ -25,6 +25,28 @@ public sealed class AppConfig
     public Dictionary<string, SqlConnectionProfile> Connections { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public bool AllowTrustedScripts { get; set; }
     public int ScriptTimeoutSeconds { get; set; } = 30;
+    public Dictionary<string, CentralInstanceConfig> Instances { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed class CentralInstanceConfig
+{
+    public bool Enabled { get; set; } = true;
+    public string Folder { get; set; } = string.Empty;
+    public string Workbook { get; set; } = string.Empty;
+    public string? TemplatesFolder { get; set; }
+    public string? LogsFolder { get; set; }
+    public string? HistoryFolder { get; set; }
+    public string? ResultsFolder { get; set; }
+    public string? WorkspaceRoot { get; set; }
+    public string? TestcaseSelection { get; set; }
+    public string? StepSelection { get; set; }
+    public string? EnvironmentSelection { get; set; }
+    public string? ExecutionMode { get; set; }
+    public bool? RunScenariosInParallel { get; set; }
+    public bool? InternalLoggingEnabled { get; set; }
+    public bool? SaveRequestBodyToHistory { get; set; }
+    public bool? SaveResponseBodyToHistory { get; set; }
+    public Dictionary<string, bool>? HistorySheets { get; set; }
 }
 
 public static class HistorySheetCatalog

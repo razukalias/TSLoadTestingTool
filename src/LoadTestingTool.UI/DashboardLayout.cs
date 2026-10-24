@@ -13,7 +13,7 @@ namespace LoadTestingTool.UI;
 
 internal static class DashboardStyle
 {
-    public const string Build = "Dashboard 2026.10.23.5";
+    public const string Build = "Dashboard 2026.10.24.1";
     public static IBrush Brush(string color) => new SolidColorBrush(Color.Parse(color));
     public static IBrush Panel => Brush("#101E2E");
     public static IBrush Muted => Brush("#8EA4BC");
@@ -438,7 +438,7 @@ public sealed partial class MainWindow
         _artifactPanel.Children.Add(DashboardStyle.Text("Workbooks and run artifacts", 16, true));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open DataEngine", OpenSelectedDataEngine));
         _artifactPanel.Children.Add(DashboardStyle.Action("Try new spreadsheet editor", OpenSpreadsheetPreview));
-        _artifactPanel.Children.Add(DashboardStyle.Action("Configure history sheets", () => new HistorySettingsWindow(item.FolderPath).Show(this)));
+        _artifactPanel.Children.Add(DashboardStyle.Action("Configure history sheets", () => new HistorySettingsWindow(item.FolderPath, item.Name, _config.SettingsFile).Show(this)));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open latest result workbook", OpenLatestResultWorkbook));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open runner log", OpenLatestInternalLog));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open Templates folder", OpenTemplatesFolder));

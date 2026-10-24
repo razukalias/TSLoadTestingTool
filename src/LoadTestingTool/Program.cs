@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using LoadTestingTool.Domain;
@@ -19,7 +20,10 @@ internal static class Program
         string? loadedRunId = null;
         try
         {
-            var config = LoadConfig();
+            var settingsPath = GetCommandLineValue(args, "--config", "--settings");
+            var instanceKey = GetCommandLineValue(args, "--instance");
+            if (args.Any(x => x.Equals("--run-all", StringComparison.OrdinalIgnoreCase))) return await RunAllInstancesAsync(settingsPath);
+            var config = LoadConfig(settingsPath, instanceKey);
             loadedConfig = config;
             var workbookPath = GetCommandLineValue(args, "--excel", "--workbook") ?? config.ExcelFilePath;
             if (string.IsNullOrWhiteSpace(workbookPath)) throw new InvalidOperationException("No Excel workbook was specified.");
@@ -230,7 +234,60 @@ internal static class Program
         return result;
     }
 
-    private static AppConfig LoadConfig() { var root = new ConfigurationBuilder().SetBasePath(Directory.GetCurrentDirectory()).AddJsonFile("appsettings.json", optional: true, reloadOnChange: false).Build(); var config = new AppConfig(); root.Bind(config); return config; }
+    private static AppConfig LoadConfig(string? settingsPath = null, string? instanceKey = null)
+    {
+        var path = Path.GetFullPath(settingsPath ?? "appsettings.json", Directory.GetCurrentDirectory());
+        var baseDirectory = Path.GetDirectoryName(path)!;
+        var root = new ConfigurationBuilder().SetBasePath(baseDirectory).AddJsonFile(Path.GetFileName(path), optional: false, reloadOnChange: false).Build();
+        var config = new AppConfig(); root.Bind(config);
+        if (string.IsNullOrWhiteSpace(instanceKey)) return config;
+        if (!config.Instances.TryGetValue(instanceKey, out var instance)) throw new InvalidDataException($"Instance '{instanceKey}' was not found in central settings '{path}'.");
+        var instanceFolder = ResolveCentralPath(baseDirectory, instance.Folder, instanceKey);
+        config.InstanceId = instanceKey;
+        config.WorkspaceRoot = ResolveCentralPath(instanceFolder, instance.WorkspaceRoot, instanceFolder);
+        config.ExcelFilePath = ResolveCentralPath(instanceFolder, instance.Workbook, config.ExcelFilePath);
+        config.TemplatesFolder = ResolveCentralPath(instanceFolder, instance.TemplatesFolder, config.TemplatesFolder);
+        config.LogsFolder = ResolveCentralPath(instanceFolder, instance.LogsFolder, config.LogsFolder);
+        config.HistoryFolder = ResolveCentralPath(instanceFolder, instance.HistoryFolder, config.HistoryFolder);
+        config.ResultsFolder = ResolveCentralPath(instanceFolder, instance.ResultsFolder, config.ResultsFolder);
+        if (!string.IsNullOrWhiteSpace(instance.TestcaseSelection)) config.TestcaseSelection = instance.TestcaseSelection;
+        if (!string.IsNullOrWhiteSpace(instance.StepSelection)) config.StepSelection = instance.StepSelection;
+        if (!string.IsNullOrWhiteSpace(instance.EnvironmentSelection)) config.EnvironmentSelection = instance.EnvironmentSelection;
+        if (!string.IsNullOrWhiteSpace(instance.ExecutionMode)) config.ExecutionMode = instance.ExecutionMode;
+        if (instance.RunScenariosInParallel.HasValue) config.RunScenariosInParallel = instance.RunScenariosInParallel.Value;
+        if (instance.InternalLoggingEnabled.HasValue) config.InternalLoggingEnabled = instance.InternalLoggingEnabled.Value;
+        if (instance.SaveRequestBodyToHistory.HasValue) config.SaveRequestBodyToHistory = instance.SaveRequestBodyToHistory.Value;
+        if (instance.SaveResponseBodyToHistory.HasValue) config.SaveResponseBodyToHistory = instance.SaveResponseBodyToHistory.Value;
+        if (instance.HistorySheets is not null) config.HistorySheets = instance.HistorySheets;
+        return config;
+    }
+    private static string ResolveCentralPath(string baseDirectory, string? value, string fallback)
+    {
+        var selected = string.IsNullOrWhiteSpace(value) ? fallback : value;
+        return Path.GetFullPath(selected, baseDirectory);
+    }
+    private static async Task<int> RunAllInstancesAsync(string? settingsPath)
+    {
+        var path = Path.GetFullPath(settingsPath ?? "appsettings.json", Directory.GetCurrentDirectory());
+        var config = LoadConfig(path);
+        var enabledInstances = config.Instances.Where(pair => pair.Value.Enabled).ToList();
+        if (enabledInstances.Count == 0) throw new InvalidDataException($"No enabled instances are registered in '{path}'.");
+        var executable = Environment.ProcessPath ?? throw new InvalidOperationException("Could not locate the runner executable.");
+        var processes = new List<Process>();
+        foreach (var pair in enabledInstances)
+        {
+            var start = new ProcessStartInfo(executable) { WorkingDirectory = Path.GetDirectoryName(path)!, UseShellExecute = false };
+            if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+                start.ArgumentList.Add(Environment.GetCommandLineArgs()[0]);
+            start.ArgumentList.Add("--config"); start.ArgumentList.Add(path);
+            start.ArgumentList.Add("--instance"); start.ArgumentList.Add(pair.Key);
+            var process = Process.Start(start) ?? throw new InvalidOperationException($"Could not start instance '{pair.Key}'.");
+            processes.Add(process);
+            Console.WriteLine($"[Started] {pair.Key}; process={process.Id}");
+        }
+        await Task.WhenAll(processes.Select(async process => { await process.WaitForExitAsync(); process.Dispose(); }));
+        return 0;
+    }
     private static string? GetCommandLineValue(string[] args, params string[] names)
     {
         for (var i = 0; i < args.Length; i++)

@@ -117,6 +117,20 @@ Proposed behavior:
 - [ ] Open the settings window from the packaged UI and verify saving/reloading settings.
 - [ ] Run one instance with `RequestHistory` disabled and confirm the generated workbook has no such sheet.
 
+### 8. Central instance configuration and runner-only isolation
+
+**Current status:** Implemented in Dashboard 2026.10.24.1; packaged UI verification remains.
+
+- [x] Add a central `appsettings.json` instance registry with folder, workbook, and enabled state.
+- [x] Let the UI discover registered instances and retain directory scanning as a legacy fallback.
+- [x] Register newly created instances centrally.
+- [x] Store per-instance history worksheet settings under `Instances.<name>.HistorySheets`.
+- [x] Add runner `--config <path> --instance <name>` support.
+- [x] Keep instance-local `appsettings.json` files as backward-compatible fallback when no central instance key is supplied.
+- [x] Add runner-only `--run-all` mode that starts one child process per enabled instance.
+- [x] Verify one central-config instance run and one runner-only `--run-all` child process.
+- [ ] Verify central instance creation and history settings through the packaged Windows UI.
+
 ## Verification checklist for the future wrapping fix
 
 - [ ] Wrap one selected row.

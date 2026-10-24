@@ -11,12 +11,16 @@ namespace LoadTestingTool.UI;
 public sealed class HistorySettingsWindow : Window
 {
     private readonly string _instanceFolder;
+    private readonly string _instanceName;
+    private readonly string _settingsFile;
     private readonly Dictionary<string, CheckBox> _checks = new(StringComparer.OrdinalIgnoreCase);
     private readonly TextBlock _status = DashboardStyle.Text("Changes are saved to the instance appsettings.json.", 12, false, DashboardStyle.Muted);
 
-    public HistorySettingsWindow(string instanceFolder)
+    public HistorySettingsWindow(string instanceFolder, string instanceName, string settingsFile)
     {
         _instanceFolder = instanceFolder;
+        _instanceName = instanceName;
+        _settingsFile = settingsFile;
         Title = "History output settings";
         Width = 620;
         Height = 700;
@@ -71,6 +75,12 @@ public sealed class HistorySettingsWindow : Window
     {
         try
         {
+            if (File.Exists(_settingsFile))
+            {
+                var central = JsonNode.Parse(File.ReadAllText(_settingsFile));
+                var centralValue = central?["Instances"]?[_instanceName]?["HistorySheets"]?[name];
+                if (centralValue is not null) return centralValue.GetValue<bool>();
+            }
             var path = Path.Combine(_instanceFolder, "appsettings.json");
             if (!File.Exists(path)) return true;
             var node = JsonNode.Parse(File.ReadAllText(path));
@@ -117,12 +127,20 @@ public sealed class HistorySettingsWindow : Window
                 return;
             }
             Directory.CreateDirectory(_instanceFolder);
-            var path = Path.Combine(_instanceFolder, "appsettings.json");
+            var path = File.Exists(_settingsFile) ? _settingsFile : Path.Combine(_instanceFolder, "appsettings.json");
             var root = File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path)) as JsonObject : new JsonObject();
             root ??= new JsonObject();
             var sheets = new JsonObject();
             foreach (var name in UiHistorySheetCatalog.Names) sheets[name] = _checks[name].IsChecked == true;
-            root["HistorySheets"] = sheets;
+            if (Path.GetFullPath(path).Equals(Path.GetFullPath(_settingsFile), StringComparison.OrdinalIgnoreCase))
+            {
+                var instances = root["Instances"] as JsonObject ?? new JsonObject();
+                var instance = instances[_instanceName] as JsonObject ?? new JsonObject();
+                instance["HistorySheets"] = sheets;
+                instances[_instanceName] = instance;
+                root["Instances"] = instances;
+            }
+            else root["HistorySheets"] = sheets;
             var options = new JsonSerializerOptions { WriteIndented = true };
             File.WriteAllText(path, root.ToJsonString(options) + Environment.NewLine);
             _status.Foreground = DashboardStyle.Green;

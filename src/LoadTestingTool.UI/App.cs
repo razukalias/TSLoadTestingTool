@@ -8,9 +8,18 @@ public sealed class UiConfig
 {
     public string InstancesRoot { get; set; } = "../Instances";
     public string RunnerDll { get; set; } = "../Runner/LoadTestingTool.exe";
+    public string SettingsFile { get; set; } = "appsettings.json";
     public string InstancePrefix { get; set; } = "DataEngine_";
     public string DocumentationFile { get; set; } = "../APPLICATION_GUIDE.pdf";
     public string UiLogFile { get; set; } = "Logs/ui-internal.log";
+    public Dictionary<string, UiInstanceDefinition> Instances { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed class UiInstanceDefinition
+{
+    public string Folder { get; set; } = string.Empty;
+    public string Workbook { get; set; } = string.Empty;
+    public bool Enabled { get; set; } = true;
 }
 
 public sealed class App : Application
