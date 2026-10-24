@@ -186,6 +186,17 @@ Proposed behavior:
 - [x] Keep at least one worksheet in every workbook.
 - [ ] Verify the final packaged Windows build with Save, row/column operations, and sheet operations.
 
+### 13. ClosedXML styles.xml Save recovery
+
+**Current status:** Implemented in Dashboard 2026.10.24.6.
+
+- [x] Detect ClosedXML schema failures involving `styles.xml` and unexpected font child elements.
+- [x] Retry Save from a fresh workbook instance so the original workbook is not left partially written.
+- [x] Preserve cell values, added/removed/renamed sheets, and structural edits during recovery.
+- [x] Preserve the `.bak.xlsx` backup behavior.
+- [x] Report clearly when data was saved but editor-only formatting had to be skipped.
+- [ ] Reproduce with the user’s exact workbook after installing the packaged 2026.10.24.6 build and confirm the recovery message.
+
 ## Verification checklist for the future wrapping fix
 
 - [ ] Wrap one selected row.

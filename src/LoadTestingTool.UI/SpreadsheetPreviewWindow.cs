@@ -716,49 +716,51 @@ public sealed class SpreadsheetPreviewWindow : Window
     {
         var temp = _sourcePath + ".saving.xlsx";
         var backup = _sourcePath + ".bak.xlsx";
+        var formattingSkipped = false;
         try
         {
             foreach (var view in _sheets.Values)
                 if (!view.StructureDirty) SyncView(view);
-            using (var workbook = new XLWorkbook(_sourcePath))
+            using var workbook = new XLWorkbook(_sourcePath);
+            WriteWorkbookChanges(workbook, includeEditorStyles: true);
+            workbook.SaveAs(temp, true);
+        }
+        catch (Exception ex) when (IsStylesXmlFailure(ex))
+        {
+            try
             {
-                foreach (var removedName in _removedSheetNames.ToArray())
-                {
-                    var removed = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(removedName, StringComparison.OrdinalIgnoreCase));
-                    removed?.Delete();
-                }
-
-                foreach (var view in _sheets.Values)
-                {
-                    var sheet = view.OriginalName is not null
-                        ? workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(view.OriginalName, StringComparison.OrdinalIgnoreCase))
-                        : null;
-                    sheet ??= workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(view.Name, StringComparison.OrdinalIgnoreCase));
-                    sheet ??= workbook.Worksheets.Add(view.Name);
-                    if (!sheet.Name.Equals(view.Name, StringComparison.Ordinal)) sheet.Name = view.Name;
-
-                    var used = sheet.RangeUsed();
-                    used?.Clear(XLClearOptions.Contents);
-                    foreach (var cell in view.Cells)
-                    {
-                        if (cell.Key.Row >= view.RowCount || cell.Key.Col >= view.ColumnCount) continue;
-                        var target = sheet.Cell(cell.Key.Row + 1, cell.Key.Col + 1);
-                        target.Value = cell.Value;
-                        if (!view.Styles.TryGetValue(cell.Key, out var style)) continue;
-                        target.Style.Font.Bold = style.Bold;
-                        target.Style.Font.Italic = style.Italic;
-                        if (!string.IsNullOrWhiteSpace(style.TextColor)) target.Style.Font.FontColor = XLColor.FromHtml(style.TextColor);
-                        if (!string.IsNullOrWhiteSpace(style.Highlight)) target.Style.Fill.BackgroundColor = XLColor.FromHtml(style.Highlight);
-                    }
-                }
-                workbook.SaveAs(temp, true);
+                if (File.Exists(temp)) File.Delete(temp);
+                using var recoveryWorkbook = new XLWorkbook(_sourcePath);
+                WriteWorkbookChanges(recoveryWorkbook, includeEditorStyles: false);
+                recoveryWorkbook.SaveAs(temp, true);
+                formattingSkipped = true;
             }
+            catch (Exception recoveryException)
+            {
+                try { if (File.Exists(temp)) File.Delete(temp); } catch { }
+                _status.Foreground = DashboardStyle.Red;
+                _status.Text = $"Could not save workbook after style recovery: {recoveryException.Message}";
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            try { if (File.Exists(temp)) File.Delete(temp); } catch { }
+            _status.Foreground = DashboardStyle.Red;
+            _status.Text = $"Could not save workbook: {ex.Message}";
+            return;
+        }
+
+        try
+        {
             File.Copy(_sourcePath, backup, true);
             File.Move(temp, _sourcePath, true);
             _removedSheetNames.Clear();
             foreach (var view in _sheets.Values) view.StructureDirty = false;
             _status.Foreground = DashboardStyle.Green;
-            _status.Text = $"Workbook saved: {_sourcePath}. Backup: {backup}";
+            _status.Text = formattingSkipped
+                ? $"Workbook saved: {_sourcePath}. Backup: {backup}. Formatting was skipped because the source workbook styles were not schema-compatible."
+                : $"Workbook saved: {_sourcePath}. Backup: {backup}";
         }
         catch (Exception ex)
         {
@@ -766,5 +768,45 @@ public sealed class SpreadsheetPreviewWindow : Window
             _status.Foreground = DashboardStyle.Red;
             _status.Text = $"Could not save workbook: {ex.Message}";
         }
+    }
+
+    private void WriteWorkbookChanges(XLWorkbook workbook, bool includeEditorStyles)
+    {
+        foreach (var removedName in _removedSheetNames.ToArray())
+        {
+            var removed = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(removedName, StringComparison.OrdinalIgnoreCase));
+            removed?.Delete();
+        }
+
+        foreach (var view in _sheets.Values)
+        {
+            var sheet = view.OriginalName is not null
+                ? workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(view.OriginalName, StringComparison.OrdinalIgnoreCase))
+                : null;
+            sheet ??= workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(view.Name, StringComparison.OrdinalIgnoreCase));
+            sheet ??= workbook.Worksheets.Add(view.Name);
+            if (!sheet.Name.Equals(view.Name, StringComparison.Ordinal)) sheet.Name = view.Name;
+
+            sheet.RangeUsed()?.Clear(XLClearOptions.Contents);
+            foreach (var cell in view.Cells)
+            {
+                if (cell.Key.Row >= view.RowCount || cell.Key.Col >= view.ColumnCount) continue;
+                var target = sheet.Cell(cell.Key.Row + 1, cell.Key.Col + 1);
+                target.Value = cell.Value;
+                if (!includeEditorStyles || !view.Styles.TryGetValue(cell.Key, out var style)) continue;
+                target.Style.Font.Bold = style.Bold;
+                target.Style.Font.Italic = style.Italic;
+                if (!string.IsNullOrWhiteSpace(style.TextColor)) target.Style.Font.FontColor = XLColor.FromHtml(style.TextColor);
+                if (!string.IsNullOrWhiteSpace(style.Highlight)) target.Style.Fill.BackgroundColor = XLColor.FromHtml(style.Highlight);
+            }
+        }
+    }
+
+    private static bool IsStylesXmlFailure(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+            if (current.Message.Contains("styles.xml", StringComparison.OrdinalIgnoreCase) ||
+                current.Message.Contains("unexpected child element", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
     }
 }
