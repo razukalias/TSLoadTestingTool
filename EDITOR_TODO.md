@@ -239,6 +239,19 @@ Proposed behavior:
 - [x] Preserve cleared cells by removing them from the model instead of allowing stale values to be rewritten.
 - [ ] Verify new-sheet values and copy/cut/paste after closing and reopening the packaged editor.
 
+### 18. Clipboard shortcuts and live highlight rendering
+
+**Current status:** Implemented in the current source; packaged manual verification remains.
+
+- [x] Route Ctrl+C and Ctrl+X through the editor’s clipboard methods.
+- [x] Route Ctrl+V through an awaited paste path followed by model synchronization.
+- [x] Synchronize cut/paste after the UI control has committed its clipboard update.
+- [x] Load existing Excel fill colors into the editor model.
+- [x] Render saved and newly applied fills as translucent cell overlays in the embedded UI.
+- [x] Keep Excel fill persistence through the existing workbook Save path.
+- [ ] Verify cell, row, and column cut/paste with Ctrl+C/Ctrl+X/Ctrl+V in the packaged build.
+- [ ] Verify saved fills remain visible after closing and reopening the embedded editor.
+
 ## Verification checklist for the future wrapping fix
 
 - [ ] Wrap one selected row.

@@ -31,6 +31,7 @@ public sealed class SpreadsheetPreviewWindow : Window
         public string? OriginalName { get; init; }
         public required Dictionary<(int Col, int Row), string> Cells { get; init; }
         public Spreadsheet Grid { get; set; } = null!;
+        public Canvas HighlightOverlay { get; set; } = null!;
         public required TabItem Tab { get; init; }
         public int RowCount { get; set; }
         public int ColumnCount { get; set; }
@@ -74,6 +75,15 @@ public sealed class SpreadsheetPreviewWindow : Window
                 var view = new SheetView { Name = worksheet.Name, OriginalName = worksheet.Name, Cells = cells, Tab = tab,
                     RowCount = Math.Max(1, used?.RangeAddress.LastAddress.RowNumber ?? 1),
                     ColumnCount = Math.Max(1, used?.RangeAddress.LastAddress.ColumnNumber ?? 1) };
+                foreach (var cell in worksheet.CellsUsed())
+                {
+                    if (cell.Style.Fill.BackgroundColor.ColorType != XLColorType.Color) continue;
+                    var color = cell.Style.Fill.BackgroundColor.Color;
+                    view.Styles[(cell.Address.ColumnNumber - 1, cell.Address.RowNumber - 1)] = new SheetView.CellStyle
+                    {
+                        Highlight = $"#{color.R:X2}{color.G:X2}{color.B:X2}"
+                    };
+                }
                 _sheets[worksheet.Name] = view;
                 _tabs.Items.Add(tab);
             }
@@ -243,15 +253,27 @@ public sealed class SpreadsheetPreviewWindow : Window
             SelectionAccent = new SolidColorBrush(Color.Parse("#9CC7F5"))
         };
         view.Grid = grid;
-        view.Tab.Content = new Border { Padding = new Thickness(6), Child = grid };
+        var host = new Grid { ClipToBounds = true };
+        var overlay = new Canvas { IsHitTestVisible = false };
+        view.HighlightOverlay = overlay;
+        host.Children.Add(grid);
+        host.Children.Add(overlay);
+        view.Tab.Content = new Border { Padding = new Thickness(6), Child = host };
         WireAutocomplete(grid, view);
+        grid.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == Spreadsheet.SelectionProperty)
+                Dispatcher.UIThread.Post(() => RefreshHighlightOverlay(view), DispatcherPriority.Render);
+        };
         ScheduleGridLoad(grid, projected);
+        Dispatcher.UIThread.Post(() => RefreshHighlightOverlay(view), DispatcherPriority.Render);
     }
 
     private void WireAutocomplete(Spreadsheet grid, SheetView view)
     {
         grid.ContextMenu = BuildGridMenu(grid);
         grid.AddHandler(InputElement.TextInputEvent, (_, _) => Dispatcher.UIThread.Post(() => UpdateSuggestions(grid, view)), RoutingStrategies.Bubble);
+        grid.AddHandler(InputElement.KeyDownEvent, (_, e) => HandleClipboardKey(grid, view, e), RoutingStrategies.Tunnel);
         grid.AddHandler(InputElement.KeyDownEvent, (_, e) => HandleAutocompleteKey(grid, view, e), RoutingStrategies.Tunnel);
         grid.PropertyChanged += (_, e) =>
         {
@@ -262,6 +284,35 @@ public sealed class SpreadsheetPreviewWindow : Window
             }
         };
         grid.Loaded += (_, _) => Dispatcher.UIThread.Post(() => AttachEditingAutocomplete(grid, view), DispatcherPriority.Loaded);
+    }
+
+    private static void HandleClipboardKey(Spreadsheet grid, SheetView view, KeyEventArgs e)
+    {
+        if ((e.KeyModifiers & KeyModifiers.Control) != KeyModifiers.Control || grid.Selection.Count == 0) return;
+        switch (e.Key)
+        {
+            case Key.C:
+                grid.Copy();
+                e.Handled = true;
+                break;
+            case Key.X:
+                grid.Cut();
+                SyncView(view);
+                Dispatcher.UIThread.Post(() => SyncView(view), DispatcherPriority.Background);
+                e.Handled = true;
+                break;
+            case Key.V:
+                _ = PasteFromKeyboardAsync(grid, view);
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private static async Task PasteFromKeyboardAsync(Spreadsheet grid, SheetView view)
+    {
+        await grid.Paste(false);
+        SyncView(view);
+        Dispatcher.UIThread.Post(() => SyncView(view), DispatcherPriority.Background);
     }
 
     private void AttachEditingAutocomplete(Spreadsheet grid, SheetView view)
@@ -311,7 +362,13 @@ public sealed class SpreadsheetPreviewWindow : Window
     {
         var grid = ActiveGrid();
         if (grid is null) return;
-        try { action(grid); _status.Text = message + "."; _status.Foreground = DashboardStyle.Green; }
+        try
+        {
+            action(grid);
+            var view = _sheets.Values.ElementAtOrDefault(_tabs.SelectedIndex);
+            if (view is not null) Dispatcher.UIThread.Post(() => RefreshHighlightOverlay(view), DispatcherPriority.Render);
+            _status.Text = message + "."; _status.Foreground = DashboardStyle.Green;
+        }
         catch (Exception ex) { _status.Text = $"{message} failed: {ex.Message}"; _status.Foreground = DashboardStyle.Red; }
     }
 
@@ -636,6 +693,49 @@ public sealed class SpreadsheetPreviewWindow : Window
         var key = (originalColumn, originalRow);
         if (string.IsNullOrEmpty(value)) view.Cells.Remove(key);
         else view.Cells[key] = value;
+    }
+
+    private static void RefreshHighlightOverlay(SheetView view)
+    {
+        if (view.Grid is null || view.HighlightOverlay is null) return;
+        view.HighlightOverlay.Children.Clear();
+        var table = view.Grid.GetVisualDescendants().OfType<Control>().FirstOrDefault(x => x.Name == "ContentTable");
+        if (table is null) return;
+        var origin = table.TranslatePoint(new Point(0, 0), view.HighlightOverlay);
+        if (origin is null) return;
+        var horizontalScroll = view.Grid.GetVisualDescendants().OfType<ScrollBar>().FirstOrDefault(x => x.Name == "HorizontalScrollBar");
+        var verticalScroll = view.Grid.GetVisualDescendants().OfType<ScrollBar>().FirstOrDefault(x => x.Name == "VerticalScrollBar");
+        var offset = new Vector(horizontalScroll?.Value ?? 0, verticalScroll?.Value ?? 0);
+        var columnStarts = new Dictionary<int, double>();
+        var rowStarts = new Dictionary<int, double>();
+        double x = 0;
+        for (var column = 0; column < view.ColumnCount; column++)
+        {
+            columnStarts[column] = x;
+            x += view.Grid.GetCellSize(column, 0).width;
+        }
+        double y = 0;
+        for (var row = 0; row < view.RowCount; row++)
+        {
+            rowStarts[row] = y;
+            y += view.Grid.GetCellSize(0, row).height;
+        }
+
+        foreach (var item in view.Styles)
+        {
+            if (string.IsNullOrWhiteSpace(item.Value.Highlight) ||
+                !view.DisplayColumns.TryGetValue(item.Key.Col, out var displayColumn) ||
+                !view.DisplayRows.TryGetValue(item.Key.Row, out var displayRow) ||
+                !columnStarts.TryGetValue(displayColumn, out var left) ||
+                !rowStarts.TryGetValue(displayRow, out var top)) continue;
+            var size = view.Grid.GetCellSize(displayColumn, displayRow);
+            var color = Color.Parse(item.Value.Highlight);
+            var fill = new SolidColorBrush(Color.FromArgb(72, color.R, color.G, color.B));
+            var cell = new Border { Background = fill, Width = size.width, Height = size.height, IsHitTestVisible = false };
+            Canvas.SetLeft(cell, origin.Value.X + left - offset.X);
+            Canvas.SetTop(cell, origin.Value.Y + top - offset.Y);
+            view.HighlightOverlay.Children.Add(cell);
+        }
     }
 
     private static void SyncView(SheetView view)

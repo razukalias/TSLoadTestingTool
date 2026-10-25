@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NAME="TSLoadTestingTool-Dashboard-2026.10.25.1-win-x64"
+NAME="TSLoadTestingTool-Dashboard-2026.10.25.2-win-x64"
 DIST="$ROOT/dist/$NAME"
 # This script replaces only its own generated distribution.
 rm -rf "$DIST" "$ROOT/dist/$NAME.zip"
@@ -41,7 +41,7 @@ if central.is_file():
     ui_settings['Instances'] = central_json.get('Instances', ui_settings.get('Instances', {}))
     ui_settings_path.write_text(json.dumps(ui_settings, indent=2) + '\n')
 manifest = {
-    'build': 'Dashboard 2026.10.25.1',
+    'build': 'Dashboard 2026.10.25.2',
     'sourceCommit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
     'runtime': 'win-x64', 'selfContained': True, 'configuration': 'Release'
 }
@@ -61,12 +61,12 @@ if errorlevel 1 (
   pause
 )
 ''')
-(target / 'README.md').write_text('''# Load Testing Tool — Dashboard 2026.10.25.1
+(target / 'README.md').write_text('''# Load Testing Tool — Dashboard 2026.10.25.2
 
 Extract the entire archive to a NEW folder, then launch `Start-Dashboard.cmd` or `UI/LoadTestingTool.UI.exe`.
 Do not download or copy only the EXE: its sibling DLLs and bundled runtime are required.
 
-The sidebar and title identify this build as **Dashboard 2026.10.25.1**.
+The sidebar and title identify this build as **Dashboard 2026.10.25.2**.
 The package includes the .NET runtime, `UI/`, `Runner/`, `Instances/`, the manual, and build metadata.
 The UI launches `Runner/LoadTestingTool.exe` directly, without system `dotnet`.
 If startup fails silently, `Start-Dashboard.cmd` keeps the error visible and the UI writes details to `UI/Logs/ui-startup-error.log`.
