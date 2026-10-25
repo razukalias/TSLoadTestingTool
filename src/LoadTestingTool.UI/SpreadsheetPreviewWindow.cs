@@ -760,6 +760,7 @@ public sealed class SpreadsheetPreviewWindow : Window
     {
         if (view.Grid is null || view.DisplayRows.Count == 0 || view.DisplayColumns.Count == 0 || view.Grid.Data is null) return;
         var visibleCells = view.Grid.Data.ToDictionary(x => x.Key, x => x.Value);
+        EnsureDisplayMapCoverage(view, visibleCells.Keys);
         var editor = view.Grid.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(x => x.Name == "EditingBox" && x.IsVisible);
         if (view.Grid.IsEditing && editor is not null && view.Grid.Selection.Count > 0)
         {
@@ -779,6 +780,29 @@ public sealed class SpreadsheetPreviewWindow : Window
         {
             if (!originalRows.TryGetValue(cell.Key.Item2, out var row) || !originalColumns.TryGetValue(cell.Key.Item1, out var col)) continue;
             if (!string.IsNullOrEmpty(cell.Value)) view.Cells[(col, row)] = cell.Value;
+        }
+    }
+
+    private static void EnsureDisplayMapCoverage(SheetView view, IEnumerable<(int Col, int Row)> cells)
+    {
+        var maxDisplayColumn = cells.Select(x => x.Col).DefaultIfEmpty(-1).Max();
+        var maxDisplayRow = cells.Select(x => x.Row).DefaultIfEmpty(-1).Max();
+        var mappedDisplayColumns = view.DisplayColumns.Values.ToHashSet();
+        var mappedDisplayRows = view.DisplayRows.Values.ToHashSet();
+
+        for (var display = 0; display <= maxDisplayColumn; display++)
+        {
+            if (mappedDisplayColumns.Contains(display)) continue;
+            var original = view.ColumnCount++;
+            view.DisplayColumns[original] = display;
+            mappedDisplayColumns.Add(display);
+        }
+        for (var display = 0; display <= maxDisplayRow; display++)
+        {
+            if (mappedDisplayRows.Contains(display)) continue;
+            var original = view.RowCount++;
+            view.DisplayRows[original] = display;
+            mappedDisplayRows.Add(display);
         }
     }
 

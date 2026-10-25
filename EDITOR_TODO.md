@@ -263,6 +263,16 @@ Proposed behavior:
 - [x] Log Save start, strict-save failure, legacy-style recovery, replacement failure, and final result.
 - [ ] Reproduce the copy/cut problem with Dashboard 2026.10.25.3 and upload the updated `ui-internal.log`.
 
+### 20. Paste into new workbook columns or rows
+
+**Current status:** Fixed in the current source; packaged verification remains.
+
+- [x] Diagnose the uploaded log: the grid contained pasted cells, but the target column was outside the existing `DisplayColumns` map.
+- [x] Expand display-to-workbook mappings before synchronizing pasted cells.
+- [x] Allow paste to create new workbook rows or columns instead of silently discarding those cells.
+- [x] Preserve the existing filtered-row/header mapping behavior.
+- [ ] Retest the exact sequence from the log with Dashboard 2026.10.25.4 and confirm the pasted column after reopening.
+
 ## Verification checklist for the future wrapping fix
 
 - [ ] Wrap one selected row.
