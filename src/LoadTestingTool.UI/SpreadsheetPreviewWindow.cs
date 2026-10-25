@@ -42,6 +42,7 @@ public sealed class SpreadsheetPreviewWindow : Window
     }
 
     private readonly string _sourcePath;
+    private readonly Action<string>? _log;
     private readonly TabControl _tabs = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
     private readonly Dictionary<string, SheetView> _sheets = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _removedSheetNames = new(StringComparer.OrdinalIgnoreCase);
@@ -57,9 +58,10 @@ public sealed class SpreadsheetPreviewWindow : Window
     private Spreadsheet? _suggestionGrid;
     private bool _refreshing;
 
-    public SpreadsheetPreviewWindow(string workbookPath)
+    public SpreadsheetPreviewWindow(string workbookPath, Action<string>? log = null)
     {
         _sourcePath = workbookPath;
+        _log = log;
         Title = $"Spreadsheet editor — {Path.GetFileName(workbookPath)}";
         Width = 1320; Height = 900; MinWidth = 900; MinHeight = 600;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -88,11 +90,13 @@ public sealed class SpreadsheetPreviewWindow : Window
                 _tabs.Items.Add(tab);
             }
             if (_tabs.ItemCount == 0) _status.Text = "The workbook contains no worksheets.";
+            Log($"Spreadsheet editor opened. workbook={_sourcePath}; sheets={_sheets.Count}");
         }
         catch (Exception ex)
         {
             _status.Text = $"Could not load workbook: {ex.Message}";
             _status.Foreground = DashboardStyle.Red;
+            Log($"Spreadsheet editor open failed. workbook={_sourcePath}; error={ex}");
         }
 
         _headerFilter.TextChanged += (_, _) => RefreshFilteredViews();
@@ -286,33 +290,37 @@ public sealed class SpreadsheetPreviewWindow : Window
         grid.Loaded += (_, _) => Dispatcher.UIThread.Post(() => AttachEditingAutocomplete(grid, view), DispatcherPriority.Loaded);
     }
 
-    private static void HandleClipboardKey(Spreadsheet grid, SheetView view, KeyEventArgs e)
+    private void HandleClipboardKey(Spreadsheet grid, SheetView view, KeyEventArgs e)
     {
         if ((e.KeyModifiers & KeyModifiers.Control) != KeyModifiers.Control || grid.Selection.Count == 0) return;
         switch (e.Key)
         {
             case Key.C:
                 grid.Copy();
+                Log($"Spreadsheet copy. selection={DescribeSelection(grid)}; gridCells={grid.Data?.Count ?? 0}; modelCells={view.Cells.Count}");
                 e.Handled = true;
                 break;
             case Key.X:
                 grid.Cut();
                 SyncView(view);
                 Dispatcher.UIThread.Post(() => SyncView(view), DispatcherPriority.Background);
+                Log($"Spreadsheet cut. selection={DescribeSelection(grid)}; gridCells={grid.Data?.Count ?? 0}; modelCells={view.Cells.Count}");
                 e.Handled = true;
                 break;
             case Key.V:
                 _ = PasteFromKeyboardAsync(grid, view);
+                Log($"Spreadsheet paste requested. selection={DescribeSelection(grid)}; modelCellsBefore={view.Cells.Count}");
                 e.Handled = true;
                 break;
         }
     }
 
-    private static async Task PasteFromKeyboardAsync(Spreadsheet grid, SheetView view)
+    private async Task PasteFromKeyboardAsync(Spreadsheet grid, SheetView view)
     {
         await grid.Paste(false);
         SyncView(view);
         Dispatcher.UIThread.Post(() => SyncView(view), DispatcherPriority.Background);
+        Log($"Spreadsheet paste completed. selection={DescribeSelection(grid)}; gridCells={grid.Data?.Count ?? 0}; modelCells={view.Cells.Count}");
     }
 
     private void AttachEditingAutocomplete(Spreadsheet grid, SheetView view)
@@ -356,6 +364,12 @@ public sealed class SpreadsheetPreviewWindow : Window
         return item;
     }
 
+    private void Log(string message) => _log?.Invoke(message);
+
+    private static string DescribeSelection(Spreadsheet grid) => grid.Selection.Count == 0
+        ? "none"
+        : string.Join("|", grid.Selection.Select(range => $"L{range.Left + 1}:T{range.Top + 1}-R{range.Right + 1}:B{range.Bottom + 1}"));
+
     private Spreadsheet? ActiveGrid() => _sheets.Values.ElementAtOrDefault(_tabs.SelectedIndex)?.Grid;
 
     private void ApplyFormatCommand(string message, Action<Spreadsheet> action)
@@ -385,11 +399,13 @@ public sealed class SpreadsheetPreviewWindow : Window
             }
             _status.Foreground = DashboardStyle.Green;
             _status.Text = "Cell changes applied. Save workbook to write them to the original file.";
+            Log($"Spreadsheet clipboard command completed. selection={DescribeSelection(grid)}; gridCells={grid.Data?.Count ?? 0}; modelCells={view?.Cells.Count ?? 0}");
         }
         catch (Exception ex)
         {
             _status.Foreground = DashboardStyle.Red;
             _status.Text = $"Cell operation failed: {ex.Message}";
+            Log($"Spreadsheet cell operation failed. error={ex}");
         }
     }
 
@@ -406,11 +422,13 @@ public sealed class SpreadsheetPreviewWindow : Window
             }
             _status.Foreground = DashboardStyle.Green;
             _status.Text = "Pasted cells applied. Save workbook to write them to the original file.";
+            Log($"Spreadsheet paste completed. selection={DescribeSelection(grid)}; gridCells={grid.Data?.Count ?? 0}; modelCells={view?.Cells.Count ?? 0}");
         }
         catch (Exception ex)
         {
             _status.Foreground = DashboardStyle.Red;
             _status.Text = $"Paste failed: {ex.Message}";
+            Log($"Spreadsheet paste failed. error={ex}");
         }
     }
 
@@ -850,6 +868,7 @@ public sealed class SpreadsheetPreviewWindow : Window
         var temp = _sourcePath + ".saving.xlsx";
         var backup = _sourcePath + ".bak.xlsx";
         var formattingSkipped = false;
+        Log($"Spreadsheet save started. workbook={_sourcePath}; sheets={_sheets.Count}; totalModelCells={_sheets.Values.Sum(x => x.Cells.Count)}");
         try
         {
             foreach (var view in _sheets.Values)
@@ -871,12 +890,14 @@ public sealed class SpreadsheetPreviewWindow : Window
                 // the workbook contents and editor changes.
                 recoveryWorkbook.SaveAs(temp, false);
                 formattingSkipped = true;
+                Log($"Spreadsheet save used legacy-style recovery. workbook={_sourcePath}; error={ex.Message}");
             }
             catch (Exception recoveryException)
             {
                 try { if (File.Exists(temp)) File.Delete(temp); } catch { }
                 _status.Foreground = DashboardStyle.Red;
                 _status.Text = $"Could not save workbook after style recovery: {recoveryException.Message}";
+                Log($"Spreadsheet save recovery failed. workbook={_sourcePath}; error={recoveryException}");
                 return;
             }
         }
@@ -885,6 +906,7 @@ public sealed class SpreadsheetPreviewWindow : Window
             try { if (File.Exists(temp)) File.Delete(temp); } catch { }
             _status.Foreground = DashboardStyle.Red;
             _status.Text = $"Could not save workbook: {ex.Message}";
+            Log($"Spreadsheet save failed. workbook={_sourcePath}; error={ex}");
             return;
         }
 
@@ -898,12 +920,14 @@ public sealed class SpreadsheetPreviewWindow : Window
             _status.Text = formattingSkipped
                 ? $"Workbook saved: {_sourcePath}. Backup: {backup}. Legacy styles were preserved using non-strict validation."
                 : $"Workbook saved: {_sourcePath}. Backup: {backup}";
+            Log($"Spreadsheet save completed. workbook={_sourcePath}; backup={backup}; formattingSkipped={formattingSkipped}");
         }
         catch (Exception ex)
         {
             try { if (File.Exists(temp)) File.Delete(temp); } catch { }
             _status.Foreground = DashboardStyle.Red;
             _status.Text = $"Could not save workbook: {ex.Message}";
+            Log($"Spreadsheet save replacement failed. workbook={_sourcePath}; error={ex}");
         }
     }
 

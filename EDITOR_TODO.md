@@ -252,6 +252,17 @@ Proposed behavior:
 - [ ] Verify cell, row, and column cut/paste with Ctrl+C/Ctrl+X/Ctrl+V in the packaged build.
 - [ ] Verify saved fills remain visible after closing and reopening the embedded editor.
 
+### 19. Spreadsheet actions in UI internal log
+
+**Current status:** Implemented in the current source; packaged verification remains.
+
+- [x] Route the spreadsheet editor to the existing `UI/Logs/ui-internal.log` through the dashboard `UiLog` callback.
+- [x] Log workbook open success/failure.
+- [x] Log Ctrl+C, Ctrl+X, and Ctrl+V with selected range and grid/model cell counts.
+- [x] Log paste completion and clipboard-operation failures.
+- [x] Log Save start, strict-save failure, legacy-style recovery, replacement failure, and final result.
+- [ ] Reproduce the copy/cut problem with Dashboard 2026.10.25.3 and upload the updated `ui-internal.log`.
+
 ## Verification checklist for the future wrapping fix
 
 - [ ] Wrap one selected row.
