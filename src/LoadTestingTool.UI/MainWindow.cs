@@ -131,7 +131,7 @@ public sealed partial class MainWindow : Window
     private InstanceRow GetOrCreateRow(InstanceInfo item)
     {
         if (_rows.TryGetValue(item.FolderPath, out var existing)) return existing;
-        var row = new InstanceRow(item, selected => { UiLog($"UI action: instance row clicked. instance={selected.Name}"); _instanceList.SelectedItem = selected; ShowDetails(selected); }, selected => OpenInstanceConfiguration(selected), selected => OpenStepWizardForInstance(selected), selected => EditStepForInstance(selected), selected => EditWorkbookForInstance(selected), selected => OpenWorkbookForInstance(selected), RunSingleInstance, StopSingleInstance, OpenInstanceLog, OpenInstanceHistory, UiLog);
+        var row = new InstanceRow(item, selected => { UiLog($"UI action: instance row clicked. instance={selected.Name}"); _instanceList.SelectedItem = selected; ShowDetails(selected); }, selected => OpenInstanceConfiguration(selected), selected => OpenStepWizardForInstance(selected), selected => EditStepForInstance(selected), selected => OpenSpreadsheetForInstance(selected), selected => OpenWorkbookForInstance(selected), RunSingleInstance, StopSingleInstance, OpenInstanceLog, OpenInstanceHistory, UiLog);
         row.SetEnvironmentOptions(item.EnvironmentOptions);
         _rows[item.FolderPath] = row;
         return row;
@@ -432,10 +432,10 @@ public sealed partial class MainWindow : Window
         wizard.Show(this);
     }
 
-    private void EditWorkbookForInstance(InstanceInfo item)
+    private void OpenSpreadsheetForInstance(InstanceInfo item)
     {
         _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item);
-        _ = EditWorkbookAsync();
+        OpenSpreadsheetPreview();
     }
 
     private void EditStepForInstance(InstanceInfo item)

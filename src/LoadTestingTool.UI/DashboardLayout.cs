@@ -13,7 +13,7 @@ namespace LoadTestingTool.UI;
 
 internal static class DashboardStyle
 {
-    public const string Build = "Dashboard 2026.10.25.4";
+    public const string Build = "Dashboard 2026.10.25.5";
     public static IBrush Brush(string color) => new SolidColorBrush(Color.Parse(color));
     public static IBrush Panel => Brush("#101E2E");
     public static IBrush Muted => Brush("#8EA4BC");
@@ -70,7 +70,7 @@ internal sealed class InstanceRow : Border
     private readonly TextBlock _order = DashboardStyle.Text("");
     private readonly TextBlock _environment = DashboardStyle.Text("");
     private readonly Border _badgeHost = new();
-    public InstanceRow(InstanceInfo item, Action<InstanceInfo> select, Action<InstanceInfo> configure, Action<InstanceInfo> addStep, Action<InstanceInfo> editStep, Action<InstanceInfo> editWorkbook, Action<InstanceInfo> openWorkbook, Action<InstanceInfo> run, Action<InstanceInfo> stop, Action<InstanceInfo> openLog, Action<InstanceInfo> openHistory, Action<string> log)
+    public InstanceRow(InstanceInfo item, Action<InstanceInfo> select, Action<InstanceInfo> configure, Action<InstanceInfo> addStep, Action<InstanceInfo> editStep, Action<InstanceInfo> trySpreadsheet, Action<InstanceInfo> openWorkbook, Action<InstanceInfo> run, Action<InstanceInfo> stop, Action<InstanceInfo> openLog, Action<InstanceInfo> openHistory, Action<string> log)
     {
         _item = item;
         Padding = new Thickness(8, 12);
@@ -85,7 +85,7 @@ internal sealed class InstanceRow : Border
         var actions = new WrapPanel { Orientation = Orientation.Horizontal, ItemWidth = double.NaN, ItemHeight = double.NaN };
         var runButton = DashboardStyle.Action("Run", () => run(item), "primary");
         ToolTip.SetTip(runButton, "Run all enabled workbook steps using workbook defaults. Use Configure first for a custom selection.");
-        foreach (var button in new[] { runButton, DashboardStyle.Action("Stop", () => stop(item)), DashboardStyle.Action("Configure", () => configure(item)), DashboardStyle.Action("Add step", () => addStep(item)), DashboardStyle.Action("Edit step", () => editStep(item)), DashboardStyle.Action("Edit workbook", () => editWorkbook(item)), DashboardStyle.Action("Open workbook", () => openWorkbook(item)), DashboardStyle.Action("Internal log", () => openLog(item)), DashboardStyle.Action("History", () => openHistory(item)) }) { button.Margin = new Thickness(0, 0, 4, 4); button.Padding = new Thickness(7, 5); actions.Children.Add(button); }
+        foreach (var button in new[] { runButton, DashboardStyle.Action("Stop", () => stop(item)), DashboardStyle.Action("Configure", () => configure(item)), DashboardStyle.Action("Add step", () => addStep(item)), DashboardStyle.Action("Edit step", () => editStep(item)), DashboardStyle.Action("Try spreadsheet", () => trySpreadsheet(item)), DashboardStyle.Action("Open workbook", () => openWorkbook(item)), DashboardStyle.Action("Internal log", () => openLog(item)), DashboardStyle.Action("History", () => openHistory(item)) }) { button.Margin = new Thickness(0, 0, 4, 4); button.Padding = new Thickness(7, 5); actions.Children.Add(button); }
         var cells = new Control[] { _check, name, _testcases, _mode, _order, _environment, _badgeHost, actions };
         for (var i = 0; i < cells.Length; i++) { Grid.SetColumn(cells[i], i); cells[i].Margin = new Thickness(0, 0, 6, 0); grid.Children.Add(cells[i]); }
         Child = grid;
@@ -319,7 +319,7 @@ public sealed partial class MainWindow
         order.SelectionChanged += (_, _) => item.RunScenariosInParallel = order.SelectedIndex == 1;
         _configurationPanel.Children.Add(Field("Testcase order", order));
         _configurationPanel.Children.Add(KeyValue("Data IDs", string.IsNullOrWhiteSpace(item.DataIdSelection) ? "All data rows" : item.DataIdSelection));
-        _configurationPanel.Children.Add(DashboardStyle.Text("Workbook actions are available directly on the instance row: Add step, Edit workbook, and Open workbook.", 12, false, DashboardStyle.Muted));
+        _configurationPanel.Children.Add(DashboardStyle.Text("Workbook actions are available directly on the instance row: Add step, Edit step, Try spreadsheet, and Open workbook. The legacy editor is available in Handcraft.", 12, false, DashboardStyle.Muted));
     }
     private async Task EditWorkbookAsync()
     {
@@ -436,8 +436,8 @@ public sealed partial class MainWindow
         _artifactPanel.Children.Clear(); var item = _selectedInstance;
         if (item is null) return;
         _artifactPanel.Children.Add(DashboardStyle.Text("Workbooks and run artifacts", 16, true));
+        _artifactPanel.Children.Add(DashboardStyle.Action("Handcraft: Edit workbook (legacy)", () => _ = EditWorkbookAsync()));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open DataEngine", OpenSelectedDataEngine));
-        _artifactPanel.Children.Add(DashboardStyle.Action("Try new spreadsheet editor", OpenSpreadsheetPreview));
         _artifactPanel.Children.Add(DashboardStyle.Action("Configure history sheets", () => new HistorySettingsWindow(item.FolderPath, item.Name, _config.SettingsFile).Show(this)));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open latest result workbook", OpenLatestResultWorkbook));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open runner log", OpenLatestInternalLog));
