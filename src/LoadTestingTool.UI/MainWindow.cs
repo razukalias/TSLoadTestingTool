@@ -553,7 +553,13 @@ public sealed partial class MainWindow : Window
                 var uiLaunchAt = DateTimeOffset.Now;
                 var runnerIsDll = runner.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
                 var start = new ProcessStartInfo(runnerIsDll ? "dotnet" : runner)
-                { WorkingDirectory = item.FolderPath, UseShellExecute = false, CreateNoWindow = true };
+                {
+                    WorkingDirectory = item.FolderPath,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
                 if (runnerIsDll) start.ArgumentList.Add(runner);
                 void Arg(string name, string value) { start.ArgumentList.Add(name); start.ArgumentList.Add(value); }
                 Arg("--config", _config.SettingsFile); Arg("--instance", item.Name);
@@ -570,6 +576,13 @@ public sealed partial class MainWindow : Window
                 if (!string.IsNullOrWhiteSpace(item.DataIdSelection)) Arg("--dataids", item.DataIdSelection);
                 UiLog($"Runner launch requested. instance={item.Name}; runId={item.CurrentRunId}; runner={runner}; args={JsonSerializer.Serialize(start.ArgumentList)}");
                 item.Process = Process.Start(start);
+                if (item.Process is null) throw new InvalidOperationException("The runner process could not be started.");
+                item.Process.EnableRaisingEvents = true;
+                item.Process.OutputDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) UiLog($"Runner stdout. instance={item.Name}; runId={item.CurrentRunId}; message={e.Data}"); };
+                item.Process.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) UiLog($"Runner stderr. instance={item.Name}; runId={item.CurrentRunId}; message={e.Data}"); };
+                item.Process.Exited += (_, _) => UiLog($"Runner process exited. instance={item.Name}; runId={item.CurrentRunId}; processId={item.Process?.Id}; exitCode={item.Process?.ExitCode}; hasEvents={item.EventMessages.Count > 0}");
+                item.Process.BeginOutputReadLine();
+                item.Process.BeginErrorReadLine();
                 UiLog($"Runner launch returned. instance={item.Name}; runId={item.CurrentRunId}; uiLaunchId={uiLaunchId}; processId={item.Process?.Id}; returnedAt={DateTimeOffset.Now:O}");
                 item.Status = "Running"; item.LastEvent = $"Started with testcases {selection}"; item.EventPosition = 0; item.EventLineIndex = 0; item.EventLinePositions.Clear(); item.Assertions.Clear();
                 item.Requests.Clear(); item.EventMessages.Clear(); item.CompletedRequests = null; item.AverageMs = null;
@@ -1000,11 +1013,55 @@ public sealed partial class MainWindow : Window
         var basePath = AppContext.BaseDirectory;
         var root = new ConfigurationBuilder().SetBasePath(basePath).AddJsonFile("appsettings.json", optional: true).Build();
         var config = new UiConfig(); root.Bind(config);
-        config.InstancesRoot = Path.GetFullPath(config.InstancesRoot, basePath);
-        config.RunnerDll = Path.GetFullPath(config.RunnerDll, basePath);
-        config.SettingsFile = Path.GetFullPath(config.SettingsFile, basePath);
-        config.DocumentationFile = Path.GetFullPath(config.DocumentationFile, basePath);
-        config.UiLogFile = Path.GetFullPath(config.UiLogFile, basePath);
+        config.InstancesRoot = ResolveConfiguredPath(config.InstancesRoot, basePath);
+        config.RunnerDll = ResolveConfiguredPath(config.RunnerDll, basePath);
+        config.SettingsFile = ResolveConfiguredPath(config.SettingsFile, basePath);
+        config.DocumentationFile = ResolveConfiguredPath(config.DocumentationFile, basePath);
+        config.UiLogFile = ResolveConfiguredPath(config.UiLogFile, basePath);
         return config;
+    }
+
+    private static string ResolveConfiguredPath(string configured, string basePath)
+    {
+        if (string.IsNullOrWhiteSpace(configured)) return configured;
+        if (Path.IsPathRooted(configured)) return Path.GetFullPath(configured);
+
+        var direct = Path.GetFullPath(configured, basePath);
+        var configuredLeaf = Path.GetFileName(Path.TrimEndingDirectorySeparator(configured));
+        var directDirectoryIsUsable = !configuredLeaf.Equals("Instances", StringComparison.OrdinalIgnoreCase)
+            || (Directory.Exists(direct) && Directory.EnumerateFiles(direct, "*.xlsx", SearchOption.TopDirectoryOnly).Any());
+        if (File.Exists(direct) || (Directory.Exists(direct) && directDirectoryIsUsable)) return direct;
+
+        // Development output is nested below src/LoadTestingTool.UI/bin, while
+        // the packaged dashboard keeps appsettings, Instances, and Runner next
+        // to the UI directory. Try the same configured path from each ancestor.
+        var ancestors = new List<DirectoryInfo>();
+        for (var directory = new DirectoryInfo(basePath); directory is not null; directory = directory.Parent) ancestors.Add(directory);
+        foreach (var directory in ancestors.AsEnumerable().Reverse())
+        {
+            var candidate = Path.GetFullPath(configured, directory.FullName);
+            if (File.Exists(candidate) || Directory.Exists(candidate)) return candidate;
+        }
+
+        var fileName = Path.GetFileName(configured);
+        var leaf = Path.GetFileName(Path.TrimEndingDirectorySeparator(configured));
+
+        if (fileName.Equals("appsettings.json", StringComparison.OrdinalIgnoreCase))
+            foreach (var directory in ancestors.AsEnumerable().Reverse())
+                if (File.Exists(Path.Combine(directory.FullName, fileName))) return Path.Combine(directory.FullName, fileName);
+
+        if (leaf.Equals("Instances", StringComparison.OrdinalIgnoreCase))
+            foreach (var directory in ancestors.AsEnumerable().Reverse())
+                if (Directory.Exists(Path.Combine(directory.FullName, leaf))) return Path.Combine(directory.FullName, leaf);
+
+        if (fileName.Equals("LoadTestingTool.exe", StringComparison.OrdinalIgnoreCase))
+            foreach (var directory in ancestors.AsEnumerable().Reverse())
+                foreach (var relative in new[] { "bin/Debug/net10.0/LoadTestingTool.dll", "bin/Release/net10.0/LoadTestingTool.dll", "bin/Debug/net10.0/LoadTestingTool.exe", "bin/Release/net10.0/LoadTestingTool.exe" })
+                {
+                    var candidate = Path.Combine(directory.FullName, relative);
+                    if (File.Exists(candidate)) return candidate;
+                }
+
+        return direct;
     }
 }
