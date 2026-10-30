@@ -270,6 +270,7 @@ internal static class Program
         if (instance.InternalLoggingEnabled.HasValue) config.InternalLoggingEnabled = instance.InternalLoggingEnabled.Value;
         if (instance.SaveRequestBodyToHistory.HasValue) config.SaveRequestBodyToHistory = instance.SaveRequestBodyToHistory.Value;
         if (instance.SaveResponseBodyToHistory.HasValue) config.SaveResponseBodyToHistory = instance.SaveResponseBodyToHistory.Value;
+        if (instance.MaskSensitiveData.HasValue) config.MaskSensitiveData = instance.MaskSensitiveData.Value;
         if (instance.HistorySheets is not null) config.HistorySheets = instance.HistorySheets;
         return config;
     }

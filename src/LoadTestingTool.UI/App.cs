@@ -30,6 +30,11 @@ public sealed class UiInstanceDefinition
     public int? ThreadIntervalMs { get; set; }
     public int? IterationIntervalMs { get; set; }
     public bool? GenerateResults { get; set; }
+    public bool? InternalLoggingEnabled { get; set; }
+    public bool? SaveRequestBodyToHistory { get; set; }
+    public bool? SaveResponseBodyToHistory { get; set; }
+    public bool? MaskSensitiveData { get; set; }
+    public Dictionary<string, bool>? HistorySheets { get; set; }
 }
 
 public sealed class App : Application

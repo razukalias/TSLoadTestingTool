@@ -346,9 +346,8 @@ public sealed partial class MainWindow
     private void OpenInstanceConfiguration(InstanceInfo item)
     {
         if (!string.IsNullOrWhiteSpace(item.SelectionReadError)) { _details.Text = $"Cannot read run choices: {item.SelectionReadError}"; return; }
-        var chooser = new RunSelectionWindow(item);
-        chooser.Closed += (_, _) => { if (chooser.Result is not null) ApplyRunSelection(item, chooser.Result); };
-        chooser.Show(this);
+        var form = new InstanceConfigurationWindow(item, () => ChooseRunSelectionAsync(item), SaveInstanceReportingSettings);
+        form.Show(this);
     }
 
     private void ApplyRunSelection(InstanceInfo item, RunSelectionResult result)

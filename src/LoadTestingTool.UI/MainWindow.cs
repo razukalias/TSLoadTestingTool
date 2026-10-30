@@ -33,6 +33,11 @@ public sealed class InstanceInfo
     public int ThreadIntervalMs { get; set; }
     public int IterationIntervalMs { get; set; }
     public bool GenerateResults { get; set; } = true;
+    public bool InternalLoggingEnabled { get; set; } = true;
+    public bool SaveRequestBodyToHistory { get; set; } = true;
+    public bool SaveResponseBodyToHistory { get; set; } = true;
+    public bool MaskSensitiveData { get; set; } = true;
+    public Dictionary<string, bool> HistorySheets { get; } = HistorySheetDefaults();
     public bool RunScenariosInParallel { get; set; }
     public string EnvironmentSelection { get; set; } = "";
     public string EnvironmentSelectionJson { get; set; } = "";
@@ -60,6 +65,13 @@ public sealed class InstanceInfo
     public string TemplatesFolder => Path.Combine(FolderPath, "Templates");
     public string LogsFolder => Path.Combine(FolderPath, "Logs");
     public string InstanceId => Name;
+
+    private static Dictionary<string, bool> HistorySheetDefaults() => new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["RunSummary"] = true, ["Metrics"] = true, ["TestcaseSummary"] = true, ["RequestHistory"] = true,
+        ["RuntimeReferenceErrors"] = true, ["AssertionHistory"] = true, ["Variables"] = true,
+        ["CorrelationHistory"] = true, ["DataEngineRequestRows"] = true, ["DataEngineConfig"] = true
+    };
 }
 
 public sealed class AssertionInfo
@@ -404,6 +416,12 @@ public sealed partial class MainWindow : Window
                 item.ThreadIntervalMs = Math.Max(0, centralInstance.ThreadIntervalMs ?? _config.ThreadIntervalMs);
                 item.IterationIntervalMs = Math.Max(0, centralInstance.IterationIntervalMs ?? _config.IterationIntervalMs);
                 item.GenerateResults = centralInstance.GenerateResults ?? _config.GenerateResults;
+                item.InternalLoggingEnabled = centralInstance.InternalLoggingEnabled ?? true;
+                item.SaveRequestBodyToHistory = centralInstance.SaveRequestBodyToHistory ?? true;
+                item.SaveResponseBodyToHistory = centralInstance.SaveResponseBodyToHistory ?? true;
+                item.MaskSensitiveData = centralInstance.MaskSensitiveData ?? true;
+                if (centralInstance.HistorySheets is not null)
+                    foreach (var sheet in centralInstance.HistorySheets) item.HistorySheets[sheet.Key] = sheet.Value;
             }
             try
             {
@@ -533,6 +551,40 @@ public sealed partial class MainWindow : Window
             UiLog($"Could not save execution settings for {item.Name}: {ex}");
             _details.Text = $"Could not save execution settings: {ex.Message}";
         }
+    }
+
+    private void SaveInstanceReportingSettings(InstanceInfo item, bool _)
+    {
+        try
+        {
+            var root = File.Exists(_config.SettingsFile) ? JsonNode.Parse(File.ReadAllText(_config.SettingsFile)) as JsonObject : new JsonObject();
+            root ??= new JsonObject();
+            var instances = root["Instances"] as JsonObject ?? new JsonObject();
+            var instance = instances[item.Name] as JsonObject ?? new JsonObject();
+            instance["GenerateResults"] = item.GenerateResults;
+            instance["InternalLoggingEnabled"] = item.InternalLoggingEnabled;
+            instance["SaveRequestBodyToHistory"] = item.SaveRequestBodyToHistory;
+            instance["SaveResponseBodyToHistory"] = item.SaveResponseBodyToHistory;
+            instance["MaskSensitiveData"] = item.MaskSensitiveData;
+            var sheets = new JsonObject();
+            foreach (var sheet in item.HistorySheets) sheets[sheet.Key] = sheet.Value;
+            instance["HistorySheets"] = sheets;
+            instances[item.Name] = instance; root["Instances"] = instances;
+            File.WriteAllText(_config.SettingsFile, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
+            if (_config.Instances.TryGetValue(item.Name, out var central))
+            {
+                central.GenerateResults = item.GenerateResults;
+                central.InternalLoggingEnabled = item.InternalLoggingEnabled;
+                central.SaveRequestBodyToHistory = item.SaveRequestBodyToHistory;
+                central.SaveResponseBodyToHistory = item.SaveResponseBodyToHistory;
+                central.MaskSensitiveData = item.MaskSensitiveData;
+                central.HistorySheets = new Dictionary<string, bool>(item.HistorySheets, StringComparer.OrdinalIgnoreCase);
+            }
+            UiLog($"Saved instance reporting settings. instance={item.Name}; generateResults={item.GenerateResults}; internalLogging={item.InternalLoggingEnabled}");
+            _details.Text = $"Saved reporting and storage settings for {item.Name}.";
+            RefreshDashboardDetails(force: true);
+        }
+        catch (Exception ex) { UiLog($"Could not save reporting settings for {item.Name}: {ex}"); _details.Text = $"Could not save reporting settings: {ex.Message}"; }
     }
 
     private void OpenStepWizardForInstance(InstanceInfo item)
@@ -677,7 +729,7 @@ public sealed partial class MainWindow : Window
                 Arg("--history", item.HistoryFolder); Arg("--logs", item.LogsFolder); Arg("--results", item.ResultsFolder); Arg("--generate-results", item.GenerateResults.ToString());
                 Arg("--instance-id", item.InstanceId); Arg("--run-id", item.CurrentRunId);
                 Arg("--ui-launch-id", uiLaunchId); Arg("--ui-launch-at", uiLaunchAt.ToString("O"));
-                Arg("--internal-log", (_enableInternalLog.IsChecked == true).ToString());
+                Arg("--internal-log", item.InternalLoggingEnabled.ToString());
                 Arg("--scenarios-parallel", item.RunScenariosInParallel.ToString()); Arg("--execution-mode", item.ExecutionMode);
                 Arg("--testcases", selection);
                 if (!string.IsNullOrWhiteSpace(item.EnvironmentSelectionJson)) Arg("--environments-json", item.EnvironmentSelectionJson);

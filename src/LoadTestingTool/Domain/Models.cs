@@ -54,6 +54,7 @@ public sealed class CentralInstanceConfig
     public bool? InternalLoggingEnabled { get; set; }
     public bool? SaveRequestBodyToHistory { get; set; }
     public bool? SaveResponseBodyToHistory { get; set; }
+    public bool? MaskSensitiveData { get; set; }
     public Dictionary<string, bool>? HistorySheets { get; set; }
 }
 
