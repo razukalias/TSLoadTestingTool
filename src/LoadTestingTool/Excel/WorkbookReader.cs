@@ -83,7 +83,7 @@ public sealed class WorkbookReader
                 vars[variableName] = compiledValue;
                 if (ShouldRedactRequestVariable(column.Key)) redacted.Add(variableName);
             }
-            result[key] = new RequestDataRow { TestcaseIndex = index, Testcase = Text(h, row, "testcase"), DataId = dataId, Dontrun = SplitValues(Text(h, row, "dontrun")), Variables = vars, RedactedVariables = redacted };
+            result[key] = new RequestDataRow { TestcaseIndex = index, ExcelRowNumber = row.RowNumber(), Testcase = Text(h, row, "testcase"), DataId = dataId, Dontrun = SplitValues(Text(h, row, "dontrun")), Variables = vars, RedactedVariables = redacted };
         }
         return result;
     }

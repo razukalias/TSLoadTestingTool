@@ -13,7 +13,7 @@ namespace LoadTestingTool.UI;
 
 internal static class DashboardStyle
 {
-    public const string Build = "Dashboard 2026.10.30.6";
+    public const string Build = "Dashboard 2026.10.30.7";
     public static IBrush Brush(string color) => new SolidColorBrush(Color.Parse(color));
     public static IBrush Panel => Brush("#101E2E");
     public static IBrush Muted => Brush("#8EA4BC");
@@ -529,7 +529,7 @@ public sealed partial class MainWindow
         _historyRefreshing = true;
         try
         {
-            var sources = _instances.Where(x => Directory.Exists(x.HistoryFolder)).Select(x => (Item: x, Paths: Directory.GetFiles(x.HistoryFolder, "Execution_History_*.xlsx", SearchOption.AllDirectories).OrderByDescending(File.GetLastWriteTimeUtc).ToArray())).ToArray();
+            var sources = _instances.Where(x => Directory.Exists(x.HistoryFolder)).Select(x => (Item: x, Paths: Directory.GetFiles(x.HistoryFolder, "*.xlsx", SearchOption.AllDirectories).Where(path => !Path.GetFileName(path).StartsWith("~$", StringComparison.OrdinalIgnoreCase)).OrderByDescending(File.GetLastWriteTimeUtc).ToArray())).ToArray();
             var loaded = await Task.Run(() => sources.SelectMany(source => source.Paths.Select(path => (source.Item, Path: path))).Select(source => { try { return ReadHistoryEntry(source.Item, source.Path); } catch { return null; } }).Where(x => x is not null).Cast<HistoryEntry>().ToList());
             _historyEntries.Clear(); _historyEntries.AddRange(loaded); _historySelected.RemoveWhere(path => !File.Exists(path));
         }

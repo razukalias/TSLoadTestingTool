@@ -9,6 +9,7 @@ public sealed class AppConfig
     public string HistoryFolder { get; set; } = "History";
     public string ResultsFolder { get; set; } = "Results";
     public bool GenerateResults { get; set; } = true;
+    public bool GenerateAggregateHistory { get; set; }
     public string InstanceId { get; set; } = "default";
     public string RunId { get; set; } = string.Empty;
     public int RequestTimeoutSeconds { get; set; } = 300;
@@ -41,6 +42,7 @@ public sealed class CentralInstanceConfig
     public string? HistoryFolder { get; set; }
     public string? ResultsFolder { get; set; }
     public bool? GenerateResults { get; set; }
+    public bool? GenerateAggregateHistory { get; set; }
     public string? WorkspaceRoot { get; set; }
     public string? TestcaseSelection { get; set; }
     public string? StepSelection { get; set; }
@@ -107,6 +109,7 @@ public sealed class RequestStep
 public sealed class RequestDataRow
 {
     public int TestcaseIndex { get; init; }
+    public int ExcelRowNumber { get; init; }
     public string Testcase { get; init; } = string.Empty;
     public string DataId { get; init; } = string.Empty;
     public IReadOnlyList<string> Dontrun { get; init; } = [];
@@ -222,6 +225,7 @@ public sealed class TestcaseResult
 {
     public string RunId { get; init; } = string.Empty;
     public int TestcaseIndex { get; init; }
+    public int ExcelRowNumber { get; init; }
     public string Testcase { get; init; } = string.Empty;
     public string DataId { get; init; } = string.Empty;
     public int Thread { get; init; }

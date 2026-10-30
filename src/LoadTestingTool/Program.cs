@@ -103,15 +103,24 @@ internal static class Program
                 overall.Cancelled |= cancellation.IsCancellationRequested;
                 overall.EndedAt = DateTimeOffset.Now;
                 var overallResult = overall.Cancelled ? "cancelled" : overall.Testcases.Any(t => t.Result == "FAILED") ? "failed" : "passed";
-                var historyFolder = Path.Combine(config.HistoryFolder, overallResult);
-                Directory.CreateDirectory(historyFolder);
-                var historyName = $"Execution_History_{InternalLogger.SafeFolderName(runId)}.xlsx";
                 var historyPath = string.Empty;
-                try { historyPath = new HistoryWriter(config).Write(overall, historyFolder, historyName, workbook); }
+                var historyFiles = Array.Empty<string>();
+                try
+                {
+                    var historyWriter = new HistoryWriter(config);
+                    historyFiles = historyWriter.WritePerTestcase(overall, workbook).ToArray();
+                    if (config.GenerateAggregateHistory)
+                    {
+                        var aggregateFolder = Path.Combine(config.HistoryFolder, "_aggregate", overallResult);
+                        var aggregateName = $"Execution_History_{InternalLogger.SafeFolderName(runId)}.xlsx";
+                        historyFiles = historyFiles.Append(historyWriter.Write(overall, aggregateFolder, aggregateName, workbook)).ToArray();
+                    }
+                    historyPath = historyFiles.FirstOrDefault() ?? string.Empty;
+                }
                 catch (Exception ex) { Console.Error.WriteLine($"[Warning] History generation failed: {ex.Message}"); }
                 if (config.GenerateResults) WriteMetrics(config.ResultsFolder, runId, overall);
                 runEvents.WriteRunCompleted(overall, historyPath);
-                Console.WriteLine($"[Run complete] result={(overall.Cancelled ? "CANCELLED" : overall.Testcases.Any(t => t.Result == "FAILED") ? "FAILED" : "PASSED")}; requests={overall.Metrics.TotalRequests}; p95={overall.Metrics.P95DurationMs}ms; rps={overall.Metrics.RequestsPerSecond:F2}; history={historyPath}");
+                Console.WriteLine($"[Run complete] result={(overall.Cancelled ? "CANCELLED" : overall.Testcases.Any(t => t.Result == "FAILED") ? "FAILED" : "PASSED")}; requests={overall.Metrics.TotalRequests}; p95={overall.Metrics.P95DurationMs}ms; rps={overall.Metrics.RequestsPerSecond:F2}; historyFiles={historyFiles.Length}; history={historyPath}");
                 try { if (File.Exists(stopFile)) File.Delete(stopFile); } catch { }
                 stopMonitorCancellation.Cancel();
                 await stopMonitor;
@@ -258,6 +267,7 @@ internal static class Program
         config.HistoryFolder = ResolveCentralPath(instanceFolder, instance.HistoryFolder, config.HistoryFolder);
         config.ResultsFolder = ResolveCentralPath(instanceFolder, instance.ResultsFolder, config.ResultsFolder);
         if (instance.GenerateResults.HasValue) config.GenerateResults = instance.GenerateResults.Value;
+        if (instance.GenerateAggregateHistory.HasValue) config.GenerateAggregateHistory = instance.GenerateAggregateHistory.Value;
         if (!string.IsNullOrWhiteSpace(instance.TestcaseSelection)) config.TestcaseSelection = instance.TestcaseSelection;
         if (!string.IsNullOrWhiteSpace(instance.StepSelection)) config.StepSelection = instance.StepSelection;
         if (!string.IsNullOrWhiteSpace(instance.EnvironmentSelection)) config.EnvironmentSelection = instance.EnvironmentSelection;

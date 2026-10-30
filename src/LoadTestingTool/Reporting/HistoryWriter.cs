@@ -8,6 +8,32 @@ public sealed class HistoryWriter
     private readonly AppConfig _config;
     public HistoryWriter(AppConfig config) => _config = config;
 
+    public IReadOnlyList<string> WritePerTestcase(RunResult run, WorkbookModel? workbookModel = null)
+    {
+        var paths = new List<string>();
+        foreach (var testcase in run.Testcases.OrderBy(x => x.StartedAt))
+        {
+            var environment = string.IsNullOrWhiteSpace(testcase.Environment) ? "default" : InternalLogger.SafeFolderName(testcase.Environment);
+            var result = run.Cancelled && testcase.Result == "SKIPPED" ? "cancelled" : testcase.Result.ToLowerInvariant();
+            var folder = Path.Combine(_config.HistoryFolder, environment, result);
+            var row = testcase.ExcelRowNumber > 0 ? testcase.ExcelRowNumber.ToString() : "unknown";
+            var stamp = testcase.StartedAt.ToLocalTime().ToString("yyyyMMdd_HHmmss_fff");
+            var name = $"{InternalLogger.SafeFolderName(testcase.Testcase)}_Row{row}_{stamp}_T{testcase.Thread}_I{testcase.Iteration}.xlsx";
+            var single = new RunResult
+            {
+                RunId = run.RunId,
+                Selection = run.Selection,
+                StartedAt = testcase.StartedAt,
+                EndedAt = testcase.EndedAt,
+                Environment = testcase.Environment,
+                Cancelled = run.Cancelled
+            };
+            single.Testcases.Add(testcase);
+            paths.Add(Write(single, folder, name, workbookModel));
+        }
+        return paths;
+    }
+
     public string Write(RunResult run, string? outputFolder = null, string? fileName = null, WorkbookModel? workbookModel = null)
     {
         var folder = outputFolder ?? _config.HistoryFolder;
