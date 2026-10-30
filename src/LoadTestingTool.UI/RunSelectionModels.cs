@@ -5,7 +5,7 @@ namespace LoadTestingTool.UI;
 
 public sealed record TestStepOption(string Name, string Type, bool Enabled, IReadOnlyList<string> Environments);
 public sealed record TestcaseOption(int Index, string Name, IReadOnlyList<TestStepOption> Steps);
-public sealed record RunSelectionResult(string Testcases, string StepsJson, string Environments, string EnvironmentsJson, string DataIds = "", string ExecutionMode = "threaded", bool ScenariosParallel = false);
+public sealed record RunSelectionResult(string Testcases, string StepsJson, string Environments, string EnvironmentsJson, string DataIds = "", string ExecutionMode = "threaded", bool ScenariosParallel = false, int Threads = 1, int Iterations = 1, int ThreadIntervalMs = 0, int IterationIntervalMs = 0);
 
 public static class DataIdSelectionCodec
 {

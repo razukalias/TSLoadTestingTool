@@ -63,8 +63,7 @@ public sealed class SqlStepExecutor : IStepExecutor
 
 public sealed class CSharpScriptStepExecutor : IStepExecutor
 {
-    private readonly FeatureConfig _features;
-    public CSharpScriptStepExecutor(FeatureConfig features) => _features = features;
+    private const int ScriptTimeoutSeconds = 30;
     public StepType StepType => StepType.Script;
 
     public async Task<StepResult> ExecuteAsync(StepExecutionRequest request)
@@ -73,8 +72,6 @@ public sealed class CSharpScriptStepExecutor : IStepExecutor
         var result = new StepResult { StepType = StepType, StepName = request.Step.StepName };
         try
         {
-            if (!_features.AllowTrustedScripts)
-                throw new UnauthorizedAccessException("C# scripts are disabled. Set AllowTrustedScripts=true only for trusted workbooks.");
             var options = StepConfig.Read<ScriptStepOptions>(request.Step);
             var code = string.IsNullOrWhiteSpace(request.TemplateText) ? options.Inline : request.TemplateText;
             if (!string.IsNullOrWhiteSpace(options.Source)) code = await File.ReadAllTextAsync(WorkspaceGuard.Resolve(request.WorkspaceRoot, options.Source), request.CancellationToken);
@@ -86,7 +83,7 @@ public sealed class CSharpScriptStepExecutor : IStepExecutor
             request.Context.Set("data1", previousData, VariableScope.Iteration);
             var globals = new ScriptGlobals { Runtime = runtime, _data_ = previousData, _data1_ = previousData };
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(request.CancellationToken);
-            timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, _features.ScriptTimeoutSeconds)));
+            timeout.CancelAfter(TimeSpan.FromSeconds(ScriptTimeoutSeconds));
             var scriptOptions = ScriptMetadataReferences.CreateOptions(typeof(ScriptRuntime).Assembly)
                 .AddImports("System", "System.Linq", "System.Collections.Generic", "LoadTestingTool.Domain");
             var value = await CSharpScript.EvaluateAsync<object?>(scriptCode, scriptOptions, globals, typeof(ScriptGlobals), timeout.Token);

@@ -19,6 +19,10 @@ public sealed class RunSelectionWindow : Window
     private readonly Button _apply;
     private readonly ComboBox _executionMode = new() { ItemsSource = new[] { "threaded", "loop" }, Width = 150 };
     private readonly ComboBox _scenarioOrder = new() { ItemsSource = new[] { "Sequential testcases", "Parallel testcases" }, Width = 180 };
+    private readonly TextBox _threads = new() { Width = 120 };
+    private readonly TextBox _iterations = new() { Width = 120 };
+    private readonly TextBox _threadIntervalMs = new() { Width = 150 };
+    private readonly TextBox _iterationIntervalMs = new() { Width = 170 };
     private bool _rebuilding;
     public RunSelectionResult? Result { get; private set; }
 
@@ -30,6 +34,8 @@ public sealed class RunSelectionWindow : Window
         _draft = new RunSelectionDraft(item.TestcaseOptions, item.TestcaseSelection, item.StepSelectionJson, item.EnvironmentSelection, item.EnvironmentSelectionJson);
         _executionMode.SelectedItem = item.ExecutionMode.Equals("loop", StringComparison.OrdinalIgnoreCase) ? "loop" : "threaded";
         _scenarioOrder.SelectedIndex = item.RunScenariosInParallel ? 1 : 0;
+        _threads.Text = item.Threads.ToString(); _iterations.Text = item.Iterations.ToString();
+        _threadIntervalMs.Text = item.ThreadIntervalMs.ToString(); _iterationIntervalMs.Text = item.IterationIntervalMs.ToString();
         _dataOptions = item.DataIdOptions; _currentDataSelection = item.DataIdSelection;
         _apply = DashboardStyle.Action("Apply selection", Apply, "primary"); _apply.IsDefault = true;
         var heading = new StackPanel { Spacing = 8, Margin = new Thickness(0, 0, 0, 16), Children =
@@ -46,7 +52,8 @@ public sealed class RunSelectionWindow : Window
         cases.Margin = new Thickness(0, 0, 8, 0); steps.Margin = new Thickness(0, 0, 8, 0); environments.Margin = new Thickness(0, 0, 8, 0);
         columns.Children.Add(cases); Grid.SetColumn(steps, 1); columns.Children.Add(steps); Grid.SetColumn(environments, 2); columns.Children.Add(environments); Grid.SetColumn(data, 3); columns.Children.Add(data);
         var runOptions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Children = { Field("Execution mode", _executionMode), Field("Testcase order", _scenarioOrder) } };
-        var status = new StackPanel { Spacing = 6, Margin = new Thickness(0, 12), Children = { runOptions, _summary, _error, DashboardStyle.Text("Dependencies are not auto-selected. Include setup/dependency steps when your chosen step needs them.", 11, false, DashboardStyle.Muted) } };
+        var executionOptions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Children = { Field("Threads", _threads), Field("Iterations", _iterations), Field("Thread interval (ms)", _threadIntervalMs), Field("Iteration interval (ms)", _iterationIntervalMs) } };
+        var status = new StackPanel { Spacing = 6, Margin = new Thickness(0, 12), Children = { runOptions, executionOptions, _summary, _error, DashboardStyle.Text("Threads and iterations apply to the complete instance run and are saved in central appsettings.json, not in the workbook config sheet.", 11, false, DashboardStyle.Muted), DashboardStyle.Text("Dependencies are not auto-selected. Include setup/dependency steps when your chosen step needs them.", 11, false, DashboardStyle.Muted) } };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Children = { DashboardStyle.Action("Cancel", () => Close(null)), _apply } };
         var grid = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto,Auto"), Margin = new Thickness(20) };
         grid.Children.Add(heading); Grid.SetRow(columns, 1); grid.Children.Add(columns); Grid.SetRow(status, 2); grid.Children.Add(status); Grid.SetRow(buttons, 3); grid.Children.Add(buttons); Content = grid;
@@ -129,7 +136,10 @@ public sealed class RunSelectionWindow : Window
     }
     private void Apply()
     {
-        if (_draft.TryBuild(out var result, out var error)) { Result = result! with { DataIds = SerializeDataIds(), ExecutionMode = _executionMode.SelectedItem?.ToString() ?? "threaded", ScenariosParallel = _scenarioOrder.SelectedIndex == 1 }; Close(); } else _error.Text = error;
+        if (!_draft.TryBuild(out var result, out var error)) { _error.Text = error; return; }
+        if (!int.TryParse(_threads.Text, out var threads) || threads < 1 || !int.TryParse(_iterations.Text, out var iterations) || iterations < 1 || !int.TryParse(_threadIntervalMs.Text, out var threadInterval) || threadInterval < 0 || !int.TryParse(_iterationIntervalMs.Text, out var iterationInterval) || iterationInterval < 0)
+        { _error.Text = "Threads and iterations must be at least 1; intervals must be 0 or greater."; return; }
+        Result = result! with { DataIds = SerializeDataIds(), ExecutionMode = _executionMode.SelectedItem?.ToString() ?? "threaded", ScenariosParallel = _scenarioOrder.SelectedIndex == 1, Threads = threads, Iterations = iterations, ThreadIntervalMs = threadInterval, IterationIntervalMs = iterationInterval }; Close();
     }
 
     private static Control Field(string label, Control control) => new StackPanel { Spacing = 4, Children = { DashboardStyle.Text(label, 11, false, DashboardStyle.Muted), control } };

@@ -61,6 +61,8 @@ public sealed class LiveEventWriter : IDisposable
             stepName = assertion.StepName,
             responsePath = assertion.ResponsePath,
             assertionVerb = assertion.AssertionVerb,
+            assertionType = assertion.AssertionType,
+            assertionMeaning = assertion.AssertionMeaning,
             expectedValue = assertion.ExpectedValue,
             actualValue = assertion.ActualValue,
             result = assertion.Result,

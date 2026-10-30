@@ -35,8 +35,6 @@ public sealed class WorkbookReader
                 TestcaseIndex = index, Testcase = testcase, StepName = stepName, Sequence = row.RowNumber(), TemplateSource = template, TargetUrl = url,
                 StepType = stepType, Stage = ExecutionStageParser.Parse(Text(configHeaders, row, "stage", "Test")), Enabled = Bool(configHeaders, row, "enabled", true), TimeoutSeconds = Math.Max(0, Int(configHeaders, row, "timeout", 0)), StepConfig = Compile(Text(configHeaders, row, "stepconfig", "{}"), workbook, config, compiledCellCache, row.RowNumber()),
                 Verb = Text(configHeaders, row, "verb", "POST").ToUpperInvariant(), ContentType = Text(configHeaders, row, "contenttype"),
-                Threads = Math.Max(1, Int(configHeaders, row, "threads", 1)), Iterations = Math.Max(1, Int(configHeaders, row, "iterations", 1)),
-                ThreadIntervalMs = Math.Max(0, Int(configHeaders, row, "threadintervalms", 0)), IterationIntervalMs = Math.Max(0, Int(configHeaders, row, "iterationintervalms", 0)),
                 WaitMs = Math.Max(0, Int(configHeaders, row, "wait", 0)), ExpectedStatus = Compile(Text(configHeaders, row, "expectedstatus"), workbook, config, compiledCellCache, row.RowNumber()),
                 StopOnFailure = Bool(configHeaders, row, "stoponfailure", true), IgnoreEmpty = Bool(configHeaders, row, "ignoreempty", false),
                 AssertEnabled = Bool(configHeaders, row, "assert", Bool(configHeaders, row, "assertenabled", true)),

@@ -11,6 +11,10 @@ public sealed class AppConfig
     public string InstanceId { get; set; } = "default";
     public string RunId { get; set; } = string.Empty;
     public int RequestTimeoutSeconds { get; set; } = 300;
+    public int Threads { get; set; } = 1;
+    public int Iterations { get; set; } = 1;
+    public int ThreadIntervalMs { get; set; }
+    public int IterationIntervalMs { get; set; }
     public bool RunScenariosInParallel { get; set; }
     public string ExecutionMode { get; set; } = "threaded";
     public string TestcaseSelection { get; set; } = "0";
@@ -23,8 +27,6 @@ public sealed class AppConfig
     public bool MaskSensitiveData { get; set; } = true;
     public string WorkspaceRoot { get; set; } = ".";
     public Dictionary<string, SqlConnectionProfile> Connections { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-    public bool AllowTrustedScripts { get; set; }
-    public int ScriptTimeoutSeconds { get; set; } = 30;
     public Dictionary<string, CentralInstanceConfig> Instances { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
@@ -42,6 +44,10 @@ public sealed class CentralInstanceConfig
     public string? StepSelection { get; set; }
     public string? EnvironmentSelection { get; set; }
     public string? ExecutionMode { get; set; }
+    public int? Threads { get; set; }
+    public int? Iterations { get; set; }
+    public int? ThreadIntervalMs { get; set; }
+    public int? IterationIntervalMs { get; set; }
     public bool? RunScenariosInParallel { get; set; }
     public bool? InternalLoggingEnabled { get; set; }
     public bool? SaveRequestBodyToHistory { get; set; }
@@ -85,10 +91,6 @@ public sealed class RequestStep
     public string TargetUrl { get; init; } = string.Empty;
     public string Verb { get; init; } = "POST";
     public string ContentType { get; init; } = string.Empty;
-    public int Threads { get; init; } = 1;
-    public int Iterations { get; init; } = 1;
-    public int ThreadIntervalMs { get; init; }
-    public int IterationIntervalMs { get; init; }
     public int WaitMs { get; init; }
     public string ExpectedStatus { get; init; } = string.Empty;
     public bool StopOnFailure { get; init; } = true;
@@ -286,6 +288,8 @@ public sealed class AssertionResult
     public string StepName { get; init; } = string.Empty;
     public string ResponsePath { get; init; } = string.Empty;
     public string AssertionVerb { get; init; } = "eq";
+    public string AssertionType { get; init; } = "Value assertion";
+    public string AssertionMeaning { get; init; } = string.Empty;
     public string ExpectedValue { get; init; } = string.Empty;
     public string ActualValue { get; init; } = string.Empty;
     public string Result { get; init; } = "FAIL";

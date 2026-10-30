@@ -12,6 +12,10 @@ public sealed class UiConfig
     public string InstancePrefix { get; set; } = "DataEngine_";
     public string DocumentationFile { get; set; } = "../APPLICATION_GUIDE.pdf";
     public string UiLogFile { get; set; } = "Logs/ui-internal.log";
+    public int Threads { get; set; } = 1;
+    public int Iterations { get; set; } = 1;
+    public int ThreadIntervalMs { get; set; }
+    public int IterationIntervalMs { get; set; }
     public Dictionary<string, UiInstanceDefinition> Instances { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
@@ -20,6 +24,10 @@ public sealed class UiInstanceDefinition
     public string Folder { get; set; } = string.Empty;
     public string Workbook { get; set; } = string.Empty;
     public bool Enabled { get; set; } = true;
+    public int? Threads { get; set; }
+    public int? Iterations { get; set; }
+    public int? ThreadIntervalMs { get; set; }
+    public int? IterationIntervalMs { get; set; }
 }
 
 public sealed class App : Application

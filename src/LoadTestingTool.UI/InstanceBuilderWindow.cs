@@ -77,7 +77,7 @@ public sealed class InstanceBuilderWindow : Window
                 CreateConfig(workbook); CreateRequest(workbook); CreateResponse(workbook); CreateReadme(workbook);
                 workbook.SaveAs(workbookPath);
             }
-            File.WriteAllText(Path.Combine(folder, "appsettings.json"), JsonSerializer.Serialize(new { AllowTrustedScripts = false, WorkspaceRoot = ".", InstanceName = name, HistorySheets = UiHistorySheetCatalog.CreateDefaults() }, new JsonSerializerOptions { WriteIndented = true }));
+            File.WriteAllText(Path.Combine(folder, "appsettings.json"), JsonSerializer.Serialize(new { WorkspaceRoot = ".", InstanceName = name, HistorySheets = UiHistorySheetCatalog.CreateDefaults() }, new JsonSerializerOptions { WriteIndented = true }));
             File.WriteAllText(Path.Combine(folder, "Templates", "login.json"), "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}\n");
             File.WriteAllText(Path.Combine(folder, "README.md"), $"# {name}\n\nCreated by LoadTestingTool. Open the DataEngine workbook or use the guided editor.\n");
             CreatedFolder = folder; Close();
@@ -87,8 +87,8 @@ public sealed class InstanceBuilderWindow : Window
     private static void CreateConfig(XLWorkbook w)
     {
         var s = w.Worksheets.Add("config");
-        var headers = new[] { "testcaseindex", "testcase", "stepname", "steptype", "stage", "enabled", "timeout", "stoponfailure", "environments", "templetsource", "targetUrl", "verb", "contenttype", "threads", "iterations", "threadintervalms", "iterationintervalms", "wait", "expectedstatus", "assert", "ignoreempty", "assertonlyresponse", "stepconfig", "header_Accept", "header_ContentType" };
-        WriteRow(s, 1, headers); WriteRow(s, 2, new object[] { 1, "ExampleHttp", "GetUser", "HTTP", "Test", true, 30, true, "local", "login.json", "https://jsonplaceholder.typicode.com/users/1", "GET", "application/json", 1, 1, 0, 0, 0, 200, true, false, false, "{}", "application/json", "" });
+        var headers = new[] { "testcaseindex", "testcase", "stepname", "steptype", "stage", "enabled", "timeout", "stoponfailure", "environments", "templetsource", "targetUrl", "verb", "contenttype", "wait", "expectedstatus", "assert", "ignoreempty", "assertonlyresponse", "stepconfig", "header_Accept", "header_ContentType" };
+        WriteRow(s, 1, headers); WriteRow(s, 2, new object[] { 1, "ExampleHttp", "GetUser", "HTTP", "Test", true, 30, true, "local", "login.json", "https://jsonplaceholder.typicode.com/users/1", "GET", "application/json", 0, 200, true, false, false, "{}", "application/json", "" });
         Style(s, headers.Length);
     }
     private static void CreateRequest(XLWorkbook w)

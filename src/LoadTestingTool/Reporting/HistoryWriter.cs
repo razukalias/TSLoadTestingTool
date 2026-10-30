@@ -51,8 +51,8 @@ public sealed class HistoryWriter
         if (Enabled("AssertionHistory"))
         {
             var ah = workbook.AddWorksheet("AssertionHistory");
-            WriteTable(ah, "runid", "requestid", "testcaseindex", "testcase", "dataid", "stepname", "responsepath", "assertionverb", "expectedvalue", "actualvalue", "result", "failuremessage");
-            foreach (var a in requests.SelectMany(r => r.Assertions)) ah.AddRow(run.RunId, a.RequestId, a.TestcaseIndex, a.Testcase, a.DataId, a.StepName, a.ResponsePath, a.AssertionVerb, a.ExpectedValue, a.ActualValue, a.Result, a.FailureMessage);
+            WriteTable(ah, "runid", "requestid", "testcaseindex", "testcase", "dataid", "stepname", "responsepath", "assertionverb", "assertiontype", "assertionmeaning", "expectedvalue", "actualvalue", "result", "failuremessage");
+            foreach (var a in requests.SelectMany(r => r.Assertions)) ah.AddRow(run.RunId, a.RequestId, a.TestcaseIndex, a.Testcase, a.DataId, a.StepName, a.ResponsePath, a.AssertionVerb, a.AssertionType, a.AssertionMeaning, a.ExpectedValue, a.ActualValue, a.Result, a.FailureMessage);
         }
 
         IXLWorksheet? vars = null;

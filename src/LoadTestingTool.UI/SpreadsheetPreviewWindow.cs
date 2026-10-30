@@ -30,7 +30,15 @@ public sealed class SpreadsheetPreviewWindow : Window
         public required string Name { get; set; }
         public string? OriginalName { get; init; }
         public required Dictionary<(int Col, int Row), string> Cells { get; init; }
+        public required Dictionary<(int Col, int Row), string> OriginalCells { get; init; }
+        public Dictionary<(int Col, int Row), CellStyle> OriginalStyles { get; } = [];
+        public string HeaderFilter { get; set; } = string.Empty;
+        public string RowFilter { get; set; } = string.Empty;
+        public string ValueFilter { get; set; } = string.Empty;
+        public int OriginalRowCount { get; set; }
+        public int OriginalColumnCount { get; set; }
         public Spreadsheet Grid { get; set; } = null!;
+        public bool GridDataLoaded { get; set; }
         public Canvas HighlightOverlay { get; set; } = null!;
         public required TabItem Tab { get; init; }
         public int RowCount { get; set; }
@@ -38,6 +46,10 @@ public sealed class SpreadsheetPreviewWindow : Window
         public bool StructureDirty { get; set; }
         public Dictionary<int, int> DisplayRows { get; set; } = [];
         public Dictionary<int, int> DisplayColumns { get; set; } = [];
+        public Dictionary<int, double> FilterColumnWidths { get; } = [];
+        public Dictionary<int, double> FilterRowHeights { get; } = [];
+        public HashSet<int> HiddenColumns { get; } = [];
+        public HashSet<int> HiddenRows { get; } = [];
         public Dictionary<(int Col, int Row), CellStyle> Styles { get; } = [];
     }
 
@@ -57,6 +69,7 @@ public sealed class SpreadsheetPreviewWindow : Window
     private SheetView? _suggestionSheet;
     private Spreadsheet? _suggestionGrid;
     private bool _refreshing;
+    private bool _loadingSheetFilters;
 
     public SpreadsheetPreviewWindow(string workbookPath, Action<string>? log = null)
     {
@@ -74,17 +87,26 @@ public sealed class SpreadsheetPreviewWindow : Window
                 var used = worksheet.RangeUsed();
                 var cells = ReadCells(worksheet).ToDictionary(x => (x.Key.Item1, x.Key.Item2), x => x.Value);
                 var tab = new TabItem { Header = worksheet.Name };
-                var view = new SheetView { Name = worksheet.Name, OriginalName = worksheet.Name, Cells = cells, Tab = tab,
+                var view = new SheetView { Name = worksheet.Name, OriginalName = worksheet.Name, Cells = cells, OriginalCells = new Dictionary<(int Col, int Row), string>(cells), Tab = tab,
                     RowCount = Math.Max(1, used?.RangeAddress.LastAddress.RowNumber ?? 1),
-                    ColumnCount = Math.Max(1, used?.RangeAddress.LastAddress.ColumnNumber ?? 1) };
+                    ColumnCount = Math.Max(1, used?.RangeAddress.LastAddress.ColumnNumber ?? 1),
+                    OriginalRowCount = Math.Max(1, used?.RangeAddress.LastAddress.RowNumber ?? 1),
+                    OriginalColumnCount = Math.Max(1, used?.RangeAddress.LastAddress.ColumnNumber ?? 1) };
                 foreach (var cell in worksheet.CellsUsed())
                 {
-                    if (cell.Style.Fill.BackgroundColor.ColorType != XLColorType.Color) continue;
-                    var color = cell.Style.Fill.BackgroundColor.Color;
-                    view.Styles[(cell.Address.ColumnNumber - 1, cell.Address.RowNumber - 1)] = new SheetView.CellStyle
+                    var style = new SheetView.CellStyle
                     {
-                        Highlight = $"#{color.R:X2}{color.G:X2}{color.B:X2}"
+                        Bold = cell.Style.Font.Bold,
+                        Italic = cell.Style.Font.Italic,
+                        TextColor = cell.Style.Font.FontColor.ColorType == XLColorType.Color ? $"#{cell.Style.Font.FontColor.Color.R:X2}{cell.Style.Font.FontColor.Color.G:X2}{cell.Style.Font.FontColor.Color.B:X2}" : null,
+                        Highlight = cell.Style.Fill.BackgroundColor.ColorType == XLColorType.Color ? $"#{cell.Style.Fill.BackgroundColor.Color.R:X2}{cell.Style.Fill.BackgroundColor.Color.G:X2}{cell.Style.Fill.BackgroundColor.Color.B:X2}" : null
                     };
+                    var key = (cell.Address.ColumnNumber - 1, cell.Address.RowNumber - 1);
+                    if (style.Bold || style.Italic || style.TextColor is not null || style.Highlight is not null)
+                    {
+                        view.Styles[key] = style;
+                        view.OriginalStyles[key] = new SheetView.CellStyle { Bold = style.Bold, Italic = style.Italic, TextColor = style.TextColor, Highlight = style.Highlight };
+                    }
                 }
                 _sheets[worksheet.Name] = view;
                 _tabs.Items.Add(tab);
@@ -99,9 +121,9 @@ public sealed class SpreadsheetPreviewWindow : Window
             Log($"Spreadsheet editor open failed. workbook={_sourcePath}; error={ex}");
         }
 
-        _headerFilter.TextChanged += (_, _) => RefreshFilteredViews();
-        _rowFilter.TextChanged += (_, _) => RefreshFilteredViews();
-        _valueFilter.TextChanged += (_, _) => RefreshFilteredViews();
+        _headerFilter.TextChanged += (_, _) => SheetFilterChanged();
+        _rowFilter.TextChanged += (_, _) => SheetFilterChanged();
+        _valueFilter.TextChanged += (_, _) => SheetFilterChanged();
         _suggestions.PointerReleased += (_, _) => { if (_suggestions.SelectedItem is string value) AcceptSuggestion(value); };
         _suggestionPopup.Child = _suggestions;
         _textColor.SelectionChanged += (_, _) => ApplyTextColor();
@@ -140,8 +162,8 @@ public sealed class SpreadsheetPreviewWindow : Window
             DashboardStyle.Action("Delete row", () => ApplyStructuralCommand("Deleted row", true, -1)),
             DashboardStyle.Action("Insert column", () => ApplyStructuralCommand("Inserted column", false, 1)),
             DashboardStyle.Action("Delete column", () => ApplyStructuralCommand("Deleted column", false, -1)),
-            DashboardStyle.Action("Auto-fit width", () => ApplyFormatCommand("Auto-fit columns", g => g.AutoFitWidth())),
-            DashboardStyle.Action("Auto-fit height", () => ApplyFormatCommand("Auto-fit rows", g => g.AutoFitHeight())),
+            DashboardStyle.Action("Auto-fit width", AutoFitSelectedColumns),
+            DashboardStyle.Action("Auto-fit height", AutoFitSelectedRows),
             DashboardStyle.Action("Reset format", ResetSelectedFormat),
             DashboardStyle.Text("Sheets", 10, false, DashboardStyle.Muted),
             DashboardStyle.Action("Add sheet", AddSheet),
@@ -151,6 +173,7 @@ public sealed class SpreadsheetPreviewWindow : Window
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 6, Children =
         {
             DashboardStyle.Action("Save workbook", SaveWorkbook, "primary"),
+            DashboardStyle.Action("Reload workbook", () => _ = ReloadWorkbookAsync()),
             DashboardStyle.Action("Open source workbook", () => SystemDefaultFileOpener.Open(_sourcePath)),
             DashboardStyle.Action("Close", Close)
         }};
@@ -162,9 +185,9 @@ public sealed class SpreadsheetPreviewWindow : Window
         Grid.SetRow(_status, 4); root.Children.Add(_status);
         Grid.SetRow(buttons, 5); root.Children.Add(buttons);
         Content = new Grid { Children = { root, _suggestionPopup } };
-        _tabs.SelectionChanged += (_, _) => RefreshStatus();
+        _tabs.SelectionChanged += (_, _) => { LoadSelectedSheetFilters(); RefreshFilteredViews(SelectedSheet()); RefreshStatus(); };
         _tabs.SelectedIndex = 0;
-        Dispatcher.UIThread.Post(() => RefreshFilteredViews(), DispatcherPriority.Loaded);
+        Dispatcher.UIThread.Post(() => { LoadSelectedSheetFilters(); RefreshFilteredViews(); }, DispatcherPriority.Loaded);
     }
 
     private static Control Labeled(string label, Control field) => new StackPanel { Spacing = 3, Children = { DashboardStyle.Text(label, 10, false, DashboardStyle.Muted), field } };
@@ -172,6 +195,48 @@ public sealed class SpreadsheetPreviewWindow : Window
     private void ClearFilters()
     {
         _headerFilter.Text = ""; _rowFilter.Text = ""; _valueFilter.Text = "";
+    }
+
+    private async Task ReloadWorkbookAsync()
+    {
+        foreach (var view in _sheets.Values) SyncView(view);
+        if (_sheets.Values.Any(HasChanges) || _removedSheetNames.Count > 0)
+        {
+            var dialog = new Window { Title = "Reload workbook", Width = 500, Height = 190, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            var answer = new TaskCompletionSource<bool>();
+            var cancel = DashboardStyle.Action("Cancel", () => { answer.TrySetResult(false); dialog.Close(); });
+            var reload = DashboardStyle.Action("Reload and discard", () => { answer.TrySetResult(true); dialog.Close(); }, "primary");
+            dialog.Content = new StackPanel { Margin = new Thickness(18), Spacing = 10, Children = { DashboardStyle.Text("Unsaved changes will be discarded.", 15, true), DashboardStyle.Text("Reload the complete workbook from disk?", 12, false, DashboardStyle.Muted), new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { cancel, reload } } } };
+            dialog.Show(this);
+            if (!await answer.Task) return;
+        }
+        var owner = Owner;
+        Close();
+        var replacement = new SpreadsheetPreviewWindow(_sourcePath, _log);
+        if (owner is Window windowOwner) replacement.Show(windowOwner); else replacement.Show();
+        _log?.Invoke($"Spreadsheet workbook reloaded. workbook={_sourcePath}");
+    }
+
+    private void SheetFilterChanged()
+    {
+        if (_loadingSheetFilters) return;
+        var view = SelectedSheet();
+        if (view is null) return;
+        view.HeaderFilter = _headerFilter.Text ?? string.Empty;
+        view.RowFilter = _rowFilter.Text ?? string.Empty;
+        view.ValueFilter = _valueFilter.Text ?? string.Empty;
+        RefreshFilteredViews(view);
+    }
+
+    private void LoadSelectedSheetFilters()
+    {
+        var view = SelectedSheet();
+        if (view is null) return;
+        _loadingSheetFilters = true;
+        _headerFilter.Text = view.HeaderFilter;
+        _rowFilter.Text = view.RowFilter;
+        _valueFilter.Text = view.ValueFilter;
+        _loadingSheetFilters = false;
     }
 
     private static IEnumerable<KeyValuePair<(int, int), string>> ReadCells(IXLWorksheet worksheet)
@@ -182,31 +247,34 @@ public sealed class SpreadsheetPreviewWindow : Window
             yield return new KeyValuePair<(int, int), string>((cell.Address.ColumnNumber - 1, cell.Address.RowNumber - 1), cell.GetString());
     }
 
-    private void RefreshFilteredViews(bool syncExisting = true)
+    private void RefreshFilteredViews(SheetView? only = null, bool syncExisting = true)
     {
         if (_refreshing) return;
         _refreshing = true;
         try
         {
-            foreach (var view in _sheets.Values)
+            IEnumerable<SheetView> targetViews = only is null ? _sheets.Values : new[] { only };
+            foreach (var view in targetViews)
             {
                 if (syncExisting) SyncView(view);
                 var rows = Enumerable.Range(0, Math.Max(1, view.RowCount)).ToArray();
                 var columns = Enumerable.Range(0, Math.Max(1, view.ColumnCount)).ToArray();
-                var selectedRows = ParseRows(_rowFilter.Text, rows);
-                var headerTerms = Terms(_headerFilter.Text);
-                var valueTerms = Terms(_valueFilter.Text);
-                var selectedColumns = columns.Where(col => headerTerms.Length == 0 || headerTerms.All(term => Cell(view.Cells, col, 0).Contains(term, StringComparison.OrdinalIgnoreCase))).ToArray();
-                selectedRows = selectedRows.Where(row => row == 0 || valueTerms.Length == 0 || valueTerms.All(term => RowText(view.Cells, row).Contains(term, StringComparison.OrdinalIgnoreCase))).ToArray();
+                var visibleRows = ParseRows(view.RowFilter, rows);
+                var headerTerms = Terms(view.HeaderFilter);
+                var valueTerms = Terms(view.ValueFilter);
+                var hiddenRows = rows.Where(row => !visibleRows.Contains(row)).ToHashSet();
+                var hiddenColumns = columns.Where(col =>
+                    (headerTerms.Length > 0 && !headerTerms.Any(term => Cell(view.Cells, col, 0).Contains(term, StringComparison.OrdinalIgnoreCase)))
+                    || (valueTerms.Length > 0 && !valueTerms.Any(term => Enumerable.Range(1, Math.Max(0, view.RowCount - 1)).Any(row => Cell(view.Cells, col, row).Contains(term, StringComparison.OrdinalIgnoreCase))))).ToHashSet();
 
-                view.DisplayRows = selectedRows.Select((row, index) => (row, index)).ToDictionary(x => x.row, x => x.index);
-                view.DisplayColumns = selectedColumns.Select((col, index) => (col, index)).ToDictionary(x => x.col, x => x.index);
-                var projected = new Dictionary<(int, int), string>();
-                foreach (var row in selectedRows)
-                    foreach (var col in selectedColumns)
-                        if (view.Cells.TryGetValue((col, row), out var value) && !string.IsNullOrEmpty(value))
-                            projected[(view.DisplayColumns[col], view.DisplayRows[row])] = value;
-                ReplaceGrid(view, projected, syncExisting);
+                // Keep the workbook coordinates unchanged. The grid contains
+                // the complete sheet, while non-matching rows/columns are
+                // hidden by height/width. This prevents filtered display
+                // indexes from ever being mistaken for Excel indexes.
+                view.DisplayRows = rows.ToDictionary(row => row, row => row);
+                view.DisplayColumns = columns.ToDictionary(column => column, column => column);
+                var projected = new Dictionary<(int, int), string>(view.Cells);
+                ReplaceGrid(view, projected, hiddenRows, hiddenColumns, syncExisting);
             }
             RefreshStatus();
         }
@@ -245,9 +313,21 @@ public sealed class SpreadsheetPreviewWindow : Window
     private static string Cell(Dictionary<(int Col, int Row), string> cells, int col, int row) => cells.TryGetValue((col, row), out var value) ? value : "";
     private static string RowText(Dictionary<(int Col, int Row), string> cells, int row) => string.Join(" ", cells.Where(x => x.Key.Row == row).OrderBy(x => x.Key.Col).Select(x => x.Value));
 
-    private void ReplaceGrid(SheetView view, Dictionary<(int, int), string> projected, bool syncExisting = true)
+    private void ReplaceGrid(SheetView view, Dictionary<(int, int), string> projected, HashSet<int> hiddenRows, HashSet<int> hiddenColumns, bool syncExisting = true)
     {
         if (syncExisting && view.Grid is not null) SyncView(view);
+        if (view.Grid is not null && view.GridDataLoaded)
+        {
+            // Keep the same control when filtering. Replacing a TabItem's
+            // content can leave a new Spreadalonia control uninitialized;
+            // more importantly, reusing it guarantees that grid coordinates
+            // remain the original workbook coordinates.
+            CaptureFilterDimensions(view);
+            view.Grid.SetData(projected);
+            ApplyChangedHiddenDimensions(view, hiddenRows, hiddenColumns);
+            Dispatcher.UIThread.Post(() => RefreshHighlightOverlay(view), DispatcherPriority.Render);
+            return;
+        }
         var grid = new Spreadsheet
         {
             Foreground = Brushes.Black,
@@ -256,6 +336,7 @@ public sealed class SpreadsheetPreviewWindow : Window
             HeaderBackground = Color.Parse("#E6E6E6"),
             SelectionAccent = new SolidColorBrush(Color.Parse("#9CC7F5"))
         };
+        view.GridDataLoaded = false;
         view.Grid = grid;
         var host = new Grid { ClipToBounds = true };
         var overlay = new Canvas { IsHitTestVisible = false };
@@ -269,8 +350,23 @@ public sealed class SpreadsheetPreviewWindow : Window
             if (e.Property == Spreadsheet.SelectionProperty)
                 Dispatcher.UIThread.Post(() => RefreshHighlightOverlay(view), DispatcherPriority.Render);
         };
-        ScheduleGridLoad(grid, projected);
+        ScheduleGridLoad(view, grid, projected, hiddenRows, hiddenColumns);
         Dispatcher.UIThread.Post(() => RefreshHighlightOverlay(view), DispatcherPriority.Render);
+    }
+
+    private static void ApplyChangedHiddenDimensions(SheetView view, HashSet<int> hiddenRows, HashSet<int> hiddenColumns)
+    {
+        if (view.Grid is null) return;
+        var changedColumns = view.HiddenColumns.Union(hiddenColumns).Except(view.HiddenColumns.Intersect(hiddenColumns))
+            .ToDictionary(column => column, column => hiddenColumns.Contains(column) ? 0d : view.FilterColumnWidths.GetValueOrDefault(column, 100d));
+        var changedRows = view.HiddenRows.Union(hiddenRows).Except(view.HiddenRows.Intersect(hiddenRows))
+            .ToDictionary(row => row, row => hiddenRows.Contains(row) ? 0d : view.FilterRowHeights.GetValueOrDefault(row, 22d));
+        if (changedColumns.Count > 0) view.Grid.SetWidth(changedColumns);
+        if (changedRows.Count > 0) view.Grid.SetHeight(changedRows);
+        view.HiddenColumns.Clear();
+        view.HiddenColumns.UnionWith(hiddenColumns);
+        view.HiddenRows.Clear();
+        view.HiddenRows.UnionWith(hiddenRows);
     }
 
     private void WireAutocomplete(Spreadsheet grid, SheetView view)
@@ -351,7 +447,7 @@ public sealed class SpreadsheetPreviewWindow : Window
             new Separator(),
             Menu("Insert row", () => ApplyStructuralCommand("Inserted row", true, 1)), Menu("Delete row", () => ApplyStructuralCommand("Deleted row", true, -1)),
             Menu("Insert column", () => ApplyStructuralCommand("Inserted column", false, 1)), Menu("Delete column", () => ApplyStructuralCommand("Deleted column", false, -1)),
-            Menu("Auto-fit width", () => grid.AutoFitWidth()), Menu("Auto-fit height", () => grid.AutoFitHeight()),
+            Menu("Auto-fit width", AutoFitSelectedColumns), Menu("Auto-fit height", AutoFitSelectedRows),
             Menu("Undo", () => grid.Undo()), Menu("Redo", () => grid.Redo())
         }) menu.Items.Add(item);
         return menu;
@@ -439,7 +535,7 @@ public sealed class SpreadsheetPreviewWindow : Window
         if (view is null || grid is null || grid.Selection.Count == 0) return;
         try
         {
-            SyncView(view);
+            if (!view.StructureDirty) SyncView(view);
             var range = grid.Selection[0];
             var start = rows ? OriginalRowAt(view, range.Top) : OriginalColumnAt(view, range.Left);
             var reportedCount = rows ? range.Height : range.Width;
@@ -462,7 +558,7 @@ public sealed class SpreadsheetPreviewWindow : Window
                 view.ColumnCount = Math.Max(1, view.ColumnCount + direction * count);
             }
             view.StructureDirty = true;
-            RefreshFilteredViews(syncExisting: false);
+            RefreshFilteredViews(view, syncExisting: false);
             _status.Foreground = DashboardStyle.Green;
             _status.Text = $"{message} at {(rows ? $"row {start + 1}" : $"column {start + 1}")}. Changes will be written to the original workbook when saved.";
         }
@@ -471,6 +567,50 @@ public sealed class SpreadsheetPreviewWindow : Window
             _status.Foreground = DashboardStyle.Red;
             _status.Text = $"{message} failed: {ex.Message}";
         }
+    }
+
+    private void AutoFitSelectedColumns()
+    {
+        var view = SelectedSheet();
+        var grid = view?.Grid;
+        if (view is null || grid is null || grid.Selection.Count == 0) return;
+        try
+        {
+            var widths = new Dictionary<int, double>();
+            foreach (var range in grid.Selection)
+            {
+                var left = Math.Clamp(range.Left, 0, Math.Max(0, view.ColumnCount - 1));
+                var right = Math.Clamp(range.Right, left, Math.Max(0, view.ColumnCount - 1));
+                for (var column = left; column <= right; column++)
+                {
+                    var longest = Enumerable.Range(0, Math.Min(view.RowCount, 10000)).Select(row => Cell(view.Cells, column, row).Length).DefaultIfEmpty(0).Max();
+                    widths[column] = Math.Clamp(24d + longest * 7.2d, 48d, 640d);
+                }
+            }
+            if (widths.Count > 0) grid.SetWidth(widths);
+            _status.Text = $"Auto-fit {widths.Count} column(s)."; _status.Foreground = DashboardStyle.Green;
+        }
+        catch (Exception ex) { _status.Text = $"Auto-fit columns failed: {ex.Message}"; _status.Foreground = DashboardStyle.Red; Log($"Spreadsheet auto-fit columns failed. error={ex}"); }
+    }
+
+    private void AutoFitSelectedRows()
+    {
+        var view = SelectedSheet();
+        var grid = view?.Grid;
+        if (view is null || grid is null || grid.Selection.Count == 0) return;
+        try
+        {
+            var heights = new Dictionary<int, double>();
+            foreach (var range in grid.Selection)
+            {
+                var top = Math.Clamp(range.Top, 0, Math.Max(0, view.RowCount - 1));
+                var bottom = Math.Clamp(range.Bottom, top, Math.Max(0, view.RowCount - 1));
+                for (var row = top; row <= bottom; row++) heights[row] = Math.Clamp(22d + Math.Min(6, Cell(view.Cells, 0, row).Length / 80) * 15d, 22d, 112d);
+            }
+            if (heights.Count > 0) grid.SetHeight(heights);
+            _status.Text = $"Auto-fit {heights.Count} row(s)."; _status.Foreground = DashboardStyle.Green;
+        }
+        catch (Exception ex) { _status.Text = $"Auto-fit rows failed: {ex.Message}"; _status.Foreground = DashboardStyle.Red; Log($"Spreadsheet auto-fit rows failed. error={ex}"); }
     }
 
     private static void ShiftRows(SheetView view, int start, int delta)
@@ -691,14 +831,50 @@ public sealed class SpreadsheetPreviewWindow : Window
         _suggestionPopup.IsOpen = false;
     }
 
-    private static void ScheduleGridLoad(Spreadsheet grid, Dictionary<(int, int), string> projected)
+    private static void ScheduleGridLoad(SheetView view, Spreadsheet grid, Dictionary<(int, int), string> projected, HashSet<int> hiddenRows, HashSet<int> hiddenColumns)
     {
-        void Load() => Dispatcher.UIThread.Post(() =>
+        var attempts = 0;
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+        timer.Tick += (_, _) =>
         {
-            if (grid.Data is not null) grid.SetData(projected);
-        }, DispatcherPriority.Render);
-        grid.AttachedToVisualTree += (_, _) => Load();
-        grid.Loaded += (_, _) => Load();
+            try
+            {
+                // Spreadalonia initializes its backing cell store during its
+                // template/layout pass. Retrying at Background avoids calling
+                // SetData during the earlier render phase, where it can throw
+                // on a newly materialized tab.
+                grid.SetData(projected);
+                view.GridDataLoaded = true;
+                timer.Stop();
+                CaptureFilterDimensions(view);
+                if (hiddenColumns.Count > 0)
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        try { grid.SetWidth(hiddenColumns.ToDictionary(column => column, _ => 0d)); view.HiddenColumns.UnionWith(hiddenColumns); }
+                        catch (NullReferenceException) { }
+                    }, DispatcherPriority.Background);
+                if (hiddenRows.Count > 0)
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        try { grid.SetHeight(hiddenRows.ToDictionary(row => row, _ => 0d)); view.HiddenRows.UnionWith(hiddenRows); }
+                        catch (NullReferenceException) { }
+                    }, DispatcherPriority.Background);
+            }
+            catch (NullReferenceException)
+            {
+                if (++attempts >= 50) timer.Stop();
+            }
+        };
+        timer.Start();
+    }
+
+    private static void CaptureFilterDimensions(SheetView view)
+    {
+        if (view.Grid is null) return;
+        for (var column = 0; column < Math.Max(1, view.ColumnCount); column++)
+            if (!view.FilterColumnWidths.ContainsKey(column)) view.FilterColumnWidths[column] = view.Grid.GetCellSize(column, 0).width;
+        for (var row = 0; row < Math.Max(1, view.RowCount); row++)
+            if (!view.FilterRowHeights.ContainsKey(row)) view.FilterRowHeights[row] = view.Grid.GetCellSize(0, row).height;
     }
 
     private static void SyncEditingCell(Spreadsheet grid, SheetView view, string value)
@@ -758,7 +934,7 @@ public sealed class SpreadsheetPreviewWindow : Window
 
     private static void SyncView(SheetView view)
     {
-        if (view.Grid is null || view.DisplayRows.Count == 0 || view.DisplayColumns.Count == 0 || view.Grid.Data is null) return;
+        if (view.Grid is null || !view.GridDataLoaded || view.DisplayRows.Count == 0 || view.DisplayColumns.Count == 0 || view.Grid.Data is null) return;
         var visibleCells = view.Grid.Data.ToDictionary(x => x.Key, x => x.Value);
         EnsureDisplayMapCoverage(view, visibleCells.Keys);
         var editor = view.Grid.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(x => x.Name == "EditingBox" && x.IsVisible);
@@ -823,7 +999,7 @@ public sealed class SpreadsheetPreviewWindow : Window
         do name = $"Sheet{number++}"; while (_sheets.ContainsKey(name));
 
         var tab = new TabItem { Header = name };
-        var view = new SheetView { Name = name, Cells = [], Tab = tab, RowCount = 1, ColumnCount = 1 };
+        var view = new SheetView { Name = name, Cells = [], OriginalCells = [], Tab = tab, RowCount = 1, ColumnCount = 1, OriginalRowCount = 0, OriginalColumnCount = 0 };
         _sheets.Add(name, view);
         _tabs.Items.Add(tab);
         _tabs.SelectedIndex = _tabs.ItemCount - 1;
@@ -895,8 +1071,19 @@ public sealed class SpreadsheetPreviewWindow : Window
         Log($"Spreadsheet save started. workbook={_sourcePath}; sheets={_sheets.Count}; totalModelCells={_sheets.Values.Sum(x => x.Cells.Count)}");
         try
         {
+            // Structural edits are already applied to the source-coordinate model. A subsequent
+            // read from Spreadalonia can still expose its pre-refresh virtual grid and duplicate
+            // the edge column/row, so never overwrite a dirty structural model during save.
             foreach (var view in _sheets.Values)
                 if (!view.StructureDirty) SyncView(view);
+            var changedViews = _sheets.Values.Where(HasChanges).ToList();
+            if (changedViews.Count == 0 && _removedSheetNames.Count == 0)
+            {
+                _status.Foreground = DashboardStyle.Muted;
+                _status.Text = "No changes detected. Workbook was not modified and no backup was created.";
+                Log($"Spreadsheet save skipped. workbook={_sourcePath}; reason=no-value-style-or-structure-differences");
+                return;
+            }
             using var workbook = new XLWorkbook(_sourcePath);
             WriteWorkbookChanges(workbook, includeEditorStyles: true);
             workbook.SaveAs(temp, true);
@@ -939,7 +1126,16 @@ public sealed class SpreadsheetPreviewWindow : Window
             File.Copy(_sourcePath, backup, true);
             File.Move(temp, _sourcePath, true);
             _removedSheetNames.Clear();
-            foreach (var view in _sheets.Values) view.StructureDirty = false;
+            foreach (var view in _sheets.Values)
+            {
+                view.StructureDirty = false;
+                view.OriginalRowCount = view.RowCount;
+                view.OriginalColumnCount = view.ColumnCount;
+                view.OriginalCells.Clear();
+                foreach (var cell in view.Cells) view.OriginalCells[cell.Key] = cell.Value;
+                view.OriginalStyles.Clear();
+                foreach (var style in view.Styles) view.OriginalStyles[style.Key] = CloneStyle(style.Value);
+            }
             _status.Foreground = DashboardStyle.Green;
             _status.Text = formattingSkipped
                 ? $"Workbook saved: {_sourcePath}. Backup: {backup}. Legacy styles were preserved using non-strict validation."
@@ -971,20 +1167,55 @@ public sealed class SpreadsheetPreviewWindow : Window
             sheet ??= workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(view.Name, StringComparison.OrdinalIgnoreCase));
             sheet ??= workbook.Worksheets.Add(view.Name);
             if (!sheet.Name.Equals(view.Name, StringComparison.Ordinal)) sheet.Name = view.Name;
-
-            sheet.RangeUsed()?.Clear(XLClearOptions.Contents);
-            foreach (var cell in view.Cells)
+            if (view.StructureDirty)
             {
-                if (cell.Key.Row >= view.RowCount || cell.Key.Col >= view.ColumnCount) continue;
-                var target = sheet.Cell(cell.Key.Row + 1, cell.Key.Col + 1);
-                target.Value = cell.Value;
-                if (!includeEditorStyles || !view.Styles.TryGetValue(cell.Key, out var style)) continue;
-                target.Style.Font.Bold = style.Bold;
-                target.Style.Font.Italic = style.Italic;
-                if (!string.IsNullOrWhiteSpace(style.TextColor)) target.Style.Font.FontColor = XLColor.FromHtml(style.TextColor);
-                if (!string.IsNullOrWhiteSpace(style.Highlight)) target.Style.Fill.BackgroundColor = XLColor.FromHtml(style.Highlight);
+                var maxRows = Math.Max(view.OriginalRowCount, view.RowCount);
+                var maxColumns = Math.Max(view.OriginalColumnCount, view.ColumnCount);
+                for (var row = 0; row < maxRows; row++)
+                    for (var column = 0; column < maxColumns; column++)
+                    {
+                        var target = sheet.Cell(row + 1, column + 1);
+                        if (view.Cells.TryGetValue((column, row), out var value))
+                            WriteCell(target, value, view.Styles.GetValueOrDefault((column, row)), includeEditorStyles);
+                        else
+                            target.Value = string.Empty;
+                    }
+                continue;
+            }
+
+            var changedKeys = view.OriginalCells.Keys.Concat(view.Cells.Keys).Distinct().Where(key =>
+                !view.OriginalCells.TryGetValue(key, out var original) || !view.Cells.TryGetValue(key, out var current) || !string.Equals(original, current, StringComparison.Ordinal)).ToList();
+            foreach (var key in changedKeys)
+            {
+                var target = sheet.Cell(key.Row + 1, key.Col + 1);
+                if (view.Cells.TryGetValue(key, out var value)) target.Value = value;
+                else target.Clear(XLClearOptions.Contents);
+                if (includeEditorStyles && view.Styles.TryGetValue(key, out var style)) WriteStyle(target, style);
+            }
+            foreach (var key in view.Styles.Keys.Concat(view.OriginalStyles.Keys).Distinct())
+            {
+                if (StylesEqual(view.Styles.GetValueOrDefault(key), view.OriginalStyles.GetValueOrDefault(key))) continue;
+                if (view.Styles.TryGetValue(key, out var style)) WriteStyle(sheet.Cell(key.Row + 1, key.Col + 1), style);
             }
         }
+    }
+
+    private static bool HasChanges(SheetView view)
+    {
+        if (view.StructureDirty || view.RowCount != view.OriginalRowCount || view.ColumnCount != view.OriginalColumnCount) return true;
+        var keys = view.OriginalCells.Keys.Concat(view.Cells.Keys).Distinct();
+        if (keys.Any(key => !view.OriginalCells.TryGetValue(key, out var oldValue) || !view.Cells.TryGetValue(key, out var newValue) || !string.Equals(oldValue, newValue, StringComparison.Ordinal))) return true;
+        return view.Styles.Keys.Concat(view.OriginalStyles.Keys).Distinct().Any(key => !StylesEqual(view.Styles.GetValueOrDefault(key), view.OriginalStyles.GetValueOrDefault(key)));
+    }
+
+    private static bool StylesEqual(SheetView.CellStyle? left, SheetView.CellStyle? right) => left?.Bold == right?.Bold && left?.Italic == right?.Italic && string.Equals(left?.TextColor, right?.TextColor, StringComparison.OrdinalIgnoreCase) && string.Equals(left?.Highlight, right?.Highlight, StringComparison.OrdinalIgnoreCase);
+    private static SheetView.CellStyle CloneStyle(SheetView.CellStyle style) => new() { Bold = style.Bold, Italic = style.Italic, TextColor = style.TextColor, Highlight = style.Highlight };
+    private static void WriteCell(IXLCell cell, string value, SheetView.CellStyle? style, bool includeStyles) { cell.Value = value; if (includeStyles && style is not null) WriteStyle(cell, style); }
+    private static void WriteStyle(IXLCell cell, SheetView.CellStyle style)
+    {
+        cell.Style.Font.Bold = style.Bold; cell.Style.Font.Italic = style.Italic;
+        if (!string.IsNullOrWhiteSpace(style.TextColor)) cell.Style.Font.FontColor = XLColor.FromHtml(style.TextColor);
+        if (!string.IsNullOrWhiteSpace(style.Highlight)) cell.Style.Fill.BackgroundColor = XLColor.FromHtml(style.Highlight);
     }
 
     private static bool IsStylesXmlFailure(Exception exception)

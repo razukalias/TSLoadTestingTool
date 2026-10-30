@@ -12,6 +12,7 @@ namespace LoadTestingTool.Execution;
 
 internal static class InlineScriptRunner
 {
+    private const int ScriptTimeoutSeconds = 30;
     private static readonly Regex TokenStart = new(@"<runscript\s*\(", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public static async Task<string> ResolveTokensAsync(string value, RunnerExecutionContext context, string workspaceRoot, FeatureConfig features, InternalLogger logger, CancellationToken cancellationToken)
@@ -60,8 +61,6 @@ internal static class InlineScriptRunner
 
     private static async Task<string> ExecuteAsync(string template, IReadOnlyDictionary<string, string> parameters, RunnerExecutionContext context, string workspaceRoot, FeatureConfig features, InternalLogger logger, CancellationToken cancellationToken)
     {
-        if (!features.AllowTrustedScripts)
-            throw new UnauthorizedAccessException("Inline scripts are disabled. Set AllowTrustedScripts=true only for trusted workbooks.");
         var path = ResolveScriptPath(template, workspaceRoot);
         var code = await File.ReadAllTextAsync(path, cancellationToken);
         foreach (var parameter in parameters) context.Set(parameter.Key, parameter.Value, VariableScope.Iteration);
@@ -69,7 +68,7 @@ internal static class InlineScriptRunner
         var globals = new ScriptGlobals { Runtime = runtime, _data_ = null, _data1_ = null };
         var scriptCode = ExpandRuntimePlaceholders(code);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, features.ScriptTimeoutSeconds)));
+        timeout.CancelAfter(TimeSpan.FromSeconds(ScriptTimeoutSeconds));
         var options = ScriptMetadataReferences.CreateOptions(typeof(ScriptRuntime).Assembly)
             .AddImports("System", "System.Linq", "System.Collections.Generic", "LoadTestingTool.Domain");
         logger.Info($"INLINE SCRIPT START | template={template}; parameters={string.Join(", ", parameters.Select(x => $"{x.Key}={x.Value}"))}");

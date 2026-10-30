@@ -26,22 +26,25 @@ public sealed class TestRunner
     public TestRunner(HttpClient client, AssertionEngine assertions, string templatesFolder, int timeoutSeconds, Action<RequestResult>? requestCompleted = null, InternalLogger? logger = null, FeatureConfig? features = null)
     {
         _client = client; _assertions = assertions; _templatesFolder = templatesFolder; _timeoutSeconds = Math.Max(1, timeoutSeconds); _requestCompleted = requestCompleted; _logger = logger ?? new InternalLogger(string.Empty, "disabled", "disabled", false); _features = features ?? new FeatureConfig { WorkspaceRoot = Directory.GetCurrentDirectory() };
-        _pipeline = new ExecutionPipeline(new StepExecutorRegistry([new GraphQlStepExecutor(_client), new GraphQlStepExecutor(_client, flattenCaseQl: true), new FileStepExecutor(), new SqlStepExecutor(_features), new CSharpScriptStepExecutor(_features)]));
+        _pipeline = new ExecutionPipeline(new StepExecutorRegistry([new GraphQlStepExecutor(_client), new GraphQlStepExecutor(_client, flattenCaseQl: true), new FileStepExecutor(), new SqlStepExecutor(_features), new CSharpScriptStepExecutor()]));
     }
 
-    public async Task RunAsync(TestcaseDefinition testcase, WorkbookModel workbook, RunResult run, CancellationToken cancellationToken, string environment = "", string executionMode = "threaded", IReadOnlySet<string>? selectedDataIds = null)
+    public async Task RunAsync(TestcaseDefinition testcase, WorkbookModel workbook, RunResult run, CancellationToken cancellationToken, string environment = "", string executionMode = "threaded", IReadOnlySet<string>? selectedDataIds = null, int threads = 1, int iterations = 1, int threadIntervalMs = 0, int iterationIntervalMs = 0)
     {
         var dataRows = workbook.RequestData.Values.Where(r => r.TestcaseIndex == testcase.TestcaseIndex && (selectedDataIds is null || selectedDataIds.Contains(r.DataId))).OrderBy(r => r.DataId, StringComparer.OrdinalIgnoreCase).ToList();
         _logger.Section($"TESTCASE {testcase.TestcaseIndex}: {testcase.Testcase} - START");
         _logger.Info($"Testcase summary | dataRows={dataRows.Count} | steps={testcase.Steps.Count} | environment={environment}");
         var sequential = executionMode.Equals("loop", StringComparison.OrdinalIgnoreCase) || executionMode.Equals("sequential", StringComparison.OrdinalIgnoreCase);
-        var threads = sequential ? 1 : testcase.Steps.Max(s => s.Threads);
-        _logger.Info($"Execution mode: {(sequential ? "sequential loop" : "threaded")}; workers={threads}");
-        var tasks = Enumerable.Range(1, threads).Select(async threadId =>
+        var workerCount = sequential ? 1 : Math.Max(1, threads);
+        var iterationCount = Math.Max(1, iterations);
+        var workerInterval = Math.Max(0, threadIntervalMs);
+        var iterationInterval = Math.Max(0, iterationIntervalMs);
+        _logger.Info($"Execution mode: {(sequential ? "sequential loop" : "threaded")}; workers={workerCount}; iterations={iterationCount}; threadIntervalMs={workerInterval}; iterationIntervalMs={iterationInterval}");
+        var tasks = Enumerable.Range(1, workerCount).Select(async threadId =>
         {
-            if (threadId > 1 && testcase.Steps.Max(s => s.ThreadIntervalMs) > 0) await Task.Delay((threadId - 1) * testcase.Steps.Max(s => s.ThreadIntervalMs), cancellationToken);
+            if (threadId > 1 && workerInterval > 0) await Task.Delay((threadId - 1) * workerInterval, cancellationToken);
             foreach (var data in dataRows)
-            for (var iteration = 1; iteration <= testcase.Steps.Max(s => s.Iterations); iteration++)
+            for (var iteration = 1; iteration <= iterationCount; iteration++)
             {
                 _logger.Section($"DATA ROW {data.DataId} | thread={threadId} | iteration={iteration}");
                 var testcaseResult = new TestcaseResult { RunId = run.RunId, TestcaseIndex = testcase.TestcaseIndex, Testcase = testcase.Testcase, DataId = data.DataId, Thread = threadId, Iteration = iteration, Environment = environment, StartedAt = DateTimeOffset.Now };
@@ -56,7 +59,6 @@ public sealed class TestRunner
                         continue;
                     }
                     if (!request.Enabled) { _logger.Info($"STEP SKIPPED | reason=disabled | step={request.StepName}"); continue; }
-                    if (request.Iterations < iteration) { _logger.Info($"STEP SKIPPED | reason=iteration-limit | configured={request.Iterations} | current={iteration}"); continue; }
                     if (request.WaitMs > 0) { _logger.Info($"Waiting {request.WaitMs} ms before dataid={data.DataId}, step {request.StepName}."); await Task.Delay(request.WaitMs, cancellationToken); }
                     Dictionary<string, string> variables;
                     IReadOnlySet<string> redactedVariables;
@@ -94,7 +96,7 @@ public sealed class TestRunner
                     if (result.Result == "FAIL" && request.StopOnFailure) { _logger.Warn($"Stopping testcase sequence after failed dataid={data.DataId}, step {request.StepName} because stopOnFailure=true."); break; }
                 }
                 testcaseResult.EndedAt = DateTimeOffset.Now; lock (run.Testcases) run.Testcases.Add(testcaseResult);
-                if (iteration < testcase.Steps.Max(s => s.Iterations) && testcase.Steps.Max(s => s.IterationIntervalMs) > 0) await Task.Delay(testcase.Steps.Max(s => s.IterationIntervalMs), cancellationToken);
+                if (iteration < iterationCount && iterationInterval > 0) await Task.Delay(iterationInterval, cancellationToken);
             }
         });
         await Task.WhenAll(tasks); _logger.Section($"TESTCASE {testcase.TestcaseIndex}: {testcase.Testcase} - END");

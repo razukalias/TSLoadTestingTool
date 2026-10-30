@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClosedXML.Excel;
@@ -27,6 +28,10 @@ public sealed class InstanceInfo
     public IReadOnlyList<TestcaseOption> TestcaseOptions { get; set; } = [];
     public string SelectionReadError { get; set; } = "";
     public string ExecutionMode { get; set; } = "threaded";
+    public int Threads { get; set; } = 1;
+    public int Iterations { get; set; } = 1;
+    public int ThreadIntervalMs { get; set; }
+    public int IterationIntervalMs { get; set; }
     public bool RunScenariosInParallel { get; set; }
     public string EnvironmentSelection { get; set; } = "";
     public string EnvironmentSelectionJson { get; set; } = "";
@@ -64,7 +69,10 @@ public sealed class AssertionInfo
     public string DataId { get; init; } = string.Empty;
     public string StepName { get; init; } = string.Empty;
     public string ResponsePath { get; set; } = string.Empty;
+    public string ResponseHeader { get; set; } = string.Empty;
     public string AssertionVerb { get; set; } = string.Empty;
+    public string AssertionType { get; set; } = string.Empty;
+    public string AssertionMeaning { get; set; } = string.Empty;
     public string ExpectedValue { get; set; } = string.Empty;
     public string ActualValue { get; init; } = string.Empty;
     public string Result { get; init; } = string.Empty;
@@ -104,6 +112,7 @@ public sealed partial class MainWindow : Window
     private readonly StackPanel _assertionItems = new() { Orientation = Orientation.Vertical };
     private readonly CheckBox _failedOnly = new() { Content = "Show failed only", IsChecked = true };
     private readonly ComboBox _environmentFilter = new() { Width = 150, Margin = new Thickness(8, 6, 6, 0) };
+    private readonly ComboBox _internalLogEnvironment = new() { Width = 220 };
     private readonly CheckBox _enableInternalLog = new() { Content = "Enable internal log", IsChecked = true, Margin = new Thickness(12, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _readyValue = new();
     private readonly TextBlock _runningValue = new();
@@ -141,7 +150,9 @@ public sealed partial class MainWindow : Window
     {
         var check = new CheckBox { IsChecked = assertion.Selected, VerticalAlignment = VerticalAlignment.Top };
         check.IsCheckedChanged += (_, _) => assertion.Selected = check.IsChecked == true;
-        var text = DashboardStyle.Text($"[{assertion.Environment}] {assertion.Testcase} / Data {assertion.DataId}\n{assertion.StepName} / {assertion.ResponsePath} {assertion.AssertionVerb}\nExpected: {assertion.ExpectedValue}\nActual: {assertion.ActualValue}", 12);
+        var type = string.IsNullOrWhiteSpace(assertion.AssertionType) ? AssertionSemanticsUi.Type(assertion.AssertionVerb, assertion.ActualValue, assertion.FailureMessage) : assertion.AssertionType;
+        var meaning = string.IsNullOrWhiteSpace(assertion.AssertionMeaning) ? AssertionSemanticsUi.Meaning(assertion.AssertionVerb, assertion.ActualValue, assertion.FailureMessage) : assertion.AssertionMeaning;
+        var text = DashboardStyle.Text($"[{assertion.Environment}] {assertion.Testcase} / Data {assertion.DataId}\n{assertion.StepName} / {assertion.ResponsePath} {assertion.AssertionVerb}\nType: {type}\nMeaning: {meaning}\nExpected: {assertion.ExpectedValue}\nActual: {assertion.ActualValue}", 12);
         text.TextWrapping = TextWrapping.Wrap;
         var content = new StackPanel { Spacing = 6, Children = { DashboardStyle.Badge(assertion.Result == "PASS" ? "Passed" : "Failed"), text } };
         var row = new Grid { ColumnDefinitions = new ColumnDefinitions("30,*") };
@@ -190,6 +201,33 @@ public sealed partial class MainWindow : Window
         editor.Show(this);
     }
 
+    private void OpenAssertionWorkbench()
+    {
+        if (_selectedInstance is null)
+        {
+            _details.Text = "Select an instance first.";
+            UiLog("Assertion Workbench ignored. reason=no-selected-instance");
+            return;
+        }
+        if (_selectedInstance.Assertions.Count == 0)
+        {
+            _details.Text = "No assertion fields are available yet. Run the instance first or load a run with assertion results.";
+            UiLog($"Assertion Workbench ignored. instance={_selectedInstance.Name}; reason=no-assertions");
+            return;
+        }
+        try
+        {
+            var workbench = new AssertionWorkbenchWindow(_selectedInstance.WorkbookPath, _selectedInstance.Assertions, message => _details.Text = message, () => { RefreshAssertionList(); RefreshDashboardDetails(true); }, UiLog);
+            workbench.Show(this);
+            UiLog($"Assertion Workbench opened. instance={_selectedInstance.Name}; assertions={_selectedInstance.Assertions.Count}");
+        }
+        catch (Exception ex)
+        {
+            _details.Text = $"Could not open Assertion Workbench: {ex.Message}";
+            UiLog($"Assertion Workbench failed to open safely. instance={_selectedInstance.Name}; error={ex}");
+        }
+    }
+
     private void ApplyAssertionEdit(AssertionInfo assertion, AssertionEditResult result)
     {
         if (_selectedInstance is null) return;
@@ -201,21 +239,17 @@ public sealed partial class MainWindow : Window
             using var workbook = new XLWorkbook(workbookPath);
             var sheet = workbook.Worksheet("response");
             var header = sheet.Cell(1, assertion.ExpectedValueColumn);
-            header.Value = $"{assertion.StepName}.{result.ResponsePath}";
+            var responseHeader = result.ResponseHeader.Trim();
+            header.Value = responseHeader;
             var cell = sheet.Cell(assertion.ExcelRowNumber, assertion.ExpectedValueColumn);
-            cell.Value = result.AssertionVerb is "exists" or "notexists" or "empty" or "notempty" ? $"{{{result.AssertionVerb}}}" : $"{{{result.AssertionVerb}}}{result.ExpectedValue}";
-            if (!string.IsNullOrWhiteSpace(result.ExtractVariable))
-            {
-                var extractColumn = FindResponseHeaderColumn(sheet, "extractvariable");
-                if (extractColumn <= 0) { extractColumn = (sheet.Row(1).LastCellUsed()?.Address.ColumnNumber ?? 0) + 1; sheet.Cell(1, extractColumn).Value = "extractvariable"; }
-                var mappings = sheet.Cell(assertion.ExcelRowNumber, extractColumn).GetString().Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => !x.StartsWith(assertion.StepName + "." + assertion.ResponsePath + ":", StringComparison.OrdinalIgnoreCase)).ToList();
-                mappings.Add($"{assertion.StepName}.{result.ResponsePath}:{result.ExtractVariable}");
-                sheet.Cell(assertion.ExcelRowNumber, extractColumn).Value = string.Join('|', mappings);
-            }
+            cell.Value = result.ExpectedValue;
             workbook.Save();
-            assertion.ResponsePath = result.ResponsePath; assertion.AssertionVerb = result.AssertionVerb; assertion.ExpectedValue = result.ExpectedValue; assertion.ExtractVariable = result.ExtractVariable;
-            _details.Text = $"Assertion corrected. Backup created: {Path.GetFileName(backup)}. Run the instance again to validate it.";
-            UiLog($"Assertion corrected. instance={_selectedInstance.Name}; testcase={assertion.Testcase}; dataId={assertion.DataId}; step={assertion.StepName}; path={result.ResponsePath}; verb={result.AssertionVerb}; backup={backup}");
+            assertion.ResponseHeader = responseHeader;
+            assertion.ResponsePath = HeaderPath(responseHeader, assertion.StepName);
+            assertion.AssertionVerb = HeaderVerb(responseHeader, result.ExpectedValue);
+            assertion.ExpectedValue = HeaderExpected(result.ExpectedValue);
+            _details.Text = $"Assertion corrected. Backup created: {Path.GetFileName(backup)}. Extract-variable editing is no longer part of this form. Run the instance again to validate it.";
+            UiLog($"Assertion corrected. instance={_selectedInstance.Name}; testcase={assertion.Testcase}; dataId={assertion.DataId}; step={assertion.StepName}; header={responseHeader}; backup={backup}");
             RefreshAssertionList(); RefreshDashboardDetails(true);
         }
         catch (Exception ex) { _details.Text = $"Assertion correction failed: {ex.Message}"; UiLog($"Assertion correction failed: {ex}"); }
@@ -288,6 +322,27 @@ public sealed partial class MainWindow : Window
     }
 
     private static bool ContainsWorkbookVariable(string value) => System.Text.RegularExpressions.Regex.IsMatch(value ?? string.Empty, @"<[^<>]+>");
+    private static string HeaderVerb(string header, string cell)
+    {
+        if (cell.TrimStart().StartsWith("{", StringComparison.Ordinal) && cell.IndexOf('}') > 1)
+            return cell[1..cell.IndexOf('}')].Trim().ToLowerInvariant();
+        if (header.TrimStart().StartsWith("{", StringComparison.Ordinal) && header.IndexOf('}') > 1)
+            return header[(header.IndexOf('{') + 1)..header.IndexOf('}')].Trim().ToLowerInvariant();
+        return "eq";
+    }
+    private static string HeaderExpected(string cell)
+    {
+        var value = cell.Trim();
+        if (value.StartsWith("{", StringComparison.Ordinal) && value.IndexOf('}') > 1) return value[(value.IndexOf('}') + 1)..];
+        return value;
+    }
+    private static string HeaderPath(string header, string fallbackStep)
+    {
+        var value = header.Trim();
+        if (value.StartsWith("{", StringComparison.Ordinal) && value.IndexOf('}') > 1) value = value[(value.IndexOf('}') + 1)..].Trim();
+        var separator = value.IndexOf('.');
+        return separator > 0 ? value[(value.StartsWith(fallbackStep + ".", StringComparison.OrdinalIgnoreCase) ? fallbackStep.Length + 1 : 0)..] : value;
+    }
 
     private void RefreshInstances()
     {
@@ -341,6 +396,13 @@ public sealed partial class MainWindow : Window
             var item = previous.GetValueOrDefault(folder) ?? new InstanceInfo { Name = candidate.Name, FolderPath = folder, WorkbookPath = workbook };
             item.Name = candidate.Name;
             item.WorkbookPath = workbook;
+            if (_config.Instances.TryGetValue(candidate.Name, out var centralInstance))
+            {
+                item.Threads = Math.Max(1, centralInstance.Threads ?? _config.Threads);
+                item.Iterations = Math.Max(1, centralInstance.Iterations ?? _config.Iterations);
+                item.ThreadIntervalMs = Math.Max(0, centralInstance.ThreadIntervalMs ?? _config.ThreadIntervalMs);
+                item.IterationIntervalMs = Math.Max(0, centralInstance.IterationIntervalMs ?? _config.IterationIntervalMs);
+            }
             try
             {
                 var profile = Path.Combine(folder, ".run-selection.json");
@@ -351,6 +413,10 @@ public sealed partial class MainWindow : Window
                     {
                         item.TestcaseSelection = saved.Testcases; item.StepSelectionJson = saved.StepsJson;
                         item.EnvironmentSelection = saved.Environments; item.EnvironmentSelectionJson = saved.EnvironmentsJson; item.DataIdSelection = saved.DataIds; item.ExecutionMode = saved.ExecutionMode; item.RunScenariosInParallel = saved.ScenariosParallel; item.HasAppliedSelection = true;
+                        if (saved.Threads > 0) item.Threads = saved.Threads;
+                        if (saved.Iterations > 0) item.Iterations = saved.Iterations;
+                        item.ThreadIntervalMs = Math.Max(0, saved.ThreadIntervalMs);
+                        item.IterationIntervalMs = Math.Max(0, saved.IterationIntervalMs);
                     }
                 }
             }
@@ -423,6 +489,45 @@ public sealed partial class MainWindow : Window
             UiLog($"Registered instance centrally. instance={name}; settings={_config.SettingsFile}");
         }
         catch (Exception ex) { UiLog($"Could not register instance centrally: {ex}"); _details.Text = $"Instance created, but central registration failed: {ex.Message}"; }
+    }
+
+    private void SaveInstanceExecutionSettings(InstanceInfo item, string? threadsText, string? iterationsText, string? threadIntervalText, string? iterationIntervalText)
+    {
+        if (!int.TryParse(threadsText, out var threads) || threads < 1 ||
+            !int.TryParse(iterationsText, out var iterations) || iterations < 1 ||
+            !int.TryParse(threadIntervalText, out var threadInterval) || threadInterval < 0 ||
+            !int.TryParse(iterationIntervalText, out var iterationInterval) || iterationInterval < 0)
+        {
+            _details.Text = "Execution settings are invalid. Threads and iterations must be at least 1; intervals must be 0 or greater.";
+            return;
+        }
+        try
+        {
+            var root = File.Exists(_config.SettingsFile) ? JsonNode.Parse(File.ReadAllText(_config.SettingsFile)) as JsonObject : new JsonObject();
+            root ??= new JsonObject();
+            var instances = root["Instances"] as JsonObject ?? new JsonObject();
+            var instance = instances[item.Name] as JsonObject ?? new JsonObject();
+            instance["Threads"] = threads;
+            instance["Iterations"] = iterations;
+            instance["ThreadIntervalMs"] = threadInterval;
+            instance["IterationIntervalMs"] = iterationInterval;
+            instances[item.Name] = instance;
+            root["Instances"] = instances;
+            File.WriteAllText(_config.SettingsFile, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
+            if (_config.Instances.TryGetValue(item.Name, out var central))
+            {
+                central.Threads = threads; central.Iterations = iterations; central.ThreadIntervalMs = threadInterval; central.IterationIntervalMs = iterationInterval;
+            }
+            item.Threads = threads; item.Iterations = iterations; item.ThreadIntervalMs = threadInterval; item.IterationIntervalMs = iterationInterval;
+            UiLog($"Saved global execution settings. instance={item.Name}; threads={threads}; iterations={iterations}; threadIntervalMs={threadInterval}; iterationIntervalMs={iterationInterval}");
+            _details.Text = $"Saved for {item.Name}: {threads} thread(s), {iterations} iteration(s), thread interval {threadInterval} ms, iteration interval {iterationInterval} ms.";
+            RefreshDashboardDetails(force: true);
+        }
+        catch (Exception ex)
+        {
+            UiLog($"Could not save execution settings for {item.Name}: {ex}");
+            _details.Text = $"Could not save execution settings: {ex.Message}";
+        }
     }
 
     private void OpenStepWizardForInstance(InstanceInfo item)
@@ -709,7 +814,7 @@ public sealed partial class MainWindow : Window
             var assertion = new AssertionInfo
             {
                 TestcaseIndex = e.GetProperty("testcaseIndex").GetInt32(), Testcase = e.GetProperty("testcase").GetString() ?? "", DataId = e.GetProperty("dataId").GetString() ?? "", StepName = e.GetProperty("stepName").GetString() ?? "",
-                ResponsePath = e.GetProperty("responsePath").GetString() ?? "", AssertionVerb = e.GetProperty("assertionVerb").GetString() ?? "", ExpectedValue = e.GetProperty("expectedValue").GetString() ?? "", ActualValue = e.GetProperty("actualValue").GetString() ?? "", Result = e.GetProperty("result").GetString() ?? "", FailureMessage = e.GetProperty("failureMessage").GetString() ?? "", ExtractVariable = e.TryGetProperty("extractVariable", out var extract) ? extract.GetString() ?? "" : "",
+                ResponsePath = e.GetProperty("responsePath").GetString() ?? "", ResponseHeader = $"{e.GetProperty("stepName").GetString()}.{e.GetProperty("responsePath").GetString()}", AssertionVerb = e.GetProperty("assertionVerb").GetString() ?? "", AssertionType = e.TryGetProperty("assertionType", out var assertionType) ? assertionType.GetString() ?? "" : "", AssertionMeaning = e.TryGetProperty("assertionMeaning", out var assertionMeaning) ? assertionMeaning.GetString() ?? "" : "", ExpectedValue = e.GetProperty("expectedValue").GetString() ?? "", ActualValue = e.GetProperty("actualValue").GetString() ?? "", Result = e.GetProperty("result").GetString() ?? "", FailureMessage = e.GetProperty("failureMessage").GetString() ?? "", ExtractVariable = "",
                 Environment = e.TryGetProperty("environment", out var environment) ? environment.GetString() ?? "" : "",
                 ExcelRowNumber = e.TryGetProperty("excelRowNumber", out var row) ? row.GetInt32() : 0, ExpectedValueColumn = e.TryGetProperty("expectedValueColumn", out var col) ? col.GetInt32() : 0
             };
@@ -756,6 +861,82 @@ public sealed partial class MainWindow : Window
         if (path is null) { _details.Text = "No internal.log exists for this instance yet. Run it with internal logging enabled."; UiLog($"Open internal.log ignored. instance={_selectedInstance.Name}; reason=file-not-found"); return; }
         UiLog($"Opening latest internal.log. instance={_selectedInstance.Name}; path={path}");
         OpenFile(path, "internal.log");
+    }
+
+    private void OpenAllInternalLogs()
+    {
+        if (_selectedInstance is null) { _details.Text = "Select an instance first."; UiLog("Open all internal logs ignored. reason=no-selected-instance"); return; }
+        var item = _selectedInstance;
+        var paths = FindInternalLogs(item);
+        if (paths.Count == 0)
+        {
+            _details.Text = "No internal.log files exist for this instance yet. Run it with internal logging enabled.";
+            UiLog($"Open all internal logs ignored. instance={item.Name}; reason=file-not-found");
+            return;
+        }
+
+        var outputFolder = Directory.Exists(item.CurrentRunFolder) ? item.CurrentRunFolder : item.LogsFolder;
+        Directory.CreateDirectory(outputFolder);
+        var runLabel = string.IsNullOrWhiteSpace(item.CurrentRunId) ? DateTime.Now.ToString("yyyyMMdd_HHmmss") : item.CurrentRunId;
+        var combinedPath = Path.Combine(outputFolder, $"InternalLogs_{runLabel}_all-environments.log");
+        try
+        {
+            using (var writer = new StreamWriter(combinedPath, false, new UTF8Encoding(false)))
+            {
+                writer.WriteLine("Load Testing Tool - combined internal logs");
+                writer.WriteLine($"Instance: {item.Name}");
+                writer.WriteLine($"Run: {runLabel}");
+                writer.WriteLine($"Generated: {DateTimeOffset.Now:O}");
+                writer.WriteLine();
+                foreach (var path in paths)
+                {
+                    writer.WriteLine($"===== ENVIRONMENT: {FindEnvironmentLabel(path, item)} =====");
+                    writer.WriteLine($"Source: {path}");
+                    writer.WriteLine(File.ReadAllText(path));
+                    writer.WriteLine();
+                }
+            }
+            _details.Text = $"Combined internal logs created:\n{combinedPath}\nEnvironments included: {paths.Count}";
+            UiLog($"Opening all internal logs. instance={item.Name}; runId={item.CurrentRunId}; files={paths.Count}; output={combinedPath}");
+            OpenFile(combinedPath, "combined internal logs");
+        }
+        catch (Exception ex)
+        {
+            _details.Text = $"Could not combine internal logs:\n{ex.Message}";
+            UiLog($"Could not combine internal logs. instance={item.Name}; error={ex}");
+        }
+    }
+
+    private void OpenSelectedInternalLog()
+    {
+        if (_selectedInstance is null)
+        {
+            _details.Text = "Select an instance first.";
+            UiLog("Open selected internal log ignored. reason=no-selected-instance");
+            return;
+        }
+
+        var environment = _internalLogEnvironment.SelectedItem?.ToString();
+        if (string.IsNullOrWhiteSpace(environment) || environment.Equals("No environments found", StringComparison.OrdinalIgnoreCase))
+        {
+            _details.Text = "Select an environment first.";
+            UiLog($"Open selected internal log ignored. instance={_selectedInstance.Name}; reason=no-environment-selected");
+            return;
+        }
+
+        var path = FindInternalLogs(_selectedInstance)
+            .Where(candidate => FindEnvironmentLabel(candidate, _selectedInstance).Equals(environment, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
+        if (path is null)
+        {
+            _details.Text = $"No internal.log exists for environment '{environment}' for the current run.";
+            UiLog($"Open selected internal log ignored. instance={_selectedInstance.Name}; environment={environment}; reason=file-not-found");
+            return;
+        }
+
+        UiLog($"Opening selected internal.log. instance={_selectedInstance.Name}; environment={environment}; path={path}");
+        OpenFile(path, $"internal.log ({environment})");
     }
 
     private void OpenSelectedDataEngine()
@@ -982,12 +1163,35 @@ public sealed partial class MainWindow : Window
         catch { /* UI logging must never prevent the instance manager from operating. */ }
     }
 
+    private static List<string> FindInternalLogs(InstanceInfo item)
+    {
+        var roots = new[] { item.CurrentRunFolder, item.LogsFolder, item.ResultsFolder }
+            .Where(path => !string.IsNullOrWhiteSpace(path) && Directory.Exists(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        var all = roots.SelectMany(path => Directory.GetFiles(path, "internal.log", SearchOption.AllDirectories))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (!string.IsNullOrWhiteSpace(item.CurrentRunId))
+        {
+            var currentRun = all.Where(path => path.Contains(item.CurrentRunId, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (currentRun.Count > 0) all = currentRun;
+        }
+        return all.OrderBy(path => FindEnvironmentLabel(path, item), StringComparer.OrdinalIgnoreCase)
+            .ThenBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static string FindEnvironmentLabel(string path, InstanceInfo item)
+    {
+        var segments = path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var environment in item.EnvironmentOptions.OrderByDescending(x => x.Length))
+            if (segments.Any(segment => segment.Equals(environment, StringComparison.OrdinalIgnoreCase))) return environment;
+        for (var i = 0; i < segments.Length; i++)
+            if (segments[i].Equals("environment", StringComparison.OrdinalIgnoreCase) && i + 1 < segments.Length) return segments[i + 1];
+        return segments.Length > 1 ? segments[^2] : "unknown";
+    }
+
     private static string? FindLatestInternalLog(InstanceInfo item)
     {
-        return new[] { item.CurrentRunFolder, item.LogsFolder, item.ResultsFolder }
-            .Where(path => !string.IsNullOrWhiteSpace(path) && Directory.Exists(path))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .SelectMany(path => Directory.GetFiles(path, "internal.log", SearchOption.AllDirectories))
+        return FindInternalLogs(item)
             .OrderByDescending(path => !string.IsNullOrWhiteSpace(item.CurrentRunId) && path.Contains(item.CurrentRunId, StringComparison.OrdinalIgnoreCase))
             .ThenByDescending(File.GetLastWriteTimeUtc)
             .FirstOrDefault();
@@ -1018,6 +1222,23 @@ public sealed partial class MainWindow : Window
         config.SettingsFile = ResolveConfiguredPath(config.SettingsFile, basePath);
         config.DocumentationFile = ResolveConfiguredPath(config.DocumentationFile, basePath);
         config.UiLogFile = ResolveConfiguredPath(config.UiLogFile, basePath);
+        if (File.Exists(config.SettingsFile))
+        {
+            try
+            {
+                var central = JsonNode.Parse(File.ReadAllText(config.SettingsFile)) as JsonObject;
+                if (central is not null)
+                {
+                    if (int.TryParse(central["Threads"]?.ToString(), out var threads)) config.Threads = Math.Max(1, threads);
+                    if (int.TryParse(central["Iterations"]?.ToString(), out var iterations)) config.Iterations = Math.Max(1, iterations);
+                    if (int.TryParse(central["ThreadIntervalMs"]?.ToString(), out var threadInterval)) config.ThreadIntervalMs = Math.Max(0, threadInterval);
+                    if (int.TryParse(central["IterationIntervalMs"]?.ToString(), out var iterationInterval)) config.IterationIntervalMs = Math.Max(0, iterationInterval);
+                    var instances = central["Instances"]?.Deserialize<Dictionary<string, UiInstanceDefinition>>();
+                    if (instances is not null) config.Instances = new Dictionary<string, UiInstanceDefinition>(instances, StringComparer.OrdinalIgnoreCase);
+                }
+            }
+            catch (Exception ex) { Console.Error.WriteLine($"Could not load central runner settings: {ex.Message}"); }
+        }
         return config;
     }
 

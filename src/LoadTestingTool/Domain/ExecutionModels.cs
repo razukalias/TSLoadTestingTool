@@ -97,8 +97,6 @@ public sealed class FeatureConfig
 {
     public string WorkspaceRoot { get; set; } = ".";
     public Dictionary<string, SqlConnectionProfile> Connections { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-    public bool AllowTrustedScripts { get; set; }
-    public int ScriptTimeoutSeconds { get; set; } = 30;
 }
 
 public sealed class SqlConnectionProfile

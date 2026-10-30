@@ -168,14 +168,12 @@ internal static class Program
         var runner = new TestRunner(http, new AssertionEngine(), config.TemplatesFolder, config.RequestTimeoutSeconds, events.WriteRequest, logger, new FeatureConfig
         {
             WorkspaceRoot = Path.GetFullPath(config.WorkspaceRoot),
-            Connections = config.Connections,
-            AllowTrustedScripts = config.AllowTrustedScripts,
-            ScriptTimeoutSeconds = config.ScriptTimeoutSeconds
+            Connections = config.Connections
         });
         filters.TryGetValue(testcase.TestcaseIndex, out var selectedDataIds);
         try
         {
-            await runner.RunAsync(testcase, workbook, local, cancellationToken, environment, config.ExecutionMode, selectedDataIds);
+            await runner.RunAsync(testcase, workbook, local, cancellationToken, environment, config.ExecutionMode, selectedDataIds, config.Threads, config.Iterations, config.ThreadIntervalMs, config.IterationIntervalMs);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -254,6 +252,10 @@ internal static class Program
         if (!string.IsNullOrWhiteSpace(instance.StepSelection)) config.StepSelection = instance.StepSelection;
         if (!string.IsNullOrWhiteSpace(instance.EnvironmentSelection)) config.EnvironmentSelection = instance.EnvironmentSelection;
         if (!string.IsNullOrWhiteSpace(instance.ExecutionMode)) config.ExecutionMode = instance.ExecutionMode;
+        if (instance.Threads.HasValue) config.Threads = instance.Threads.Value;
+        if (instance.Iterations.HasValue) config.Iterations = instance.Iterations.Value;
+        if (instance.ThreadIntervalMs.HasValue) config.ThreadIntervalMs = instance.ThreadIntervalMs.Value;
+        if (instance.IterationIntervalMs.HasValue) config.IterationIntervalMs = instance.IterationIntervalMs.Value;
         if (instance.RunScenariosInParallel.HasValue) config.RunScenariosInParallel = instance.RunScenariosInParallel.Value;
         if (instance.InternalLoggingEnabled.HasValue) config.InternalLoggingEnabled = instance.InternalLoggingEnabled.Value;
         if (instance.SaveRequestBodyToHistory.HasValue) config.SaveRequestBodyToHistory = instance.SaveRequestBodyToHistory.Value;

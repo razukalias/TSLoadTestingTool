@@ -13,7 +13,7 @@ namespace LoadTestingTool.UI;
 
 internal static class DashboardStyle
 {
-    public const string Build = "Dashboard 2026.10.26.1";
+    public const string Build = "Dashboard 2026.10.30.1";
     public static IBrush Brush(string color) => new SolidColorBrush(Color.Parse(color));
     public static IBrush Panel => Brush("#101E2E");
     public static IBrush Muted => Brush("#8EA4BC");
@@ -219,9 +219,9 @@ public sealed partial class MainWindow
         _environmentFilter.ItemsSource = new[] { "All environments" }; _environmentFilter.SelectedIndex = 0;
         _overviewFilter.TextChanged += (_, _) => RefreshDashboardDetails(true);
         _assertionSearch.TextChanged += (_, _) => RefreshAssertionList();
-        var assertionActions = new WrapPanel { Children = { _assertionSearch, DashboardStyle.Action("Copy assertions", () => _ = CopyAssertionsAsync()), DashboardStyle.Action("Select failed", () => { if (_selectedInstance is not null) foreach (var a in _selectedInstance.Assertions.Where(a => a.Result == "FAIL")) a.Selected = true; RefreshAssertionList(); }),
+        var assertionActions = new WrapPanel { Children = { _assertionSearch, DashboardStyle.Action("Open Assertion Workbench", OpenAssertionWorkbench, "primary"), DashboardStyle.Action("Copy assertions", () => _ = CopyAssertionsAsync()), DashboardStyle.Action("Select failed", () => { if (_selectedInstance is not null) foreach (var a in _selectedInstance.Assertions.Where(a => a.Result == "FAIL")) a.Selected = true; RefreshAssertionList(); }),
             DashboardStyle.Action("Clear", () => { if (_selectedInstance is not null) foreach (var a in _selectedInstance.Assertions) a.Selected = false; RefreshAssertionList(); }),
-            DashboardStyle.Action("Apply actual values", ApplySelectedFixes), DashboardStyle.Action("Export comparison", () => _ = GenerateAssertionComparisonAsync()) } };
+            DashboardStyle.Action("Apply actual values", ApplySelectedFixes), DashboardStyle.Action("Export comparison", () => _ = GenerateAssertionComparisonAsync()), DashboardStyle.Action("Open comparison", OpenLatestAssertionComparison) } };
         var assertionPanel = new DockPanel { Margin = new Thickness(12) };
         var filters = new StackPanel { Spacing = 10, Children = { _failedOnly, _environmentFilter, assertionActions } };
         DockPanel.SetDock(filters, Dock.Top); assertionPanel.Children.Add(filters);
@@ -318,6 +318,16 @@ public sealed partial class MainWindow
         var order = new ComboBox { ItemsSource = new[] { "Sequential testcases", "Parallel testcases" }, SelectedIndex = item.RunScenariosInParallel ? 1 : 0, HorizontalAlignment = HorizontalAlignment.Stretch };
         order.SelectionChanged += (_, _) => item.RunScenariosInParallel = order.SelectedIndex == 1;
         _configurationPanel.Children.Add(Field("Testcase order", order));
+        _configurationPanel.Children.Add(DashboardStyle.Text("Global execution settings for this instance (stored in central appsettings.json; not in the workbook config sheet).", 12, false, DashboardStyle.Muted));
+        var threads = new TextBox { Text = item.Threads.ToString(), Watermark = "Threads", Width = 150 };
+        var iterations = new TextBox { Text = item.Iterations.ToString(), Watermark = "Iterations", Width = 150 };
+        var threadInterval = new TextBox { Text = item.ThreadIntervalMs.ToString(), Watermark = "Thread interval (ms)", Width = 180 };
+        var iterationInterval = new TextBox { Text = item.IterationIntervalMs.ToString(), Watermark = "Iteration interval (ms)", Width = 190 };
+        var executionGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*,*") };
+        var executionFields = new[] { Field("Threads", threads), Field("Iterations", iterations), Field("Thread interval (ms)", threadInterval), Field("Iteration interval (ms)", iterationInterval) };
+        for (var i = 0; i < executionFields.Length; i++) { Grid.SetColumn(executionFields[i], i); executionGrid.Children.Add(executionFields[i]); }
+        _configurationPanel.Children.Add(executionGrid);
+        _configurationPanel.Children.Add(DashboardStyle.Action("Save execution settings", () => SaveInstanceExecutionSettings(item, threads.Text, iterations.Text, threadInterval.Text, iterationInterval.Text), "primary"));
         _configurationPanel.Children.Add(KeyValue("Data IDs", string.IsNullOrWhiteSpace(item.DataIdSelection) ? "All data rows" : item.DataIdSelection));
         _configurationPanel.Children.Add(DashboardStyle.Text("Workbook actions are available directly on the instance row: Add step, Edit step, Try spreadsheet, and Open workbook. The legacy editor is available in Handcraft.", 12, false, DashboardStyle.Muted));
     }
@@ -341,7 +351,8 @@ public sealed partial class MainWindow
     private void ApplyRunSelection(InstanceInfo item, RunSelectionResult result)
     {
         item.TestcaseSelection = result.Testcases; item.StepSelectionJson = result.StepsJson; item.EnvironmentSelection = result.Environments;
-        item.EnvironmentSelectionJson = result.EnvironmentsJson; item.DataIdSelection = result.DataIds; item.ExecutionMode = result.ExecutionMode; item.RunScenariosInParallel = result.ScenariosParallel; item.HasAppliedSelection = true; item.Selected = true;
+        item.EnvironmentSelectionJson = result.EnvironmentsJson; item.DataIdSelection = result.DataIds; item.ExecutionMode = result.ExecutionMode; item.RunScenariosInParallel = result.ScenariosParallel; item.Threads = result.Threads; item.Iterations = result.Iterations; item.ThreadIntervalMs = result.ThreadIntervalMs; item.IterationIntervalMs = result.IterationIntervalMs; item.HasAppliedSelection = true; item.Selected = true;
+        SaveInstanceExecutionSettings(item, result.Threads.ToString(), result.Iterations.ToString(), result.ThreadIntervalMs.ToString(), result.IterationIntervalMs.ToString());
         try
         {
             var profile = Path.Combine(item.FolderPath, ".run-selection.json");
@@ -440,7 +451,27 @@ public sealed partial class MainWindow
         _artifactPanel.Children.Add(DashboardStyle.Action("Open DataEngine", OpenSelectedDataEngine));
         _artifactPanel.Children.Add(DashboardStyle.Action("Configure history sheets", () => new HistorySettingsWindow(item.FolderPath, item.Name, _config.SettingsFile).Show(this)));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open latest result workbook", OpenLatestResultWorkbook));
-        _artifactPanel.Children.Add(DashboardStyle.Action("Open runner log", OpenLatestInternalLog));
+        _artifactPanel.Children.Add(DashboardStyle.Action("Open latest internal log", OpenLatestInternalLog));
+        var internalLogPaths = FindInternalLogs(item);
+        var internalLogEnvironments = internalLogPaths
+            .Select(path => FindEnvironmentLabel(path, item))
+            .Where(environment => !string.IsNullOrWhiteSpace(environment))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(environment => environment, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        _internalLogEnvironment.ItemsSource = internalLogEnvironments.Count == 0
+            ? new[] { "No environments found" }
+            : internalLogEnvironments;
+        if (_internalLogEnvironment.SelectedItem is null || !internalLogEnvironments.Contains(_internalLogEnvironment.SelectedItem.ToString() ?? "", StringComparer.OrdinalIgnoreCase))
+            _internalLogEnvironment.SelectedIndex = internalLogEnvironments.Count == 0 ? 0 : 0;
+        var internalLogControls = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            Children = { _internalLogEnvironment, DashboardStyle.Action("Open selected log", OpenSelectedInternalLog, "primary") }
+        };
+        _artifactPanel.Children.Add(DashboardStyle.Text("Internal log environment", 12, true));
+        _artifactPanel.Children.Add(internalLogControls);
         _artifactPanel.Children.Add(DashboardStyle.Action("Open Templates folder", OpenTemplatesFolder));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open Results folder", () => { Directory.CreateDirectory(item.ResultsFolder); OpenFolder(item.ResultsFolder, "results folder"); }));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open latest comparison", OpenLatestAssertionComparison));
@@ -468,7 +499,7 @@ public sealed partial class MainWindow
     private async Task CopyAssertionsAsync()
     {
         if (_selectedInstance is null) return;
-        var lines = _selectedInstance.Assertions.Select(a => $"{a.Result} | {a.Environment} | {a.Testcase} | {a.DataId} | {a.StepName} | {a.ResponsePath} {a.AssertionVerb} | expected={a.ExpectedValue} | actual={a.ActualValue}");
+        var lines = _selectedInstance.Assertions.Select(a => $"{a.Result} | {a.Environment} | {a.Testcase} | {a.DataId} | {a.StepName} | {a.ResponsePath} {a.AssertionVerb} | type={a.AssertionType} | meaning={a.AssertionMeaning} | expected={a.ExpectedValue} | actual={a.ActualValue}");
         await CopyTextAsync(string.Join(Environment.NewLine, lines));
     }
     private async Task CopyTextAsync(string text)
@@ -559,7 +590,7 @@ public sealed partial class MainWindow
         foreach (var group in assertionKeys)
         {
             var a = group.FirstOrDefault(x => left.Assertions.Contains(x)); var b = group.FirstOrDefault(x => right.Assertions.Contains(x));
-            if (a is null || b is null || a.Result != b.Result || a.Verb != b.Verb || a.Expected != b.Expected || a.Actual != b.Actual) assertionLines.Add($"{group.Key}: {(a?.Result ?? "missing")} / {(b?.Result ?? "missing")}; verb {a?.Verb ?? "-"} / {b?.Verb ?? "-"}; expected {a?.Expected ?? "-"} / {b?.Expected ?? "-"}; actual {a?.Actual ?? "-"} / {b?.Actual ?? "-"}");
+            if (a is null || b is null || a.Result != b.Result || a.Verb != b.Verb || a.Expected != b.Expected || a.Actual != b.Actual) assertionLines.Add($"{group.Key}: {(a?.Result ?? "missing")} / {(b?.Result ?? "missing")}; type {a?.Type ?? "-"} / {b?.Type ?? "-"}; verb {a?.Verb ?? "-"} / {b?.Verb ?? "-"}; expected {a?.Expected ?? "-"} / {b?.Expected ?? "-"}; actual {a?.Actual ?? "-"} / {b?.Actual ?? "-"}; meaning {a?.Meaning ?? b?.Meaning ?? "-"}");
         }
         _historyCompare.Text = $"Comparison complete: {changed} changed row(s).";
         var dialog = new Window { Title = "History comparison", Width = 1100, Height = 720, WindowStartupLocation = WindowStartupLocation.CenterOwner };
@@ -615,7 +646,7 @@ public sealed partial class MainWindow
         string Cell(IXLRow row, string name) => headers.TryGetValue(name, out var c) ? row.Cell(c).GetString() : "";
         var requests = requestSheet is null ? [] : requestSheet.RowsUsed().Skip(1).Select(row => new HistoryRequest(Cell(row, "testcase"), Cell(row, "dataid"), Cell(row, "stepname"), Cell(row, "requestresult"), long.TryParse(Cell(row, "durationms"), out var d) ? d : 0, int.TryParse(Cell(row, "httpstatus"), out var s) ? s : 0, Cell(row, "requestbody"), Cell(row, "responsebody"), Cell(row, "requestheaders"), Cell(row, "responseheaders"), Cell(row, "stepconfig"))).ToList();
         var assertionSheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("AssertionHistory", StringComparison.OrdinalIgnoreCase)); var ah = assertionSheet?.FirstRowUsed()?.CellsUsed().ToDictionary(c => c.GetString(), c => c.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase) ?? []; string ACell(IXLRow row, string name) => ah.TryGetValue(name, out var c) ? row.Cell(c).GetString() : "";
-        var assertions = assertionSheet is null ? [] : assertionSheet.RowsUsed().Skip(1).Select(row => new HistoryAssertion(ACell(row, "testcase"), ACell(row, "dataid"), ACell(row, "stepname"), ACell(row, "responsepath"), ACell(row, "assertionverb"), ACell(row, "expectedvalue"), ACell(row, "actualvalue"), ACell(row, "result"))).ToList();
+        var assertions = assertionSheet is null ? [] : assertionSheet.RowsUsed().Skip(1).Select(row => new HistoryAssertion(ACell(row, "testcase"), ACell(row, "dataid"), ACell(row, "stepname"), ACell(row, "responsepath"), ACell(row, "assertionverb"), ACell(row, "assertiontype"), ACell(row, "assertionmeaning"), ACell(row, "expectedvalue"), ACell(row, "actualvalue"), ACell(row, "result"))).ToList();
         var result = summary?.Cell(2, 16).GetString() ?? "UNKNOWN"; var runId = summary?.Cell(2, 1).GetString() ?? Path.GetFileNameWithoutExtension(path); var started = DateTime.TryParse(summary?.Cell(2, 2).GetString(), out var date) ? date : File.GetLastWriteTime(path); var p95 = metrics?.RowsUsed().FirstOrDefault(r => r.Cell(1).GetString().Equals("p95DurationMs", StringComparison.OrdinalIgnoreCase))?.Cell(2).GetString() ?? "0";
         return new HistoryEntry(path, item.Name, result, runId, started, requests, assertions, requests.Count(x => x.Result == "PASS"), requests.Count(x => x.Result == "FAIL"), p95, string.Join(" ", item.Name, result, runId, requests.Select(x => $"{x.Testcase} {x.DataId} {x.Step}")));
     }
@@ -642,7 +673,7 @@ public sealed partial class MainWindow
 
 public sealed record DashboardRequest(string StepName, string StepType, string Testcase, string DataId, string Result, long DurationMs, string FailureCategory, string Error);
 internal sealed record HistoryRequest(string Testcase, string DataId, string Step, string Result, long DurationMs, int HttpStatus, string RequestBody, string ResponseBody, string RequestHeaders, string ResponseHeaders, string StepConfig);
-internal sealed record HistoryAssertion(string Testcase, string DataId, string Step, string Path, string Verb, string Expected, string Actual, string Result);
+internal sealed record HistoryAssertion(string Testcase, string DataId, string Step, string Path, string Verb, string Type, string Meaning, string Expected, string Actual, string Result);
 internal sealed record HistoryEntry(string Path, string Instance, string Status, string RunId, DateTime Started, IReadOnlyList<HistoryRequest> Requests, IReadOnlyList<HistoryAssertion> Assertions, int Passed, int Failed, string P95Ms, string SearchText);
 internal sealed class LatencyChart(double[] values) : Control
 {
