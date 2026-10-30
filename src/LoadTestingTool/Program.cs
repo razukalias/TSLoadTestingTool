@@ -32,6 +32,7 @@ internal static class Program
             config.HistoryFolder = GetCommandLineValue(args, "--history") ?? config.HistoryFolder;
             config.LogsFolder = GetCommandLineValue(args, "--logs") ?? config.LogsFolder;
             config.ResultsFolder = GetCommandLineValue(args, "--results") ?? config.ResultsFolder;
+            if (bool.TryParse(GetCommandLineValue(args, "--generate-results"), out var generateResults)) config.GenerateResults = generateResults;
             if (bool.TryParse(GetCommandLineValue(args, "--internal-log"), out var internalLogging)) config.InternalLoggingEnabled = internalLogging;
             if (bool.TryParse(GetCommandLineValue(args, "--scenarios-parallel"), out var scenariosParallel)) config.RunScenariosInParallel = scenariosParallel;
             config.InstanceId = GetCommandLineValue(args, "--instance-id") ?? config.InstanceId;
@@ -45,12 +46,16 @@ internal static class Program
             if (!config.ExecutionMode.Equals("threaded", StringComparison.OrdinalIgnoreCase) && !config.ExecutionMode.Equals("loop", StringComparison.OrdinalIgnoreCase) && !config.ExecutionMode.Equals("sequential", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("execution-mode must be 'threaded', 'loop', or 'sequential'.");
             var runId = string.IsNullOrWhiteSpace(config.RunId) ? $"{DateTime.Now:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}"[..25] : config.RunId;
             loadedRunId = runId;
-            Directory.CreateDirectory(config.ResultsFolder);
+            if (config.GenerateResults) Directory.CreateDirectory(config.ResultsFolder);
             Directory.CreateDirectory(config.HistoryFolder);
             Directory.CreateDirectory(config.LogsFolder);
-            var runEventFolder = Path.Combine(config.ResultsFolder, $"Run_{InternalLogger.SafeFolderName(runId)}");
+            var runtimeFolder = config.GenerateResults
+                ? config.ResultsFolder
+                : Path.Combine(config.LogsFolder, ".runtime");
+            Directory.CreateDirectory(runtimeFolder);
+            var runEventFolder = Path.Combine(runtimeFolder, $"Run_{InternalLogger.SafeFolderName(runId)}");
             Directory.CreateDirectory(runEventFolder);
-            var stopFile = Path.Combine(config.ResultsFolder, $"run_{InternalLogger.SafeFolderName(runId)}.stop");
+            var stopFile = Path.Combine(runtimeFolder, $"run_{InternalLogger.SafeFolderName(runId)}.stop");
             using var cancellation = new CancellationTokenSource();
             using var stopMonitorCancellation = new CancellationTokenSource();
             using var runEvents = new LiveEventWriter(runEventFolder, config.InstanceId, runId, "_aggregate");
@@ -104,7 +109,7 @@ internal static class Program
                 var historyPath = string.Empty;
                 try { historyPath = new HistoryWriter(config).Write(overall, historyFolder, historyName, workbook); }
                 catch (Exception ex) { Console.Error.WriteLine($"[Warning] History generation failed: {ex.Message}"); }
-                WriteMetrics(config.ResultsFolder, runId, overall);
+                if (config.GenerateResults) WriteMetrics(config.ResultsFolder, runId, overall);
                 runEvents.WriteRunCompleted(overall, historyPath);
                 Console.WriteLine($"[Run complete] result={(overall.Cancelled ? "CANCELLED" : overall.Testcases.Any(t => t.Result == "FAILED") ? "FAILED" : "PASSED")}; requests={overall.Metrics.TotalRequests}; p95={overall.Metrics.P95DurationMs}ms; rps={overall.Metrics.RequestsPerSecond:F2}; history={historyPath}");
                 try { if (File.Exists(stopFile)) File.Delete(stopFile); } catch { }
@@ -154,13 +159,16 @@ internal static class Program
     {
         var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
         var folderName = InternalLogger.SafeFolderName(testcase.Testcase) + (string.IsNullOrWhiteSpace(environment) ? "" : "_" + InternalLogger.SafeFolderName(environment)) + "_" + stamp;
-        var resultFolder = Path.Combine(config.ResultsFolder, cancellationToken.IsCancellationRequested ? "cancelled" : "running", folderName + "_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(resultFolder);
+        var resultFolder = config.GenerateResults
+            ? Path.Combine(config.ResultsFolder, cancellationToken.IsCancellationRequested ? "cancelled" : "running", folderName + "_" + Guid.NewGuid().ToString("N"))
+            : string.Empty;
+        if (config.GenerateResults) Directory.CreateDirectory(resultFolder);
         var logFolder = Path.Combine(config.LogsFolder, $"run_{InternalLogger.SafeFolderName(runId)}", folderName);
         Directory.CreateDirectory(logFolder);
         using var logger = new InternalLogger(logFolder, config.InstanceId, runId, config.InternalLoggingEnabled);
         using var processLogger = new InternalLogger(logFolder, config.InstanceId, runId, config.InternalLoggingEnabled, null, "process.log");
-        var eventFolder = Path.Combine(config.ResultsFolder, $"Run_{InternalLogger.SafeFolderName(runId)}");
+        var eventRoot = config.GenerateResults ? config.ResultsFolder : Path.Combine(config.LogsFolder, ".runtime");
+        var eventFolder = Path.Combine(eventRoot, $"Run_{InternalLogger.SafeFolderName(runId)}");
         using var events = new LiveEventWriter(eventFolder, config.InstanceId, runId, $"_{InternalLogger.SafeFolderName(testcase.Testcase)}_{Guid.NewGuid():N}");
         var local = new RunResult { RunId = runId, Selection = selection, StartedAt = DateTimeOffset.Now, Environment = environment };
         logger.Info($"UI diagnostic correlation. uiLaunchId={uiLaunchId}; uiLaunchAt={uiLaunchAt}; runnerStartedAt={DateTimeOffset.Now:O}; processId={Environment.ProcessId}");
@@ -210,7 +218,7 @@ internal static class Program
             Directory.Move(resultFolder, finalFolder);
         }
         lock (overall.Testcases) overall.Testcases.AddRange(local.Testcases);
-        Console.WriteLine($"[Done] {testcase.Testcase} [{(string.IsNullOrWhiteSpace(environment) ? "default" : environment)}] -> {resultFolder}");
+        Console.WriteLine($"[Done] {testcase.Testcase} [{(string.IsNullOrWhiteSpace(environment) ? "default" : environment)}] -> {(config.GenerateResults ? resultFolder : "result artifacts disabled")}");
     }
 
     private static string DataIdFileName(IReadOnlyList<string> ids)
@@ -249,6 +257,7 @@ internal static class Program
         config.LogsFolder = ResolveCentralPath(instanceFolder, instance.LogsFolder, config.LogsFolder);
         config.HistoryFolder = ResolveCentralPath(instanceFolder, instance.HistoryFolder, config.HistoryFolder);
         config.ResultsFolder = ResolveCentralPath(instanceFolder, instance.ResultsFolder, config.ResultsFolder);
+        if (instance.GenerateResults.HasValue) config.GenerateResults = instance.GenerateResults.Value;
         if (!string.IsNullOrWhiteSpace(instance.TestcaseSelection)) config.TestcaseSelection = instance.TestcaseSelection;
         if (!string.IsNullOrWhiteSpace(instance.StepSelection)) config.StepSelection = instance.StepSelection;
         if (!string.IsNullOrWhiteSpace(instance.EnvironmentSelection)) config.EnvironmentSelection = instance.EnvironmentSelection;

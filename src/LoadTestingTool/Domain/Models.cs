@@ -8,6 +8,7 @@ public sealed class AppConfig
     public bool InternalLoggingEnabled { get; set; }
     public string HistoryFolder { get; set; } = "History";
     public string ResultsFolder { get; set; } = "Results";
+    public bool GenerateResults { get; set; } = true;
     public string InstanceId { get; set; } = "default";
     public string RunId { get; set; } = string.Empty;
     public int RequestTimeoutSeconds { get; set; } = 300;
@@ -39,6 +40,7 @@ public sealed class CentralInstanceConfig
     public string? LogsFolder { get; set; }
     public string? HistoryFolder { get; set; }
     public string? ResultsFolder { get; set; }
+    public bool? GenerateResults { get; set; }
     public string? WorkspaceRoot { get; set; }
     public string? TestcaseSelection { get; set; }
     public string? StepSelection { get; set; }

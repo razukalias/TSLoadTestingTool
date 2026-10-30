@@ -16,6 +16,7 @@ public sealed class UiConfig
     public int Iterations { get; set; } = 1;
     public int ThreadIntervalMs { get; set; }
     public int IterationIntervalMs { get; set; }
+    public bool GenerateResults { get; set; } = true;
     public Dictionary<string, UiInstanceDefinition> Instances { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
@@ -28,6 +29,7 @@ public sealed class UiInstanceDefinition
     public int? Iterations { get; set; }
     public int? ThreadIntervalMs { get; set; }
     public int? IterationIntervalMs { get; set; }
+    public bool? GenerateResults { get; set; }
 }
 
 public sealed class App : Application

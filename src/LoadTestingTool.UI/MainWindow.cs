@@ -32,6 +32,7 @@ public sealed class InstanceInfo
     public int Iterations { get; set; } = 1;
     public int ThreadIntervalMs { get; set; }
     public int IterationIntervalMs { get; set; }
+    public bool GenerateResults { get; set; } = true;
     public bool RunScenariosInParallel { get; set; }
     public string EnvironmentSelection { get; set; } = "";
     public string EnvironmentSelectionJson { get; set; } = "";
@@ -402,6 +403,7 @@ public sealed partial class MainWindow : Window
                 item.Iterations = Math.Max(1, centralInstance.Iterations ?? _config.Iterations);
                 item.ThreadIntervalMs = Math.Max(0, centralInstance.ThreadIntervalMs ?? _config.ThreadIntervalMs);
                 item.IterationIntervalMs = Math.Max(0, centralInstance.IterationIntervalMs ?? _config.IterationIntervalMs);
+                item.GenerateResults = centralInstance.GenerateResults ?? _config.GenerateResults;
             }
             try
             {
@@ -491,7 +493,7 @@ public sealed partial class MainWindow : Window
         catch (Exception ex) { UiLog($"Could not register instance centrally: {ex}"); _details.Text = $"Instance created, but central registration failed: {ex.Message}"; }
     }
 
-    private void SaveInstanceExecutionSettings(InstanceInfo item, string? threadsText, string? iterationsText, string? threadIntervalText, string? iterationIntervalText)
+    private void SaveInstanceExecutionSettings(InstanceInfo item, string? threadsText, string? iterationsText, string? threadIntervalText, string? iterationIntervalText, bool? generateResults = null)
     {
         if (!int.TryParse(threadsText, out var threads) || threads < 1 ||
             !int.TryParse(iterationsText, out var iterations) || iterations < 1 ||
@@ -511,14 +513,17 @@ public sealed partial class MainWindow : Window
             instance["Iterations"] = iterations;
             instance["ThreadIntervalMs"] = threadInterval;
             instance["IterationIntervalMs"] = iterationInterval;
+            if (generateResults.HasValue) instance["GenerateResults"] = generateResults.Value;
             instances[item.Name] = instance;
             root["Instances"] = instances;
             File.WriteAllText(_config.SettingsFile, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
             if (_config.Instances.TryGetValue(item.Name, out var central))
             {
                 central.Threads = threads; central.Iterations = iterations; central.ThreadIntervalMs = threadInterval; central.IterationIntervalMs = iterationInterval;
+                if (generateResults.HasValue) central.GenerateResults = generateResults.Value;
             }
             item.Threads = threads; item.Iterations = iterations; item.ThreadIntervalMs = threadInterval; item.IterationIntervalMs = iterationInterval;
+            if (generateResults.HasValue) item.GenerateResults = generateResults.Value;
             UiLog($"Saved global execution settings. instance={item.Name}; threads={threads}; iterations={iterations}; threadIntervalMs={threadInterval}; iterationIntervalMs={iterationInterval}");
             _details.Text = $"Saved for {item.Name}: {threads} thread(s), {iterations} iteration(s), thread interval {threadInterval} ms, iteration interval {iterationInterval} ms.";
             RefreshDashboardDetails(force: true);
@@ -645,11 +650,11 @@ public sealed partial class MainWindow : Window
             try
             {
                 if (promptForMissingSelection && !item.HasAppliedSelection && !await ChooseRunSelectionAsync(item)) continue;
-                Directory.CreateDirectory(item.ResultsFolder);
+                if (item.GenerateResults) Directory.CreateDirectory(item.ResultsFolder);
                 var runner = Path.GetFullPath(_config.RunnerDll);
                 var selection = string.IsNullOrWhiteSpace(item.TestcaseSelection) ? "0" : item.TestcaseSelection;
                 item.CurrentRunId = $"{DateTime.Now:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}"[..25];
-                item.CurrentRunFolder = item.ResultsFolder;
+                item.CurrentRunFolder = item.GenerateResults ? item.ResultsFolder : item.LogsFolder;
                 var environments = item.EnvironmentSelection;
                 if (!string.IsNullOrWhiteSpace(item.SelectionReadError)) throw new InvalidDataException(item.SelectionReadError);
                 var draft = new RunSelectionDraft(item.TestcaseOptions, selection, item.StepSelectionJson, environments, item.EnvironmentSelectionJson);
@@ -669,7 +674,7 @@ public sealed partial class MainWindow : Window
                 void Arg(string name, string value) { start.ArgumentList.Add(name); start.ArgumentList.Add(value); }
                 Arg("--config", _config.SettingsFile); Arg("--instance", item.Name);
                 Arg("--excel", item.WorkbookPath); Arg("--templates", item.TemplatesFolder);
-                Arg("--history", item.HistoryFolder); Arg("--logs", item.LogsFolder); Arg("--results", item.ResultsFolder);
+                Arg("--history", item.HistoryFolder); Arg("--logs", item.LogsFolder); Arg("--results", item.ResultsFolder); Arg("--generate-results", item.GenerateResults.ToString());
                 Arg("--instance-id", item.InstanceId); Arg("--run-id", item.CurrentRunId);
                 Arg("--ui-launch-id", uiLaunchId); Arg("--ui-launch-at", uiLaunchAt.ToString("O"));
                 Arg("--internal-log", (_enableInternalLog.IsChecked == true).ToString());
@@ -722,8 +727,9 @@ public sealed partial class MainWindow : Window
                 }
                 else
                 {
-                    Directory.CreateDirectory(item.ResultsFolder);
-                    var stopFile = Path.Combine(item.ResultsFolder, $"run_{item.CurrentRunId}.stop");
+                    var controlFolder = item.GenerateResults ? item.ResultsFolder : Path.Combine(item.LogsFolder, ".runtime");
+                    Directory.CreateDirectory(controlFolder);
+                    var stopFile = Path.Combine(controlFolder, $"run_{item.CurrentRunId}.stop");
                     File.WriteAllText(stopFile, "stop requested by UI");
                     item.Status = "Stopping";
                     item.LastEvent = "Graceful stop requested";
@@ -1233,6 +1239,7 @@ public sealed partial class MainWindow : Window
                     if (int.TryParse(central["Iterations"]?.ToString(), out var iterations)) config.Iterations = Math.Max(1, iterations);
                     if (int.TryParse(central["ThreadIntervalMs"]?.ToString(), out var threadInterval)) config.ThreadIntervalMs = Math.Max(0, threadInterval);
                     if (int.TryParse(central["IterationIntervalMs"]?.ToString(), out var iterationInterval)) config.IterationIntervalMs = Math.Max(0, iterationInterval);
+                    if (bool.TryParse(central["GenerateResults"]?.ToString(), out var generateResults)) config.GenerateResults = generateResults;
                     var instances = central["Instances"]?.Deserialize<Dictionary<string, UiInstanceDefinition>>();
                     if (instances is not null) config.Instances = new Dictionary<string, UiInstanceDefinition>(instances, StringComparer.OrdinalIgnoreCase);
                 }
