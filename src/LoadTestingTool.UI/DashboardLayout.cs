@@ -464,6 +464,11 @@ public sealed partial class MainWindow
             : internalLogEnvironments;
         if (_internalLogEnvironment.SelectedItem is null || !internalLogEnvironments.Contains(_internalLogEnvironment.SelectedItem.ToString() ?? "", StringComparer.OrdinalIgnoreCase))
             _internalLogEnvironment.SelectedIndex = internalLogEnvironments.Count == 0 ? 0 : 0;
+        // This ComboBox is reused between refreshes. Remove it from the previous
+        // StackPanel first; otherwise Avalonia rejects adding a control that still
+        // has a visual parent when the selected instance is refreshed.
+        if (_internalLogEnvironment.Parent is Panel previousLogParent)
+            previousLogParent.Children.Remove(_internalLogEnvironment);
         var internalLogControls = new StackPanel
         {
             Orientation = Orientation.Horizontal,
