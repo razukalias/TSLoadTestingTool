@@ -81,19 +81,27 @@ internal static class InlineScriptRunner
     private static string ResolveScriptPath(string template, string workspaceRoot, string templatesFolder)
     {
         var fileName = template.EndsWith(".csx", StringComparison.OrdinalIgnoreCase) ? template : template + ".csx";
-        var candidates = new[]
+        var workspaceCandidates = new[]
         {
             template,
             fileName,
             Path.Combine("Templates", template),
-            Path.Combine("Templates", fileName),
-            Path.Combine(templatesFolder, template),
-            Path.Combine(templatesFolder, fileName)
+            Path.Combine("Templates", fileName)
         }.Distinct(StringComparer.OrdinalIgnoreCase);
         var attempted = new List<string>();
-        foreach (var candidate in candidates)
+        foreach (var candidate in workspaceCandidates)
         {
             var path = WorkspaceGuard.Resolve(workspaceRoot, candidate);
+            attempted.Add(path);
+            if (File.Exists(path)) return path;
+        }
+        // TemplatesFolder is an explicit configured root. Validate the script
+        // relative to that root instead of validating its absolute path against
+        // WorkspaceRoot, which may come from an older instance configuration.
+        var configuredTemplateRoot = Path.GetFullPath(templatesFolder, workspaceRoot);
+        foreach (var candidate in new[] { template, fileName }.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var path = WorkspaceGuard.Resolve(configuredTemplateRoot, candidate);
             attempted.Add(path);
             if (File.Exists(path)) return path;
         }

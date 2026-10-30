@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-2026.10.30.3}"
+VERSION="${VERSION:-2026.10.30.4}"
 NAME="TSLoadTestingTool-Dashboard-${VERSION}-win-x64"
 DIST="$ROOT/dist/$NAME"
 # This script replaces only its own generated distribution.
