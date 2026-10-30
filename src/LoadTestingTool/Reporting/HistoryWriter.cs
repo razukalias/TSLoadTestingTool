@@ -13,9 +13,20 @@ public sealed class HistoryWriter
         var paths = new List<string>();
         foreach (var testcase in run.Testcases.OrderBy(x => x.StartedAt))
         {
-            var environment = string.IsNullOrWhiteSpace(testcase.Environment) ? "default" : InternalLogger.SafeFolderName(testcase.Environment);
-            var result = run.Cancelled && testcase.Result == "SKIPPED" ? "cancelled" : testcase.Result.ToLowerInvariant();
-            var folder = Path.Combine(_config.HistoryFolder, environment, result);
+            var environmentValue = testcase.Environment;
+            if (string.IsNullOrWhiteSpace(environmentValue))
+                environmentValue = testcase.Requests.Select(x => x.Environment).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? string.Empty;
+            var environment = string.IsNullOrWhiteSpace(environmentValue) ? string.Empty : InternalLogger.SafeFolderName(environmentValue);
+            var result = run.Cancelled ? "cancelled" : testcase.Result switch
+            {
+                "FAILED" => "failed",
+                "SKIPPED" => "cancelled",
+                _ => "passed"
+            };
+            var resultFolder = Path.Combine(_config.HistoryFolder, result);
+            var folder = string.IsNullOrWhiteSpace(environment)
+                ? resultFolder
+                : Path.Combine(_config.HistoryFolder, environment, result);
             var row = testcase.ExcelRowNumber > 0 ? testcase.ExcelRowNumber.ToString() : "unknown";
             var stamp = testcase.StartedAt.ToLocalTime().ToString("yyyyMMdd_HHmmss_fff");
             var name = $"{InternalLogger.SafeFolderName(testcase.Testcase)}_Row{row}_{stamp}_T{testcase.Thread}_I{testcase.Iteration}.xlsx";
