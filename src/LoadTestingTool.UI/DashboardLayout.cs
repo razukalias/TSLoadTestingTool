@@ -481,7 +481,15 @@ public sealed partial class MainWindow
         _artifactPanel.Children.Add(DashboardStyle.Text("Internal log environment", 12, true));
         _artifactPanel.Children.Add(internalLogControls);
         _artifactPanel.Children.Add(DashboardStyle.Action("Open Templates folder", OpenTemplatesFolder));
-        _artifactPanel.Children.Add(DashboardStyle.Action("Open Results folder", () => { Directory.CreateDirectory(item.ResultsFolder); OpenFolder(item.ResultsFolder, "results folder"); }));
+        _artifactPanel.Children.Add(DashboardStyle.Action("Open Results folder", () =>
+        {
+            if (!item.GenerateResults && !Directory.Exists(item.ResultsFolder))
+            {
+                _details.Text = "Technical Results generation is disabled for this instance; no Results folder was created.";
+                return;
+            }
+            OpenFolder(item.ResultsFolder, "results folder");
+        }));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open latest comparison", OpenLatestAssertionComparison));
         _artifactPanel.Children.Add(KeyValue("Workbook", item.WorkbookPath));
         _artifactPanel.Children.Add(KeyValue("Results", item.ResultsFolder));
