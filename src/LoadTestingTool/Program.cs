@@ -168,6 +168,7 @@ internal static class Program
         var runner = new TestRunner(http, new AssertionEngine(), config.TemplatesFolder, config.RequestTimeoutSeconds, events.WriteRequest, logger, new FeatureConfig
         {
             WorkspaceRoot = Path.GetFullPath(config.WorkspaceRoot),
+            TemplatesFolder = Path.GetFullPath(config.TemplatesFolder),
             Connections = config.Connections
         });
         filters.TryGetValue(testcase.TestcaseIndex, out var selectedDataIds);

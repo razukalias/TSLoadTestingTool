@@ -61,7 +61,7 @@ internal static class InlineScriptRunner
 
     private static async Task<string> ExecuteAsync(string template, IReadOnlyDictionary<string, string> parameters, RunnerExecutionContext context, string workspaceRoot, FeatureConfig features, InternalLogger logger, CancellationToken cancellationToken)
     {
-        var path = ResolveScriptPath(template, workspaceRoot);
+        var path = ResolveScriptPath(template, workspaceRoot, features.TemplatesFolder);
         var code = await File.ReadAllTextAsync(path, cancellationToken);
         foreach (var parameter in parameters) context.Set(parameter.Key, parameter.Value, VariableScope.Iteration);
         var runtime = new ScriptRuntime(context, null) { Logger = message => logger.Info($"INLINE SCRIPT LOG | template={template}; {message}") };
@@ -78,15 +78,26 @@ internal static class InlineScriptRunner
         return result;
     }
 
-    private static string ResolveScriptPath(string template, string workspaceRoot)
+    private static string ResolveScriptPath(string template, string workspaceRoot, string templatesFolder)
     {
-        var candidates = new[] { template, Path.Combine("Templates", template), template.EndsWith(".csx", StringComparison.OrdinalIgnoreCase) ? template : template + ".csx", Path.Combine("Templates", template + ".csx") };
+        var fileName = template.EndsWith(".csx", StringComparison.OrdinalIgnoreCase) ? template : template + ".csx";
+        var candidates = new[]
+        {
+            template,
+            fileName,
+            Path.Combine("Templates", template),
+            Path.Combine("Templates", fileName),
+            Path.Combine(templatesFolder, template),
+            Path.Combine(templatesFolder, fileName)
+        }.Distinct(StringComparer.OrdinalIgnoreCase);
+        var attempted = new List<string>();
         foreach (var candidate in candidates)
         {
             var path = WorkspaceGuard.Resolve(workspaceRoot, candidate);
+            attempted.Add(path);
             if (File.Exists(path)) return path;
         }
-        throw new FileNotFoundException($"Inline script template '{template}' was not found in the workspace or Templates folder.");
+        throw new FileNotFoundException($"Inline script template '{template}' was not found. Searched: {string.Join("; ", attempted)}");
     }
 
     private static string? GetArgument(IReadOnlyList<string> arguments, string name) => arguments.Select(argument => (Text: argument, Separator: argument.IndexOf(':'))).Where(x => x.Separator > 0 && x.Text[..x.Separator].Trim().Equals(name, StringComparison.OrdinalIgnoreCase)).Select(x => x.Text[(x.Separator + 1)..].Trim()).FirstOrDefault();

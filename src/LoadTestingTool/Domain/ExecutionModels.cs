@@ -96,6 +96,7 @@ public interface IStepExecutor
 public sealed class FeatureConfig
 {
     public string WorkspaceRoot { get; set; } = ".";
+    public string TemplatesFolder { get; set; } = "Templates";
     public Dictionary<string, SqlConnectionProfile> Connections { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
