@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-2026.10.30.5}"
+VERSION="${VERSION:-2026.10.30.6}"
 NAME="TSLoadTestingTool-Dashboard-${VERSION}-win-x64"
 DIST="$ROOT/dist/$NAME"
 # This script replaces only its own generated distribution.
@@ -15,7 +15,7 @@ python3 - <<'PY'
 import os, json, shutil, subprocess
 from pathlib import Path
 root, target = Path(os.environ['ROOT']), Path(os.environ['DIST'])
-for instance in (root / 'Instances').glob('DataEngine_*'):
+for instance in (root / 'Instances').iterdir():
     if not instance.is_dir():
         continue
     dest = target / 'Instances' / instance.name
