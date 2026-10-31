@@ -13,7 +13,7 @@ namespace LoadTestingTool.UI;
 
 internal static class DashboardStyle
 {
-    public const string Build = "Dashboard 2026.10.30.8";
+    public const string Build = "Dashboard 2026.10.31.1";
     public static IBrush Brush(string color) => new SolidColorBrush(Color.Parse(color));
     public static IBrush Panel => Brush("#101E2E");
     public static IBrush Muted => Brush("#8EA4BC");

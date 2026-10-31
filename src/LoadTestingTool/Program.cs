@@ -222,7 +222,11 @@ internal static class Program
         processLogger.Info($"Testcase process completed. Result={(local.Cancelled ? "CANCELLED" : failed ? "FAILED" : "PASSED")}");
         if (Directory.Exists(resultFolder))
         {
-            var finalFolder = Path.Combine(config.HistoryFolder, local.Cancelled ? "cancelled" : failed ? "failed" : "passed", Path.GetFileName(resultFolder));
+            var result = local.Cancelled ? "cancelled" : failed ? "failed" : "passed";
+            var environmentFolder = string.IsNullOrWhiteSpace(environment) ? string.Empty : InternalLogger.SafeFolderName(environment);
+            var finalFolder = string.IsNullOrWhiteSpace(environmentFolder)
+                ? Path.Combine(config.ResultsFolder, result, Path.GetFileName(resultFolder))
+                : Path.Combine(config.ResultsFolder, environmentFolder, result, Path.GetFileName(resultFolder));
             Directory.CreateDirectory(Path.GetDirectoryName(finalFolder)!);
             Directory.Move(resultFolder, finalFolder);
         }
