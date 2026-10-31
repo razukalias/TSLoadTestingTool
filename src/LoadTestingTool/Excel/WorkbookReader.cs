@@ -59,6 +59,7 @@ public sealed class WorkbookReader
     private static Dictionary<(int, string), RequestDataRow> ReadRequests(XLWorkbook workbook, Dictionary<string, string> compiledCellCache)
     {
         var result = new Dictionary<(int, string), RequestDataRow>(DataKeyComparer.Instance);
+        var testcaseRowNumbers = new Dictionary<int, int>();
         var sheet = RequireSheet(workbook, "request");
         var h = Headers(sheet); Require(h, "testcaseindex", "request"); Require(h, "testcase", "request"); Require(h, "dataid", "request");
         foreach (var row in sheet.RowsUsed().Skip(1))
@@ -68,6 +69,8 @@ public sealed class WorkbookReader
             if (string.IsNullOrWhiteSpace(dataId)) throw new InvalidDataException($"request row {row.RowNumber()} has an empty dataid.");
             var key = (index, dataId);
             if (result.ContainsKey(key)) throw new InvalidDataException($"Duplicate request row for testcaseindex + dataid: {index} + {dataId}.");
+            var testcaseRowNumber = testcaseRowNumbers.TryGetValue(index, out var lastRowNumber) ? lastRowNumber + 1 : 1;
+            testcaseRowNumbers[index] = testcaseRowNumber;
             var vars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var redacted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var column in h.OrderBy(x => x.Value))
@@ -83,7 +86,7 @@ public sealed class WorkbookReader
                 vars[variableName] = compiledValue;
                 if (ShouldRedactRequestVariable(column.Key)) redacted.Add(variableName);
             }
-            result[key] = new RequestDataRow { TestcaseIndex = index, ExcelRowNumber = row.RowNumber(), Testcase = Text(h, row, "testcase"), DataId = dataId, Dontrun = SplitValues(Text(h, row, "dontrun")), Variables = vars, RedactedVariables = redacted };
+            result[key] = new RequestDataRow { TestcaseIndex = index, ExcelRowNumber = row.RowNumber(), TestcaseRowNumber = testcaseRowNumber, Testcase = Text(h, row, "testcase"), DataId = dataId, Dontrun = SplitValues(Text(h, row, "dontrun")), Variables = vars, RedactedVariables = redacted };
         }
         return result;
     }

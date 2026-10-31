@@ -125,6 +125,7 @@ public sealed partial class MainWindow : Window
     private readonly StackPanel _assertionItems = new() { Orientation = Orientation.Vertical };
     private readonly CheckBox _failedOnly = new() { Content = "Show failed only", IsChecked = true };
     private readonly ComboBox _environmentFilter = new() { Width = 150, Margin = new Thickness(8, 6, 6, 0) };
+    private readonly ComboBox _internalLogTestcase = new() { Width = 220 };
     private readonly ComboBox _internalLogEnvironment = new() { Width = 220 };
     private readonly CheckBox _enableInternalLog = new() { Content = "Enable internal log", IsChecked = true, Margin = new Thickness(12, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _readyValue = new();
@@ -415,6 +416,8 @@ public sealed partial class MainWindow : Window
                 item.Iterations = Math.Max(1, centralInstance.Iterations ?? _config.Iterations);
                 item.ThreadIntervalMs = Math.Max(0, centralInstance.ThreadIntervalMs ?? _config.ThreadIntervalMs);
                 item.IterationIntervalMs = Math.Max(0, centralInstance.IterationIntervalMs ?? _config.IterationIntervalMs);
+                item.ExecutionMode = string.IsNullOrWhiteSpace(centralInstance.ExecutionMode) ? "threaded" : centralInstance.ExecutionMode;
+                item.RunScenariosInParallel = centralInstance.RunScenariosInParallel ?? false;
                 item.GenerateResults = centralInstance.GenerateResults ?? _config.GenerateResults;
                 item.InternalLoggingEnabled = centralInstance.InternalLoggingEnabled ?? true;
                 item.SaveRequestBodyToHistory = centralInstance.SaveRequestBodyToHistory ?? true;
@@ -511,7 +514,7 @@ public sealed partial class MainWindow : Window
         catch (Exception ex) { UiLog($"Could not register instance centrally: {ex}"); _details.Text = $"Instance created, but central registration failed: {ex.Message}"; }
     }
 
-    private void SaveInstanceExecutionSettings(InstanceInfo item, string? threadsText, string? iterationsText, string? threadIntervalText, string? iterationIntervalText, bool? generateResults = null)
+    private void SaveInstanceExecutionSettings(InstanceInfo item, string? threadsText, string? iterationsText, string? threadIntervalText, string? iterationIntervalText, bool? generateResults = null, string? executionMode = null, bool? scenariosParallel = null)
     {
         if (!int.TryParse(threadsText, out var threads) || threads < 1 ||
             !int.TryParse(iterationsText, out var iterations) || iterations < 1 ||
@@ -532,6 +535,8 @@ public sealed partial class MainWindow : Window
             instance["ThreadIntervalMs"] = threadInterval;
             instance["IterationIntervalMs"] = iterationInterval;
             if (generateResults.HasValue) instance["GenerateResults"] = generateResults.Value;
+            if (!string.IsNullOrWhiteSpace(executionMode)) instance["ExecutionMode"] = executionMode;
+            if (scenariosParallel.HasValue) instance["RunScenariosInParallel"] = scenariosParallel.Value;
             instances[item.Name] = instance;
             root["Instances"] = instances;
             File.WriteAllText(_config.SettingsFile, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
@@ -539,9 +544,13 @@ public sealed partial class MainWindow : Window
             {
                 central.Threads = threads; central.Iterations = iterations; central.ThreadIntervalMs = threadInterval; central.IterationIntervalMs = iterationInterval;
                 if (generateResults.HasValue) central.GenerateResults = generateResults.Value;
+                if (!string.IsNullOrWhiteSpace(executionMode)) central.ExecutionMode = executionMode;
+                if (scenariosParallel.HasValue) central.RunScenariosInParallel = scenariosParallel.Value;
             }
             item.Threads = threads; item.Iterations = iterations; item.ThreadIntervalMs = threadInterval; item.IterationIntervalMs = iterationInterval;
             if (generateResults.HasValue) item.GenerateResults = generateResults.Value;
+            if (!string.IsNullOrWhiteSpace(executionMode)) item.ExecutionMode = executionMode;
+            if (scenariosParallel.HasValue) item.RunScenariosInParallel = scenariosParallel.Value;
             UiLog($"Saved global execution settings. instance={item.Name}; threads={threads}; iterations={iterations}; threadIntervalMs={threadInterval}; iterationIntervalMs={iterationInterval}");
             _details.Text = $"Saved for {item.Name}: {threads} thread(s), {iterations} iteration(s), thread interval {threadInterval} ms, iteration interval {iterationInterval} ms.";
             RefreshDashboardDetails(force: true);
@@ -974,6 +983,14 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        var testcase = _internalLogTestcase.SelectedItem?.ToString();
+        if (string.IsNullOrWhiteSpace(testcase) || testcase.Equals("No testcases found", StringComparison.OrdinalIgnoreCase))
+        {
+            _details.Text = "Select a testcase first.";
+            UiLog($"Open selected internal log ignored. instance={_selectedInstance.Name}; reason=no-testcase-selected");
+            return;
+        }
+
         var environment = _internalLogEnvironment.SelectedItem?.ToString();
         if (string.IsNullOrWhiteSpace(environment) || environment.Equals("No environments found", StringComparison.OrdinalIgnoreCase))
         {
@@ -983,18 +1000,19 @@ public sealed partial class MainWindow : Window
         }
 
         var path = FindInternalLogs(_selectedInstance)
+            .Where(candidate => FindTestcaseLabel(candidate, _selectedInstance).Equals(testcase, StringComparison.OrdinalIgnoreCase))
             .Where(candidate => FindEnvironmentLabel(candidate, _selectedInstance).Equals(environment, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(File.GetLastWriteTimeUtc)
             .FirstOrDefault();
         if (path is null)
         {
-            _details.Text = $"No internal.log exists for environment '{environment}' for the current run.";
-            UiLog($"Open selected internal log ignored. instance={_selectedInstance.Name}; environment={environment}; reason=file-not-found");
+            _details.Text = $"No internal log exists for testcase '{testcase}' and environment '{environment}' for the current run.";
+            UiLog($"Open selected internal log ignored. instance={_selectedInstance.Name}; testcase={testcase}; environment={environment}; reason=file-not-found");
             return;
         }
 
-        UiLog($"Opening selected internal.log. instance={_selectedInstance.Name}; environment={environment}; path={path}");
-        OpenFile(path, $"internal.log ({environment})");
+        UiLog($"Opening selected internal log. instance={_selectedInstance.Name}; testcase={testcase}; environment={environment}; path={path}");
+        OpenFile(path, $"internal log ({testcase}, {environment})");
     }
 
     private void OpenSelectedDataEngine()
@@ -1226,11 +1244,15 @@ public sealed partial class MainWindow : Window
         var roots = new[] { item.CurrentRunFolder, item.LogsFolder, item.ResultsFolder }
             .Where(path => !string.IsNullOrWhiteSpace(path) && Directory.Exists(path))
             .Distinct(StringComparer.OrdinalIgnoreCase);
-        var all = roots.SelectMany(path => Directory.GetFiles(path, "internal.log", SearchOption.AllDirectories))
+        var all = roots.SelectMany(path => Directory.GetFiles(path, "*.log", SearchOption.AllDirectories))
+            .Where(path => Path.GetFileName(path).Equals("internal.log", StringComparison.OrdinalIgnoreCase)
+                || (Path.GetFileName(path).Contains("_Run_", StringComparison.OrdinalIgnoreCase)
+                    && !Path.GetFileName(path).EndsWith("_process.log", StringComparison.OrdinalIgnoreCase)))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (!string.IsNullOrWhiteSpace(item.CurrentRunId))
         {
-            var currentRun = all.Where(path => path.Contains(item.CurrentRunId, StringComparison.OrdinalIgnoreCase)).ToList();
+            var shortRunId = item.CurrentRunId.Length <= 8 ? item.CurrentRunId : item.CurrentRunId[^8..];
+            var currentRun = all.Where(path => path.Contains(item.CurrentRunId, StringComparison.OrdinalIgnoreCase) || path.Contains($"_Run_{shortRunId}", StringComparison.OrdinalIgnoreCase)).ToList();
             if (currentRun.Count > 0) all = currentRun;
         }
         return all.OrderBy(path => FindEnvironmentLabel(path, item), StringComparer.OrdinalIgnoreCase)
@@ -1239,6 +1261,13 @@ public sealed partial class MainWindow : Window
 
     private static string FindEnvironmentLabel(string path, InstanceInfo item)
     {
+        var name = Path.GetFileName(path);
+        foreach (var environment in item.EnvironmentOptions.OrderByDescending(x => x.Length))
+        {
+            var safe = SafeFileNamePart(environment);
+            if (!string.IsNullOrWhiteSpace(safe) && name.Contains($"_{safe}_", StringComparison.OrdinalIgnoreCase)) return string.IsNullOrWhiteSpace(environment) ? "default" : environment;
+        }
+        if (name.Contains("_default_", StringComparison.OrdinalIgnoreCase)) return "default";
         var segments = path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
         foreach (var environment in item.EnvironmentOptions.OrderByDescending(x => x.Length))
             if (segments.Any(segment => segment.Equals(environment, StringComparison.OrdinalIgnoreCase))) return environment;
@@ -1247,10 +1276,38 @@ public sealed partial class MainWindow : Window
         return segments.Length > 1 ? segments[^2] : "unknown";
     }
 
+    private static string FindTestcaseLabel(string path, InstanceInfo item)
+    {
+        var file = Path.GetFileNameWithoutExtension(path);
+        var runMarker = file.LastIndexOf("_Run_", StringComparison.OrdinalIgnoreCase);
+        if (runMarker < 0) return Path.GetFileNameWithoutExtension(path);
+        var prefix = file[..runMarker];
+        var resultMarker = prefix.LastIndexOf("_passed_", StringComparison.OrdinalIgnoreCase);
+        if (resultMarker < 0) resultMarker = prefix.LastIndexOf("_failed_", StringComparison.OrdinalIgnoreCase);
+        if (resultMarker < 0) resultMarker = prefix.LastIndexOf("_cancelled_", StringComparison.OrdinalIgnoreCase);
+        if (resultMarker < 0) return prefix;
+        var testcaseAndEnvironment = prefix[..resultMarker];
+        foreach (var environment in item.EnvironmentOptions.OrderByDescending(x => x.Length))
+        {
+            var safe = SafeFileNamePart(environment);
+            var suffix = "_" + (string.IsNullOrWhiteSpace(safe) ? "default" : safe);
+            if (testcaseAndEnvironment.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) return testcaseAndEnvironment[..^suffix.Length];
+        }
+        if (testcaseAndEnvironment.EndsWith("_default", StringComparison.OrdinalIgnoreCase)) return testcaseAndEnvironment[..^8];
+        return testcaseAndEnvironment;
+    }
+
+    private static string SafeFileNamePart(string value)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var cleaned = new string((value ?? string.Empty).Select(c => invalid.Contains(c) ? '_' : c).ToArray()).Trim();
+        return string.IsNullOrWhiteSpace(cleaned) ? "default" : cleaned;
+    }
+
     private static string? FindLatestInternalLog(InstanceInfo item)
     {
         return FindInternalLogs(item)
-            .OrderByDescending(path => !string.IsNullOrWhiteSpace(item.CurrentRunId) && path.Contains(item.CurrentRunId, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(path => !string.IsNullOrWhiteSpace(item.CurrentRunId) && (path.Contains(item.CurrentRunId, StringComparison.OrdinalIgnoreCase) || path.Contains($"_Run_{(item.CurrentRunId.Length <= 8 ? item.CurrentRunId : item.CurrentRunId[^8..])}", StringComparison.OrdinalIgnoreCase)))
             .ThenByDescending(File.GetLastWriteTimeUtc)
             .FirstOrDefault();
     }

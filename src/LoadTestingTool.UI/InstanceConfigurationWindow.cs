@@ -8,8 +8,10 @@ namespace LoadTestingTool.UI;
 public sealed class InstanceConfigurationWindow : Window
 {
     private readonly InstanceInfo _item;
-    private readonly Func<Task> _editExecution;
+    private readonly Action<InstanceInfo, string?, string?, string?, string?, bool?, string?, bool?> _saveExecution;
+    private readonly Action<InstanceInfo, RunSelectionResult> _saveSelection;
     private readonly Action<InstanceInfo, bool> _saveReporting;
+    private readonly RunSelectionEditor _selectionEditor;
     private readonly CheckBox _generateResults;
     private readonly CheckBox _internalLogging;
     private readonly CheckBox _saveRequestBody;
@@ -17,10 +19,11 @@ public sealed class InstanceConfigurationWindow : Window
     private readonly CheckBox _maskSensitive;
     private readonly Dictionary<string, CheckBox> _historySheets = new(StringComparer.OrdinalIgnoreCase);
 
-    public InstanceConfigurationWindow(InstanceInfo item, Func<Task> editExecution, Action<InstanceInfo, bool> saveReporting)
+    public InstanceConfigurationWindow(InstanceInfo item, Action<InstanceInfo, RunSelectionResult> saveSelection, Action<InstanceInfo, string?, string?, string?, string?, bool?, string?, bool?> saveExecution, Action<InstanceInfo, bool> saveReporting)
     {
         _item = item;
-        _editExecution = editExecution;
+        _saveSelection = saveSelection;
+        _saveExecution = saveExecution;
         _saveReporting = saveReporting;
         Title = $"Instance configuration — {item.Name}";
         Width = 980;
@@ -34,6 +37,7 @@ public sealed class InstanceConfigurationWindow : Window
         _saveRequestBody = new CheckBox { Content = "Save request bodies to History", IsChecked = item.SaveRequestBodyToHistory };
         _saveResponseBody = new CheckBox { Content = "Save response bodies to History", IsChecked = item.SaveResponseBodyToHistory };
         _maskSensitive = new CheckBox { Content = "Mask sensitive data", IsChecked = item.MaskSensitiveData };
+        _selectionEditor = new RunSelectionEditor(item);
 
         var tabs = new TabControl
         {
@@ -51,10 +55,9 @@ public sealed class InstanceConfigurationWindow : Window
         var save = DashboardStyle.Action("Save", Save, "primary");
         var cancel = DashboardStyle.Action("Cancel", Close);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { cancel, save } };
-        var root = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), Margin = new Thickness(18) };
-        root.Children.Add(new StackPanel { Spacing = 4, Children = { DashboardStyle.Text("Instance configuration", 22, true), DashboardStyle.Text(item.Name, 13, false, DashboardStyle.Muted) } });
-        Grid.SetRow(tabs, 1); root.Children.Add(tabs);
-        Grid.SetRow(buttons, 2); root.Children.Add(buttons);
+        var root = new Grid { RowDefinitions = new RowDefinitions("*,Auto"), Margin = new Thickness(18) };
+        root.Children.Add(tabs);
+        Grid.SetRow(buttons, 1); root.Children.Add(buttons);
         Content = root;
     }
 
@@ -63,16 +66,9 @@ public sealed class InstanceConfigurationWindow : Window
     private Control BuildExecutionTab()
     {
         var panel = new StackPanel { Spacing = 12, Margin = new Thickness(8) };
-        panel.Children.Add(DashboardStyle.Text("Execution", 18, true));
-        panel.Children.Add(DashboardStyle.Text("Choose what runs and how the instance executes. Threads and iterations are global instance settings, not workbook step columns.", 12, false, DashboardStyle.Muted));
-        panel.Children.Add(KeyValue("Testcases", _item.TestcaseSelection == "0" ? "All enabled testcases" : _item.TestcaseSelection));
-        panel.Children.Add(KeyValue("Steps", string.IsNullOrWhiteSpace(_item.StepSelectionJson) ? "All enabled steps" : "Custom step selection"));
-        panel.Children.Add(KeyValue("Environments", string.IsNullOrWhiteSpace(_item.EnvironmentSelection) ? "All available environments" : _item.EnvironmentSelection));
-        panel.Children.Add(KeyValue("Mode", _item.ExecutionMode));
-        panel.Children.Add(KeyValue("Order", _item.RunScenariosInParallel ? "Parallel testcases" : "Sequential testcases"));
-        panel.Children.Add(KeyValue("Threads / iterations", $"{_item.Threads} / {_item.Iterations}"));
-        panel.Children.Add(KeyValue("Intervals", $"{_item.ThreadIntervalMs} ms / {_item.IterationIntervalMs} ms"));
-        panel.Children.Add(DashboardStyle.Action("Edit testcases, steps, environments and execution values…", async () => await _editExecution(), "primary"));
+        panel.Children.Add(DashboardStyle.Text("Choose what runs and how the instance executes. All selection and execution settings are editable here and saved together.", 12, false, DashboardStyle.Muted));
+        panel.Children.Add(_selectionEditor);
+        panel.Children.Add(_generateResults);
         return panel;
     }
 
@@ -136,14 +132,22 @@ public sealed class InstanceConfigurationWindow : Window
 
     private void Save()
     {
+        if (!_selectionEditor.TryBuild(out var selection, out _)) return;
+        _saveSelection(_item, selection!);
         _item.GenerateResults = _generateResults.IsChecked == true;
         _item.InternalLoggingEnabled = _internalLogging.IsChecked == true;
         _item.SaveRequestBodyToHistory = _saveRequestBody.IsChecked == true;
         _item.SaveResponseBodyToHistory = _saveResponseBody.IsChecked == true;
         _item.MaskSensitiveData = _maskSensitive.IsChecked == true;
         foreach (var pair in _historySheets) _item.HistorySheets[pair.Key] = pair.Value.IsChecked == true;
+        _saveExecution(_item, selection!.Threads.ToString(), selection.Iterations.ToString(), selection.ThreadIntervalMs.ToString(), selection.IterationIntervalMs.ToString(), _item.GenerateResults, selection.ExecutionMode, selection.ScenariosParallel);
         _saveReporting(_item, true);
         Close();
+    }
+
+    private static Control Field(string label, Control control)
+    {
+        return new StackPanel { Spacing = 4, Children = { DashboardStyle.Text(label, 11, false, DashboardStyle.Muted), control } };
     }
 
     private static Control KeyValue(string label, string value)

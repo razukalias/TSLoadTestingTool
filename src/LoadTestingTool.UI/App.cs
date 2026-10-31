@@ -29,6 +29,8 @@ public sealed class UiInstanceDefinition
     public int? Iterations { get; set; }
     public int? ThreadIntervalMs { get; set; }
     public int? IterationIntervalMs { get; set; }
+    public string? ExecutionMode { get; set; }
+    public bool? RunScenariosInParallel { get; set; }
     public bool? GenerateResults { get; set; }
     public bool? InternalLoggingEnabled { get; set; }
     public bool? SaveRequestBodyToHistory { get; set; }

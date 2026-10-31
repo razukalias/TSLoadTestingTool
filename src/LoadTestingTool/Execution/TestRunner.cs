@@ -47,7 +47,7 @@ public sealed class TestRunner
             for (var iteration = 1; iteration <= iterationCount; iteration++)
             {
                 _logger.Section($"DATA ROW {data.DataId} | thread={threadId} | iteration={iteration}");
-                var testcaseResult = new TestcaseResult { RunId = run.RunId, TestcaseIndex = testcase.TestcaseIndex, ExcelRowNumber = data.ExcelRowNumber, Testcase = testcase.Testcase, DataId = data.DataId, Thread = threadId, Iteration = iteration, Environment = environment, StartedAt = DateTimeOffset.Now };
+                var testcaseResult = new TestcaseResult { RunId = run.RunId, TestcaseIndex = testcase.TestcaseIndex, ExcelRowNumber = data.ExcelRowNumber, TestcaseRowNumber = data.TestcaseRowNumber, Testcase = testcase.Testcase, DataId = data.DataId, Thread = threadId, Iteration = iteration, Environment = environment, StartedAt = DateTimeOffset.Now };
                 var correlation = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); var correlationSources = new Dictionary<string, CorrelationRecord>(StringComparer.OrdinalIgnoreCase); var requestReferences = data.Variables.ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase); var stepOrder = 0;
                 var executionContext = new LoadTestingTool.Domain.ExecutionContext();
                 foreach (var request in testcase.Steps)

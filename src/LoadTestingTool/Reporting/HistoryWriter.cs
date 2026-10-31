@@ -23,11 +23,9 @@ public sealed class HistoryWriter
                 "SKIPPED" => "cancelled",
                 _ => "passed"
             };
-            var resultFolder = Path.Combine(_config.HistoryFolder, result);
-            var folder = string.IsNullOrWhiteSpace(environment)
-                ? resultFolder
-                : Path.Combine(_config.HistoryFolder, environment, result);
-            var row = testcase.ExcelRowNumber > 0 ? testcase.ExcelRowNumber.ToString() : "unknown";
+            var environmentFolder = string.IsNullOrWhiteSpace(environment) ? "default" : environment;
+            var folder = Path.Combine(_config.HistoryFolder, result, environmentFolder);
+            var row = testcase.TestcaseRowNumber > 0 ? testcase.TestcaseRowNumber.ToString() : "unknown";
             var stamp = testcase.StartedAt.ToLocalTime().ToString("yyyyMMdd_HHmmss_fff");
             var name = $"{InternalLogger.SafeFolderName(testcase.Testcase)}_Row{row}_{stamp}_T{testcase.Thread}_I{testcase.Iteration}.xlsx";
             var single = new RunResult

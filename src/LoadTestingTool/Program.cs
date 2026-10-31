@@ -167,15 +167,23 @@ internal static class Program
     private static async Task RunTestcaseAsync(TestcaseDefinition testcase, string environment, WorkbookModel workbook, RunResult overall, HttpClient http, AppConfig config, string runId, RuntimeSelection selection, IReadOnlyDictionary<int, IReadOnlySet<string>> filters, string uiLaunchId, string uiLaunchAt, CancellationToken cancellationToken)
     {
         var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-        var folderName = InternalLogger.SafeFolderName(testcase.Testcase) + (string.IsNullOrWhiteSpace(environment) ? "" : "_" + InternalLogger.SafeFolderName(environment)) + "_" + stamp;
+        var testcaseName = InternalLogger.SafeFolderName(testcase.Testcase);
+        var environmentName = string.IsNullOrWhiteSpace(environment) ? "default" : InternalLogger.SafeFolderName(environment);
+        var threadCount = Math.Max(1, config.Threads);
+        var iterationCount = Math.Max(1, config.Iterations);
+        var shortRunId = ShortRunId(runId);
+        var logStem = $"{testcaseName}_{environmentName}_{{0}}_{stamp}_T{threadCount}_I{iterationCount}_Run_{shortRunId}";
+        var runningLogName = string.Format(logStem, "running") + ".log";
+        var runningProcessLogName = string.Format(logStem, "running") + "_process.log";
+        var folderName = $"{testcaseName}_{environmentName}_{stamp}";
         var resultFolder = config.GenerateResults
             ? Path.Combine(config.ResultsFolder, cancellationToken.IsCancellationRequested ? "cancelled" : "running", folderName + "_" + Guid.NewGuid().ToString("N"))
             : string.Empty;
         if (config.GenerateResults) Directory.CreateDirectory(resultFolder);
-        var logFolder = Path.Combine(config.LogsFolder, $"run_{InternalLogger.SafeFolderName(runId)}", folderName);
+        var logFolder = config.LogsFolder;
         Directory.CreateDirectory(logFolder);
-        using var logger = new InternalLogger(logFolder, config.InstanceId, runId, config.InternalLoggingEnabled);
-        using var processLogger = new InternalLogger(logFolder, config.InstanceId, runId, config.InternalLoggingEnabled, null, "process.log");
+        var logger = new InternalLogger(logFolder, config.InstanceId, runId, config.InternalLoggingEnabled, null, runningLogName);
+        var processLogger = new InternalLogger(logFolder, config.InstanceId, runId, config.InternalLoggingEnabled, null, runningProcessLogName);
         var eventRoot = config.GenerateResults ? config.ResultsFolder : Path.Combine(config.LogsFolder, ".runtime");
         var eventFolder = Path.Combine(eventRoot, $"Run_{InternalLogger.SafeFolderName(runId)}");
         using var events = new LiveEventWriter(eventFolder, config.InstanceId, runId, $"_{InternalLogger.SafeFolderName(testcase.Testcase)}_{Guid.NewGuid():N}");
@@ -220,18 +228,35 @@ internal static class Program
         events.WriteTestcaseCompleted(local);
         logger.Info($"Testcase completed. Result={(local.Cancelled ? "CANCELLED" : failed ? "FAILED" : "PASSED")}; requests={local.Metrics.TotalRequests}; p95={local.Metrics.P95DurationMs}ms");
         processLogger.Info($"Testcase process completed. Result={(local.Cancelled ? "CANCELLED" : failed ? "FAILED" : "PASSED")}");
+        logger.Dispose();
+        processLogger.Dispose();
+        var finalResult = local.Cancelled ? "cancelled" : failed ? "failed" : "passed";
+        MoveInternalLog(logger.FilePath, Path.Combine(config.LogsFolder, string.Format(logStem, finalResult) + ".log"));
+        MoveInternalLog(processLogger.FilePath, Path.Combine(config.LogsFolder, string.Format(logStem, finalResult) + "_process.log"));
         if (Directory.Exists(resultFolder))
         {
-            var result = local.Cancelled ? "cancelled" : failed ? "failed" : "passed";
             var environmentFolder = string.IsNullOrWhiteSpace(environment) ? string.Empty : InternalLogger.SafeFolderName(environment);
             var finalFolder = string.IsNullOrWhiteSpace(environmentFolder)
-                ? Path.Combine(config.ResultsFolder, result, Path.GetFileName(resultFolder))
-                : Path.Combine(config.ResultsFolder, environmentFolder, result, Path.GetFileName(resultFolder));
+                ? Path.Combine(config.ResultsFolder, finalResult, Path.GetFileName(resultFolder))
+                : Path.Combine(config.ResultsFolder, environmentFolder, finalResult, Path.GetFileName(resultFolder));
             Directory.CreateDirectory(Path.GetDirectoryName(finalFolder)!);
             Directory.Move(resultFolder, finalFolder);
         }
         lock (overall.Testcases) overall.Testcases.AddRange(local.Testcases);
         Console.WriteLine($"[Done] {testcase.Testcase} [{(string.IsNullOrWhiteSpace(environment) ? "default" : environment)}] -> {(config.GenerateResults ? resultFolder : "result artifacts disabled")}");
+    }
+
+    private static string ShortRunId(string runId)
+    {
+        var safe = InternalLogger.SafeFolderName(runId);
+        return safe.Length <= 8 ? safe : safe[^8..];
+    }
+
+    private static void MoveInternalLog(string? source, string destination)
+    {
+        if (string.IsNullOrWhiteSpace(source) || !File.Exists(source)) return;
+        if (File.Exists(destination)) File.Delete(destination);
+        File.Move(source, destination);
     }
 
     private static string DataIdFileName(IReadOnlyList<string> ids)

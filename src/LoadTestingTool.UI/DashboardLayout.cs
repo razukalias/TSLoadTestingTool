@@ -330,7 +330,7 @@ public sealed partial class MainWindow
         var generateResults = new CheckBox { Content = "Generate technical Results artifacts", IsChecked = item.GenerateResults };
         _configurationPanel.Children.Add(generateResults);
         _configurationPanel.Children.Add(DashboardStyle.Text("When disabled, the Excel History files and live UI events remain available, but persistent Results run folders and metrics.json are not generated.", 11, false, DashboardStyle.Muted));
-        _configurationPanel.Children.Add(DashboardStyle.Action("Save execution settings", () => SaveInstanceExecutionSettings(item, threads.Text, iterations.Text, threadInterval.Text, iterationInterval.Text, generateResults.IsChecked == true), "primary"));
+        _configurationPanel.Children.Add(DashboardStyle.Action("Save execution settings", () => SaveInstanceExecutionSettings(item, threads.Text, iterations.Text, threadInterval.Text, iterationInterval.Text, generateResults.IsChecked == true, item.ExecutionMode, item.RunScenariosInParallel), "primary"));
         _configurationPanel.Children.Add(KeyValue("Data IDs", string.IsNullOrWhiteSpace(item.DataIdSelection) ? "All data rows" : item.DataIdSelection));
         _configurationPanel.Children.Add(DashboardStyle.Text("Workbook actions are available directly on the instance row: Add step, Edit step, Try spreadsheet, and Open workbook. The legacy editor is available in Handcraft.", 12, false, DashboardStyle.Muted));
     }
@@ -346,7 +346,7 @@ public sealed partial class MainWindow
     private void OpenInstanceConfiguration(InstanceInfo item)
     {
         if (!string.IsNullOrWhiteSpace(item.SelectionReadError)) { _details.Text = $"Cannot read run choices: {item.SelectionReadError}"; return; }
-        var form = new InstanceConfigurationWindow(item, () => ChooseRunSelectionAsync(item), SaveInstanceReportingSettings);
+        var form = new InstanceConfigurationWindow(item, ApplyRunSelection, SaveInstanceExecutionSettings, SaveInstanceReportingSettings);
         form.Show(this);
     }
 
@@ -455,12 +455,23 @@ public sealed partial class MainWindow
         _artifactPanel.Children.Add(DashboardStyle.Action("Open latest result workbook", OpenLatestResultWorkbook));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open latest internal log", OpenLatestInternalLog));
         var internalLogPaths = FindInternalLogs(item);
+        var internalLogTestcases = internalLogPaths
+            .Select(path => FindTestcaseLabel(path, item))
+            .Where(testcase => !string.IsNullOrWhiteSpace(testcase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(testcase => testcase, StringComparer.OrdinalIgnoreCase)
+            .ToList();
         var internalLogEnvironments = internalLogPaths
             .Select(path => FindEnvironmentLabel(path, item))
             .Where(environment => !string.IsNullOrWhiteSpace(environment))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(environment => environment, StringComparer.OrdinalIgnoreCase)
             .ToList();
+        _internalLogTestcase.ItemsSource = internalLogTestcases.Count == 0
+            ? new[] { "No testcases found" }
+            : internalLogTestcases;
+        if (_internalLogTestcase.SelectedItem is null || !internalLogTestcases.Contains(_internalLogTestcase.SelectedItem.ToString() ?? "", StringComparer.OrdinalIgnoreCase))
+            _internalLogTestcase.SelectedIndex = internalLogTestcases.Count == 0 ? 0 : 0;
         _internalLogEnvironment.ItemsSource = internalLogEnvironments.Count == 0
             ? new[] { "No environments found" }
             : internalLogEnvironments;
@@ -469,15 +480,17 @@ public sealed partial class MainWindow
         // This ComboBox is reused between refreshes. Remove it from the previous
         // StackPanel first; otherwise Avalonia rejects adding a control that still
         // has a visual parent when the selected instance is refreshed.
+        if (_internalLogTestcase.Parent is Panel previousTestcaseParent)
+            previousTestcaseParent.Children.Remove(_internalLogTestcase);
         if (_internalLogEnvironment.Parent is Panel previousLogParent)
             previousLogParent.Children.Remove(_internalLogEnvironment);
         var internalLogControls = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 6,
-            Children = { _internalLogEnvironment, DashboardStyle.Action("Open selected log", OpenSelectedInternalLog, "primary") }
+            Children = { _internalLogTestcase, _internalLogEnvironment, DashboardStyle.Action("Open selected log", OpenSelectedInternalLog, "primary") }
         };
-        _artifactPanel.Children.Add(DashboardStyle.Text("Internal log environment", 12, true));
+        _artifactPanel.Children.Add(DashboardStyle.Text("Internal log testcase / environment", 12, true));
         _artifactPanel.Children.Add(internalLogControls);
         _artifactPanel.Children.Add(DashboardStyle.Action("Open Templates folder", OpenTemplatesFolder));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open Results folder", () =>

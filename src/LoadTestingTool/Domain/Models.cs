@@ -110,6 +110,7 @@ public sealed class RequestDataRow
 {
     public int TestcaseIndex { get; init; }
     public int ExcelRowNumber { get; init; }
+    public int TestcaseRowNumber { get; init; }
     public string Testcase { get; init; } = string.Empty;
     public string DataId { get; init; } = string.Empty;
     public IReadOnlyList<string> Dontrun { get; init; } = [];
@@ -226,6 +227,7 @@ public sealed class TestcaseResult
     public string RunId { get; init; } = string.Empty;
     public int TestcaseIndex { get; init; }
     public int ExcelRowNumber { get; init; }
+    public int TestcaseRowNumber { get; init; }
     public string Testcase { get; init; } = string.Empty;
     public string DataId { get; init; } = string.Empty;
     public int Thread { get; init; }
