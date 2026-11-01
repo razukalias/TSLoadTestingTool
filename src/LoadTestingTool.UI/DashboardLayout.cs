@@ -5,6 +5,7 @@ using Avalonia.Controls.Templates;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Styling;
+using Avalonia.Threading;
 using ClosedXML.Excel;
 using System.Diagnostics;
 using System.Text.Json;
@@ -60,6 +61,78 @@ internal static class DashboardStyle
     }
 }
 
+internal sealed record ExecutedHistoryArtifact(string Path, string Testcase, string Environment, string Result, string Row);
+internal sealed record ExecutedLogArtifact(string Path, string Testcase, string Environment, string Result);
+
+internal static class ArtifactCatalog
+{
+    private static string LatestRunId(InstanceInfo item)
+    {
+        if (!string.IsNullOrWhiteSpace(item.CurrentRunId)) return item.CurrentRunId;
+        if (!Directory.Exists(item.HistoryFolder)) return "";
+        var aggregate = Directory.GetFiles(item.HistoryFolder, "Execution_History_*.xlsx", SearchOption.AllDirectories).OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
+        var name = aggregate is null ? "" : Path.GetFileNameWithoutExtension(aggregate);
+        return name.StartsWith("Execution_History_", StringComparison.OrdinalIgnoreCase) ? name["Execution_History_".Length..] : "";
+    }
+    public static IReadOnlyList<ExecutedHistoryArtifact> History(InstanceInfo item)
+    {
+        var targetRunId = LatestRunId(item);
+        if (string.IsNullOrWhiteSpace(targetRunId) || !Directory.Exists(item.HistoryFolder)) return [];
+        var output = new List<ExecutedHistoryArtifact>();
+        foreach (var path in Directory.GetFiles(item.HistoryFolder, "*.xlsx", SearchOption.AllDirectories))
+        {
+            if (Path.GetFileName(path).StartsWith("~$", StringComparison.OrdinalIgnoreCase) || Path.GetFileName(path).StartsWith("Execution_History_", StringComparison.OrdinalIgnoreCase)) continue;
+            try
+            {
+                using var workbook = new XLWorkbook(path);
+                var summary = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("RunSummary", StringComparison.OrdinalIgnoreCase));
+                var workbookRunId = summary?.RowsUsed().Skip(1).FirstOrDefault()?.Cell(1).GetString();
+                if (!string.Equals(workbookRunId, targetRunId, StringComparison.OrdinalIgnoreCase)) continue;
+                var name = Path.GetFileNameWithoutExtension(path); var rowMarker = name.IndexOf("_Row", StringComparison.OrdinalIgnoreCase);
+                var testcase = rowMarker > 0 ? name[..rowMarker] : name;
+                var rowEnd = rowMarker >= 0 ? name.IndexOf('_', rowMarker + 4) : -1;
+                var row = rowMarker >= 0 ? (rowEnd > rowMarker ? name[rowMarker..rowEnd] : name[rowMarker..]) : "";
+                var parts = path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+                var result = parts.LastOrDefault(x => x.Equals("passed", StringComparison.OrdinalIgnoreCase) || x.Equals("failed", StringComparison.OrdinalIgnoreCase) || x.Equals("cancelled", StringComparison.OrdinalIgnoreCase)) ?? "unknown";
+                var resultIndex = Array.FindIndex(parts, x => x.Equals(result, StringComparison.OrdinalIgnoreCase));
+                var environment = resultIndex > 0 ? parts[resultIndex - 1] : "default";
+                output.Add(new ExecutedHistoryArtifact(path, testcase, environment, DashboardStyle.Status(result), row));
+            }
+            catch { }
+        }
+        return output;
+    }
+
+    public static string? AggregateHistory(InstanceInfo item)
+    {
+        var runId = LatestRunId(item);
+        if (string.IsNullOrWhiteSpace(runId) || !Directory.Exists(item.HistoryFolder)) return null;
+        return Directory.GetFiles(item.HistoryFolder, "Execution_History_*.xlsx", SearchOption.AllDirectories)
+            .Where(x => Path.GetFileName(x).Contains(runId, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
+    }
+
+    public static IReadOnlyList<ExecutedLogArtifact> Logs(InstanceInfo item)
+    {
+        var runId = LatestRunId(item);
+        if (string.IsNullOrWhiteSpace(runId) || !Directory.Exists(item.LogsFolder)) return [];
+        var shortRunId = runId.Length <= 8 ? runId : runId[^8..];
+        var output = new List<ExecutedLogArtifact>();
+        foreach (var path in Directory.GetFiles(item.LogsFolder, "*.log", SearchOption.TopDirectoryOnly))
+        {
+            var name = Path.GetFileNameWithoutExtension(path);
+            if (!name.Contains($"_Run_{shortRunId}", StringComparison.OrdinalIgnoreCase) || name.EndsWith("_process", StringComparison.OrdinalIgnoreCase)) continue;
+            var status = new[] { "passed", "failed", "cancelled" }.FirstOrDefault(x => name.Contains($"_{x}_", StringComparison.OrdinalIgnoreCase));
+            if (status is null) continue;
+            var prefix = name[..name.IndexOf($"_{status}_", StringComparison.OrdinalIgnoreCase)];
+            var environment = item.EnvironmentOptions.OrderByDescending(x => x.Length).FirstOrDefault(x => prefix.EndsWith($"_{x}", StringComparison.OrdinalIgnoreCase));
+            var testcase = environment is null ? prefix : prefix[..^(environment.Length + 1)];
+            output.Add(new ExecutedLogArtifact(path, testcase, string.IsNullOrWhiteSpace(environment) ? "default" : environment, DashboardStyle.Status(status)));
+        }
+        return output;
+    }
+}
+
 // The table only selects and summarizes an instance. Editable settings live in Configuration.
 internal sealed class InstanceRow : Border
 {
@@ -70,7 +143,7 @@ internal sealed class InstanceRow : Border
     private readonly TextBlock _order = DashboardStyle.Text("");
     private readonly TextBlock _environment = DashboardStyle.Text("");
     private readonly Border _badgeHost = new();
-    public InstanceRow(InstanceInfo item, Action<InstanceInfo> select, Action<InstanceInfo> configure, Action<InstanceInfo> addStep, Action<InstanceInfo> editStep, Action<InstanceInfo> trySpreadsheet, Action<InstanceInfo> openWorkbook, Action<InstanceInfo> run, Action<InstanceInfo> stop, Action<InstanceInfo> openLog, Action<InstanceInfo> openHistory, Action<string> log)
+    public InstanceRow(InstanceInfo item, Action<InstanceInfo> select, Action<InstanceInfo> configure, Action<InstanceInfo> addStep, Action<InstanceInfo> editStep, Action<InstanceInfo> trySpreadsheet, Action<InstanceInfo> openWorkbook, Action<InstanceInfo> run, Action<InstanceInfo> stop, Action<InstanceInfo, string, string, string, string> openSelectedLog, Action<InstanceInfo> openLatestLog, Action<InstanceInfo> openAllLogs, Action<InstanceInfo, string, string, string, string, bool> openSelectedHistory, Action<InstanceInfo, bool> openLatestHistory, Action<string> log)
     {
         _item = item;
         Padding = new Thickness(8, 12);
@@ -85,7 +158,9 @@ internal sealed class InstanceRow : Border
         var actions = new WrapPanel { Orientation = Orientation.Horizontal, ItemWidth = double.NaN, ItemHeight = double.NaN };
         var runButton = DashboardStyle.Action("Run", () => run(item), "primary");
         ToolTip.SetTip(runButton, "Run all enabled workbook steps using workbook defaults. Use Configure first for a custom selection.");
-        foreach (var button in new[] { runButton, DashboardStyle.Action("Stop", () => stop(item)), DashboardStyle.Action("Configure", () => configure(item)), DashboardStyle.Action("Add step", () => addStep(item)), DashboardStyle.Action("Edit step", () => editStep(item)), DashboardStyle.Action("Try spreadsheet", () => trySpreadsheet(item)), DashboardStyle.Action("Open workbook", () => openWorkbook(item)), DashboardStyle.Action("Internal log", () => openLog(item)), DashboardStyle.Action("History", () => openHistory(item)) }) { button.Margin = new Thickness(0, 0, 4, 4); button.Padding = new Thickness(7, 5); actions.Children.Add(button); }
+        var logButton = BuildInternalLogButton(item, openSelectedLog, openLatestLog, openAllLogs);
+        var historyButton = BuildHistoryButton(item, openSelectedHistory, openLatestHistory);
+        foreach (var button in new[] { runButton, DashboardStyle.Action("Stop", () => stop(item)), DashboardStyle.Action("Configure", () => configure(item)), DashboardStyle.Action("Add step", () => addStep(item)), DashboardStyle.Action("Edit step", () => editStep(item)), DashboardStyle.Action("✎  Edit dataset", () => trySpreadsheet(item)), DashboardStyle.Action("Open workbook", () => openWorkbook(item)), logButton, historyButton }) { button.Margin = new Thickness(0, 0, 4, 4); button.Padding = new Thickness(7, 5); actions.Children.Add(button); }
         var cells = new Control[] { _check, name, _testcases, _mode, _order, _environment, _badgeHost, actions };
         for (var i = 0; i < cells.Length; i++) { Grid.SetColumn(cells[i], i); cells[i].Margin = new Thickness(0, 0, 6, 0); grid.Children.Add(cells[i]); }
         Child = grid;
@@ -104,6 +179,105 @@ internal sealed class InstanceRow : Border
         Background = _item.Selected ? DashboardStyle.Brush("#173559") : Brushes.Transparent;
     }
     public void SetEnvironmentOptions(IEnumerable<string> options) => Refresh();
+
+    private static Button BuildInternalLogButton(InstanceInfo item, Action<InstanceInfo, string, string, string, string> openSelected, Action<InstanceInfo> openLatest, Action<InstanceInfo> openAll)
+    {
+        var testcase = new ComboBox { Width = 220 };
+        var environment = new ComboBox { Width = 180 };
+        var result = new ComboBox { Width = 140 };
+        var run = new ComboBox { ItemsSource = new[] { "Latest run" }, SelectedIndex = 0, Width = 140 };
+        var content = new StackPanel { Spacing = 8, Width = 430, Children =
+        {
+            DashboardStyle.Text("Internal logs", 15, true),
+            Field("Testcase", testcase), Field("Environment", environment), Field("Result", result), Field("Run", run),
+            new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children =
+            {
+                DashboardStyle.Action("Open selected log", () => openSelected(item, testcase.SelectedItem?.ToString() ?? "", environment.SelectedItem?.ToString() ?? "default", result.SelectedItem?.ToString() ?? "All", run.SelectedItem?.ToString() ?? "Latest run"), "primary"),
+                DashboardStyle.Action("Open latest log", () => openLatest(item)),
+                DashboardStyle.Action("Open all logs", () => openAll(item))
+            }}
+        }};
+        var flyout = new Flyout { Content = content, Placement = PlacementMode.Bottom };
+        var refreshing = false;
+        void RefreshOptions()
+        {
+            if (refreshing) return;
+            refreshing = true;
+            try
+            {
+            var artifacts = ArtifactCatalog.Logs(item);
+            var testcases = artifacts.Select(x => x.Testcase).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+            testcase.ItemsSource = testcases; testcase.SelectedIndex = testcases.Count == 0 ? -1 : 0;
+            var selectedTestcase = testcase.SelectedItem?.ToString();
+            var scoped = artifacts.Where(x => string.Equals(x.Testcase, selectedTestcase, StringComparison.OrdinalIgnoreCase)).ToList();
+            var environments = scoped.Select(x => x.Environment).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+            environment.ItemsSource = environments; environment.SelectedIndex = environments.Count == 0 ? -1 : 0;
+            var selectedEnvironment = environment.SelectedItem?.ToString();
+            var results = scoped.Where(x => string.Equals(x.Environment, selectedEnvironment, StringComparison.OrdinalIgnoreCase)).Select(x => x.Result).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+            result.ItemsSource = new[] { "All" }.Concat(results).Distinct(StringComparer.OrdinalIgnoreCase).ToList(); result.SelectedIndex = 0;
+            }
+            finally { refreshing = false; }
+        }
+        flyout.Opened += (_, _) => RefreshOptions();
+        testcase.SelectionChanged += (_, _) => RefreshOptions();
+        environment.SelectionChanged += (_, _) => RefreshOptions();
+        var button = new Button { Content = "Internal logs ▾", Padding = new Thickness(7, 5), Flyout = flyout };
+        ToolTip.SetTip(button, "Select testcase, environment, result, and run, then open internal logs.");
+        return button;
+    }
+
+    private static Control Field(string label, Control control) => new StackPanel { Spacing = 3, Children = { DashboardStyle.Text(label, 11, false, DashboardStyle.Muted), control } };
+
+    private static Button BuildHistoryButton(InstanceInfo item, Action<InstanceInfo, string, string, string, string, bool> openSelected, Action<InstanceInfo, bool> openLatest)
+    {
+        var testcase = new ComboBox { Width = 220 };
+        var environment = new ComboBox { Width = 180 };
+        var result = new ComboBox { Width = 140 };
+        var row = new ComboBox { Width = 140 };
+        var run = new ComboBox { ItemsSource = new[] { "Latest run" }, SelectedIndex = 0, Width = 140 };
+        var openWith = new ComboBox { ItemsSource = new[] { "Spreadsheet viewer", "Default Excel app" }, SelectedIndex = 0, Width = 170 };
+        var content = new StackPanel { Spacing = 8, Width = 450, Children =
+        {
+            DashboardStyle.Text("History", 15, true),
+            Field("Testcase", testcase), Field("Environment", environment), Field("Result", result), Field("Row", row), Field("Run", run), Field("Open with", openWith),
+            new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children =
+            {
+                DashboardStyle.Action("Open selected history", () => openSelected(item, testcase.SelectedItem?.ToString() ?? "", environment.SelectedItem?.ToString() ?? "default", result.SelectedItem?.ToString() ?? "All", row.SelectedItem?.ToString() ?? "All rows", openWith.SelectedIndex == 0), "primary"),
+                DashboardStyle.Action("Open latest history", () => openLatest(item, openWith.SelectedIndex == 0))
+            }}
+        }};
+        var flyout = new Flyout { Content = content, Placement = PlacementMode.Bottom };
+        var refreshing = false;
+        void RefreshOptions()
+        {
+            if (refreshing) return;
+            refreshing = true;
+            try
+            {
+            var artifacts = ArtifactCatalog.History(item);
+            var testcases = artifacts.Select(x => x.Testcase).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+            testcase.ItemsSource = testcases; testcase.SelectedIndex = testcases.Count == 0 ? -1 : 0;
+            var selectedTestcase = testcase.SelectedItem?.ToString();
+            var scoped = artifacts.Where(x => string.Equals(x.Testcase, selectedTestcase, StringComparison.OrdinalIgnoreCase)).ToList();
+            var environments = scoped.Select(x => x.Environment).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+            environment.ItemsSource = environments; environment.SelectedIndex = environments.Count == 0 ? -1 : 0;
+            var selectedEnvironment = environment.SelectedItem?.ToString();
+            scoped = scoped.Where(x => string.Equals(x.Environment, selectedEnvironment, StringComparison.OrdinalIgnoreCase)).ToList();
+            var results = scoped.Select(x => x.Result).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+            result.ItemsSource = new[] { "All" }.Concat(results).Distinct(StringComparer.OrdinalIgnoreCase).ToList(); result.SelectedIndex = 0;
+            var rows = scoped.Select(x => x.Row).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+            var aggregateRows = ArtifactCatalog.AggregateHistory(item) is null ? Array.Empty<string>() : new[] { "All rows" };
+            row.ItemsSource = aggregateRows.Concat(rows).ToList(); row.SelectedIndex = row.ItemsSource is System.Collections.IList list && list.Count > 0 ? 0 : -1;
+            }
+            finally { refreshing = false; }
+        }
+        flyout.Opened += (_, _) => RefreshOptions();
+        testcase.SelectionChanged += (_, _) => RefreshOptions();
+        environment.SelectionChanged += (_, _) => RefreshOptions();
+        var button = new Button { Content = "History ▾", Padding = new Thickness(7, 5), Flyout = flyout };
+        ToolTip.SetTip(button, "Select testcase, environment, result, row, run, and opening method for history.");
+        return button;
+    }
 }
 
 public sealed partial class MainWindow
@@ -165,7 +339,7 @@ public sealed partial class MainWindow
 
         var heading = new StackPanel { Spacing = 5, Children = { _pageTitle, DashboardStyle.Text("Manage test instances and inspect execution results", 12, false, DashboardStyle.Muted) } };
         _chooseButton = DashboardStyle.Action("Choose what to run", () => _ = ChooseRunSelectionAsync(_selectedInstance ?? _instances.FirstOrDefault(x => x.Selected)));
-        _runButton = DashboardStyle.Action("▶  Run selected", () => RunSelected(), "primary");
+        _runButton = DashboardStyle.Action("▶  Run selected instances", () => RunSelected(promptForMissingSelection: false), "primary");
         _stopButton = DashboardStyle.Action("Stop selected", () => StopSelected(false));
         _forceButton = DashboardStyle.Action("Force stop", () => StopSelected(true), "danger");
         var commands = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Children = { _chooseButton, _runButton, _stopButton, _forceButton } };
@@ -332,7 +506,7 @@ public sealed partial class MainWindow
         _configurationPanel.Children.Add(DashboardStyle.Text("When disabled, the Excel History files and live UI events remain available, but persistent Results run folders and metrics.json are not generated.", 11, false, DashboardStyle.Muted));
         _configurationPanel.Children.Add(DashboardStyle.Action("Save execution settings", () => SaveInstanceExecutionSettings(item, threads.Text, iterations.Text, threadInterval.Text, iterationInterval.Text, generateResults.IsChecked == true, item.ExecutionMode, item.RunScenariosInParallel), "primary"));
         _configurationPanel.Children.Add(KeyValue("Data IDs", string.IsNullOrWhiteSpace(item.DataIdSelection) ? "All data rows" : item.DataIdSelection));
-        _configurationPanel.Children.Add(DashboardStyle.Text("Workbook actions are available directly on the instance row: Add step, Edit step, Try spreadsheet, and Open workbook. The legacy editor is available in Handcraft.", 12, false, DashboardStyle.Muted));
+        _configurationPanel.Children.Add(DashboardStyle.Text("Workbook actions are available directly on the instance row: Add step, Edit step, Edit dataset, and Open workbook. The legacy editor is available in Handcraft.", 12, false, DashboardStyle.Muted));
     }
     private async Task EditWorkbookAsync()
     {
@@ -451,47 +625,7 @@ public sealed partial class MainWindow
         _artifactPanel.Children.Add(DashboardStyle.Text("Workbooks and run artifacts", 16, true));
         _artifactPanel.Children.Add(DashboardStyle.Action("Handcraft: Edit workbook (legacy)", () => _ = EditWorkbookAsync()));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open DataEngine", OpenSelectedDataEngine));
-        _artifactPanel.Children.Add(DashboardStyle.Action("Configure history sheets", () => new HistorySettingsWindow(item.FolderPath, item.Name, _config.SettingsFile).Show(this)));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open latest result workbook", OpenLatestResultWorkbook));
-        _artifactPanel.Children.Add(DashboardStyle.Action("Open latest internal log", OpenLatestInternalLog));
-        var internalLogPaths = FindInternalLogs(item);
-        var internalLogTestcases = internalLogPaths
-            .Select(path => FindTestcaseLabel(path, item))
-            .Where(testcase => !string.IsNullOrWhiteSpace(testcase))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(testcase => testcase, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        var internalLogEnvironments = internalLogPaths
-            .Select(path => FindEnvironmentLabel(path, item))
-            .Where(environment => !string.IsNullOrWhiteSpace(environment))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(environment => environment, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        _internalLogTestcase.ItemsSource = internalLogTestcases.Count == 0
-            ? new[] { "No testcases found" }
-            : internalLogTestcases;
-        if (_internalLogTestcase.SelectedItem is null || !internalLogTestcases.Contains(_internalLogTestcase.SelectedItem.ToString() ?? "", StringComparer.OrdinalIgnoreCase))
-            _internalLogTestcase.SelectedIndex = internalLogTestcases.Count == 0 ? 0 : 0;
-        _internalLogEnvironment.ItemsSource = internalLogEnvironments.Count == 0
-            ? new[] { "No environments found" }
-            : internalLogEnvironments;
-        if (_internalLogEnvironment.SelectedItem is null || !internalLogEnvironments.Contains(_internalLogEnvironment.SelectedItem.ToString() ?? "", StringComparer.OrdinalIgnoreCase))
-            _internalLogEnvironment.SelectedIndex = internalLogEnvironments.Count == 0 ? 0 : 0;
-        // This ComboBox is reused between refreshes. Remove it from the previous
-        // StackPanel first; otherwise Avalonia rejects adding a control that still
-        // has a visual parent when the selected instance is refreshed.
-        if (_internalLogTestcase.Parent is Panel previousTestcaseParent)
-            previousTestcaseParent.Children.Remove(_internalLogTestcase);
-        if (_internalLogEnvironment.Parent is Panel previousLogParent)
-            previousLogParent.Children.Remove(_internalLogEnvironment);
-        var internalLogControls = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 6,
-            Children = { _internalLogTestcase, _internalLogEnvironment, DashboardStyle.Action("Open selected log", OpenSelectedInternalLog, "primary") }
-        };
-        _artifactPanel.Children.Add(DashboardStyle.Text("Internal log testcase / environment", 12, true));
-        _artifactPanel.Children.Add(internalLogControls);
         _artifactPanel.Children.Add(DashboardStyle.Action("Open Templates folder", OpenTemplatesFolder));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open Results folder", () =>
         {
@@ -510,7 +644,27 @@ public sealed partial class MainWindow
     private void OpenSpreadsheetPreview()
     {
         if (_selectedInstance is null) { _details.Text = "Select an instance first."; return; }
-        new SpreadsheetPreviewWindow(_selectedInstance.WorkbookPath, UiLog).Show(this);
+        LaunchSpreadsheetProcess(_selectedInstance.WorkbookPath, "dataset editor");
+    }
+
+    private void LaunchSpreadsheetProcess(string workbookPath, string description)
+    {
+        try
+        {
+            var processPath = Environment.ProcessPath ?? throw new InvalidOperationException("The dashboard process path is unavailable.");
+            var entryAssembly = System.Reflection.Assembly.GetEntryAssembly()?.Location;
+            var start = new ProcessStartInfo { FileName = processPath, UseShellExecute = false, CreateNoWindow = true };
+            if (!string.IsNullOrWhiteSpace(entryAssembly) && (Path.GetFileNameWithoutExtension(processPath).Equals("dotnet", StringComparison.OrdinalIgnoreCase) || Path.GetFileNameWithoutExtension(processPath).Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase)))
+            {
+                start.ArgumentList.Add(entryAssembly);
+            }
+            start.ArgumentList.Add("--dataset-editor"); start.ArgumentList.Add(workbookPath);
+            var editor = Process.Start(start) ?? throw new InvalidOperationException("The dataset editor process could not be started.");
+            editor.EnableRaisingEvents = true;
+            editor.Exited += (_, _) => Dispatcher.UIThread.Post(() => { RefreshInstances(); _details.Text = $"{description} closed for {Path.GetFileName(workbookPath)}."; UiLog($"Spreadsheet subprocess exited. description={description}; workbook={workbookPath}; exitCode={editor.ExitCode}"); });
+            UiLog($"Spreadsheet subprocess started. description={description}; workbook={workbookPath}; processId={editor.Id}");
+        }
+        catch (Exception ex) { _details.Text = $"Could not start {description}: {ex.Message}"; UiLog($"Spreadsheet subprocess failed to start. description={description}; workbook={workbookPath}; error={ex}"); }
     }
     private async Task CopyOverviewAsync()
     {

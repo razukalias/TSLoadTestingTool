@@ -10,6 +10,7 @@ public sealed class AppConfig
     public string ResultsFolder { get; set; } = "Results";
     public bool GenerateResults { get; set; } = true;
     public bool GenerateAggregateHistory { get; set; }
+    public bool GenerateRowHistory { get; set; } = true;
     public string InstanceId { get; set; } = "default";
     public string RunId { get; set; } = string.Empty;
     public int RequestTimeoutSeconds { get; set; } = 300;
@@ -43,6 +44,7 @@ public sealed class CentralInstanceConfig
     public string? ResultsFolder { get; set; }
     public bool? GenerateResults { get; set; }
     public bool? GenerateAggregateHistory { get; set; }
+    public bool? GenerateRowHistory { get; set; }
     public string? WorkspaceRoot { get; set; }
     public string? TestcaseSelection { get; set; }
     public string? StepSelection { get; set; }

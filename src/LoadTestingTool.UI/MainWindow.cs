@@ -33,6 +33,8 @@ public sealed class InstanceInfo
     public int ThreadIntervalMs { get; set; }
     public int IterationIntervalMs { get; set; }
     public bool GenerateResults { get; set; } = true;
+    public bool GenerateAggregateHistory { get; set; }
+    public bool GenerateRowHistory { get; set; } = true;
     public bool InternalLoggingEnabled { get; set; } = true;
     public bool SaveRequestBodyToHistory { get; set; } = true;
     public bool SaveResponseBodyToHistory { get; set; } = true;
@@ -154,7 +156,7 @@ public sealed partial class MainWindow : Window
     private InstanceRow GetOrCreateRow(InstanceInfo item)
     {
         if (_rows.TryGetValue(item.FolderPath, out var existing)) return existing;
-        var row = new InstanceRow(item, selected => { UiLog($"UI action: instance row clicked. instance={selected.Name}"); _instanceList.SelectedItem = selected; ShowDetails(selected); }, selected => OpenInstanceConfiguration(selected), selected => OpenStepWizardForInstance(selected), selected => EditStepForInstance(selected), selected => OpenSpreadsheetForInstance(selected), selected => OpenWorkbookForInstance(selected), RunSingleInstance, StopSingleInstance, OpenInstanceLog, OpenInstanceHistory, UiLog);
+        var row = new InstanceRow(item, selected => { UiLog($"UI action: instance row clicked. instance={selected.Name}"); _instanceList.SelectedItem = selected; ShowDetails(selected); }, selected => OpenInstanceConfiguration(selected), selected => OpenStepWizardForInstance(selected), selected => EditStepForInstance(selected), selected => OpenSpreadsheetForInstance(selected), selected => OpenWorkbookForInstance(selected), RunSingleInstance, StopSingleInstance, OpenSelectedInternalLogForInstance, OpenLatestInternalLogForInstance, OpenAllInternalLogsForInstance, OpenSelectedHistoryForInstance, OpenLatestHistoryForInstance, UiLog);
         row.SetEnvironmentOptions(item.EnvironmentOptions);
         _rows[item.FolderPath] = row;
         return row;
@@ -419,6 +421,8 @@ public sealed partial class MainWindow : Window
                 item.ExecutionMode = string.IsNullOrWhiteSpace(centralInstance.ExecutionMode) ? "threaded" : centralInstance.ExecutionMode;
                 item.RunScenariosInParallel = centralInstance.RunScenariosInParallel ?? false;
                 item.GenerateResults = centralInstance.GenerateResults ?? _config.GenerateResults;
+                item.GenerateAggregateHistory = centralInstance.GenerateAggregateHistory ?? false;
+                item.GenerateRowHistory = centralInstance.GenerateRowHistory ?? true;
                 item.InternalLoggingEnabled = centralInstance.InternalLoggingEnabled ?? true;
                 item.SaveRequestBodyToHistory = centralInstance.SaveRequestBodyToHistory ?? true;
                 item.SaveResponseBodyToHistory = centralInstance.SaveResponseBodyToHistory ?? true;
@@ -571,6 +575,8 @@ public sealed partial class MainWindow : Window
             var instances = root["Instances"] as JsonObject ?? new JsonObject();
             var instance = instances[item.Name] as JsonObject ?? new JsonObject();
             instance["GenerateResults"] = item.GenerateResults;
+            instance["GenerateAggregateHistory"] = item.GenerateAggregateHistory;
+            instance["GenerateRowHistory"] = item.GenerateRowHistory;
             instance["InternalLoggingEnabled"] = item.InternalLoggingEnabled;
             instance["SaveRequestBodyToHistory"] = item.SaveRequestBodyToHistory;
             instance["SaveResponseBodyToHistory"] = item.SaveResponseBodyToHistory;
@@ -583,6 +589,8 @@ public sealed partial class MainWindow : Window
             if (_config.Instances.TryGetValue(item.Name, out var central))
             {
                 central.GenerateResults = item.GenerateResults;
+                central.GenerateAggregateHistory = item.GenerateAggregateHistory;
+                central.GenerateRowHistory = item.GenerateRowHistory;
                 central.InternalLoggingEnabled = item.InternalLoggingEnabled;
                 central.SaveRequestBodyToHistory = item.SaveRequestBodyToHistory;
                 central.SaveResponseBodyToHistory = item.SaveResponseBodyToHistory;
@@ -653,9 +661,90 @@ public sealed partial class MainWindow : Window
     {
         _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item); OpenLatestInternalLog();
     }
+    private void OpenSelectedInternalLogForInstance(InstanceInfo item, string testcase, string environment, string result, string run)
+    {
+        _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item);
+        OpenInternalLogForSelection(item, testcase, environment, result, run);
+    }
+    private void OpenLatestInternalLogForInstance(InstanceInfo item)
+    {
+        _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item); OpenLatestInternalLog();
+    }
+    private void OpenAllInternalLogsForInstance(InstanceInfo item)
+    {
+        _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item); OpenAllInternalLogs();
+    }
     private void OpenInstanceHistory(InstanceInfo item)
     {
         _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item); OpenLatestResultWorkbook();
+    }
+    private void OpenSelectedHistoryForInstance(InstanceInfo item, string testcase, string environment, string result, string row, bool trySpreadsheet)
+    {
+        _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item);
+        if (row.Equals("All rows", StringComparison.OrdinalIgnoreCase))
+        {
+            OpenHistoryPath(ArtifactCatalog.AggregateHistory(item), trySpreadsheet, "aggregate history");
+            return;
+        }
+        var candidates = ArtifactCatalog.History(item).Where(x => x.Testcase.Equals(testcase, StringComparison.OrdinalIgnoreCase))
+            .Where(x => x.Environment.Equals(environment, StringComparison.OrdinalIgnoreCase));
+        if (!result.Equals("All", StringComparison.OrdinalIgnoreCase)) candidates = candidates.Where(x => x.Result.Equals(result, StringComparison.OrdinalIgnoreCase));
+        if (!row.Equals("All rows", StringComparison.OrdinalIgnoreCase)) candidates = candidates.Where(x => x.Row.Equals(row, StringComparison.OrdinalIgnoreCase));
+        OpenHistoryPath(candidates.OrderByDescending(x => File.GetLastWriteTimeUtc(x.Path)).Select(x => x.Path).FirstOrDefault(), trySpreadsheet, $"history for {testcase} / {environment}");
+    }
+    private void OpenLatestHistoryForInstance(InstanceInfo item, bool trySpreadsheet)
+    {
+        _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item);
+        var path = ArtifactCatalog.History(item).OrderByDescending(x => File.GetLastWriteTimeUtc(x.Path)).Select(x => x.Path).FirstOrDefault();
+        OpenHistoryPath(path, trySpreadsheet, "latest history");
+    }
+    private void OpenAggregateHistoryForInstance(InstanceInfo item, string result, bool trySpreadsheet)
+    {
+        _selectedInstance = item; _instanceList.SelectedItem = item; ShowDetails(item);
+        var candidates = FindHistoryFiles(item).Where(x => Path.GetFileName(x).StartsWith("Execution_History_", StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(item.CurrentRunId)) candidates = candidates.Where(x => Path.GetFileName(x).Contains(item.CurrentRunId, StringComparison.OrdinalIgnoreCase));
+        if (!result.Equals("All", StringComparison.OrdinalIgnoreCase)) candidates = candidates.Where(x => FindHistoryResult(x).Equals(result, StringComparison.OrdinalIgnoreCase));
+        OpenHistoryPath(candidates.OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault(), trySpreadsheet, "aggregate history");
+    }
+    private void OpenHistoryPath(string? path, bool trySpreadsheet, string description)
+    {
+        if (path is null)
+        {
+            _details.Text = $"No {description} workbook was found.";
+            UiLog($"Open {description} ignored. reason=file-not-found");
+            return;
+        }
+        UiLog($"Opening {description}. path={path}; method={(trySpreadsheet ? "try-spreadsheet" : "default-excel")}");
+        if (trySpreadsheet) LaunchSpreadsheetProcess(path, description);
+        else OpenExcelFile(path, description);
+    }
+    private static string[] FindHistoryFiles(InstanceInfo item) => Directory.Exists(item.HistoryFolder)
+        ? Directory.GetFiles(item.HistoryFolder, "*.xlsx", SearchOption.AllDirectories).Where(x => !Path.GetFileName(x).StartsWith("~$", StringComparison.OrdinalIgnoreCase)).ToArray()
+        : [];
+    private static string FindHistoryResult(string path)
+    {
+        var parts = path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+        return parts.LastOrDefault(x => x.Equals("passed", StringComparison.OrdinalIgnoreCase) || x.Equals("failed", StringComparison.OrdinalIgnoreCase) || x.Equals("cancelled", StringComparison.OrdinalIgnoreCase)) ?? "unknown";
+    }
+    private static string FindHistoryEnvironment(string path, InstanceInfo item)
+    {
+        var parts = path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var environment in item.EnvironmentOptions.OrderByDescending(x => x.Length))
+            if (parts.Any(x => x.Equals(environment, StringComparison.OrdinalIgnoreCase))) return string.IsNullOrWhiteSpace(environment) ? "default" : environment;
+        var resultIndex = Array.FindIndex(parts, x => x.Equals("passed", StringComparison.OrdinalIgnoreCase) || x.Equals("failed", StringComparison.OrdinalIgnoreCase) || x.Equals("cancelled", StringComparison.OrdinalIgnoreCase));
+        return resultIndex > 0 ? parts[resultIndex - 1] : "default";
+    }
+    private static string FindHistoryTestcase(string path)
+    {
+        var name = Path.GetFileNameWithoutExtension(path); var marker = name.IndexOf("_Row", StringComparison.OrdinalIgnoreCase);
+        return marker > 0 ? name[..marker] : name;
+    }
+    private static string FindHistoryRow(string path)
+    {
+        var name = Path.GetFileNameWithoutExtension(path); var marker = name.IndexOf("_Row", StringComparison.OrdinalIgnoreCase);
+        if (marker < 0) return "";
+        var end = name.IndexOf('_', marker + 4);
+        return end > marker ? name[marker..end] : name[marker..];
     }
 
     private void SaveWizardStep(InstanceInfo item, WizardStepDraft step)
@@ -999,19 +1088,27 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var path = FindInternalLogs(_selectedInstance)
-            .Where(candidate => FindTestcaseLabel(candidate, _selectedInstance).Equals(testcase, StringComparison.OrdinalIgnoreCase))
-            .Where(candidate => FindEnvironmentLabel(candidate, _selectedInstance).Equals(environment, StringComparison.OrdinalIgnoreCase))
+        OpenInternalLogForSelection(_selectedInstance, testcase, environment, "All", "Latest run");
+    }
+
+    private void OpenInternalLogForSelection(InstanceInfo item, string testcase, string environment, string result, string run)
+    {
+        var candidates = FindInternalLogs(item)
+            .Where(candidate => FindTestcaseLabel(candidate, item).Equals(testcase, StringComparison.OrdinalIgnoreCase))
+            .Where(candidate => FindEnvironmentLabel(candidate, item).Equals(environment, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(result) && !result.Equals("All", StringComparison.OrdinalIgnoreCase))
+            candidates = candidates.Where(candidate => Path.GetFileName(candidate).Contains($"_{result.ToLowerInvariant()}_", StringComparison.OrdinalIgnoreCase));
+        var path = candidates
             .OrderByDescending(File.GetLastWriteTimeUtc)
             .FirstOrDefault();
         if (path is null)
         {
-            _details.Text = $"No internal log exists for testcase '{testcase}' and environment '{environment}' for the current run.";
-            UiLog($"Open selected internal log ignored. instance={_selectedInstance.Name}; testcase={testcase}; environment={environment}; reason=file-not-found");
+            _details.Text = $"No internal log exists for testcase '{testcase}' and environment '{environment}' for {run.ToLowerInvariant()}.";
+            UiLog($"Open selected internal log ignored. instance={item.Name}; testcase={testcase}; environment={environment}; result={result}; run={run}; reason=file-not-found");
             return;
         }
 
-        UiLog($"Opening selected internal log. instance={_selectedInstance.Name}; testcase={testcase}; environment={environment}; path={path}");
+        UiLog($"Opening selected internal log. instance={item.Name}; testcase={testcase}; environment={environment}; result={result}; run={run}; path={path}");
         OpenFile(path, $"internal log ({testcase}, {environment})");
     }
 

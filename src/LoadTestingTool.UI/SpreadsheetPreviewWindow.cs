@@ -108,6 +108,7 @@ public sealed class SpreadsheetPreviewWindow : Window
                         view.OriginalStyles[key] = new SheetView.CellStyle { Bold = style.Bold, Italic = style.Italic, TextColor = style.TextColor, Highlight = style.Highlight };
                     }
                 }
+                tab.Header = BuildSheetTabHeader(view);
                 _sheets[worksheet.Name] = view;
                 _tabs.Items.Add(tab);
             }
@@ -153,22 +154,11 @@ public sealed class SpreadsheetPreviewWindow : Window
             DashboardStyle.Action("Bold", () => ApplyTypeface(FontWeight.Bold)),
             DashboardStyle.Action("Italic", () => ApplyTypeface(FontWeight.Normal)),
             _textColor, _highlightColor,
-            DashboardStyle.Action("Copy", () => ApplyFormatCommand("Copied", g => g.Copy())),
-            DashboardStyle.Action("Cut", () => { var g = ActiveGrid(); if (g is not null) ApplyDataCommand(g, x => x.Cut()); }),
-            DashboardStyle.Action("Paste", () => { var g = ActiveGrid(); if (g is not null) _ = PasteAndSync(g); }),
             DashboardStyle.Action("Undo", () => ApplyFormatCommand("Undo", g => g.Undo())),
             DashboardStyle.Action("Redo", () => ApplyFormatCommand("Redo", g => g.Redo())),
-            DashboardStyle.Action("Insert row", () => ApplyStructuralCommand("Inserted row", true, 1)),
-            DashboardStyle.Action("Delete row", () => ApplyStructuralCommand("Deleted row", true, -1)),
-            DashboardStyle.Action("Insert column", () => ApplyStructuralCommand("Inserted column", false, 1)),
-            DashboardStyle.Action("Delete column", () => ApplyStructuralCommand("Deleted column", false, -1)),
-            DashboardStyle.Action("Auto-fit width", AutoFitSelectedColumns),
-            DashboardStyle.Action("Auto-fit height", AutoFitSelectedRows),
+            DashboardStyle.Action("Auto-fit all columns", AutoFitSelectedColumns),
             DashboardStyle.Action("Reset format", ResetSelectedFormat),
-            DashboardStyle.Text("Sheets", 10, false, DashboardStyle.Muted),
-            DashboardStyle.Action("Add sheet", AddSheet),
-            DashboardStyle.Action("Remove sheet", RemoveSheet),
-            DashboardStyle.Action("Rename sheet", RenameSheet)
+            DashboardStyle.Text("Use right-click menus for cell, row, and column operations.", 10, false, DashboardStyle.Muted)
         }};
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 6, Children =
         {
@@ -181,7 +171,11 @@ public sealed class SpreadsheetPreviewWindow : Window
         root.Children.Add(heading);
         Grid.SetRow(filterBar, 1); root.Children.Add(filterBar);
         Grid.SetRow(formatBar, 2); root.Children.Add(formatBar);
-        Grid.SetRow(_tabs, 3); root.Children.Add(_tabs);
+        var tabsBar = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        tabsBar.Children.Add(_tabs);
+        var addSheet = DashboardStyle.Action("+  Add sheet", AddSheet, "primary"); addSheet.Margin = new Thickness(6, 0, 0, 0); addSheet.MinWidth = 110;
+        Grid.SetColumn(addSheet, 1); tabsBar.Children.Add(addSheet);
+        Grid.SetRow(tabsBar, 3); root.Children.Add(tabsBar);
         Grid.SetRow(_status, 4); root.Children.Add(_status);
         Grid.SetRow(buttons, 5); root.Children.Add(buttons);
         Content = new Grid { Children = { root, _suggestionPopup } };
@@ -203,17 +197,29 @@ public sealed class SpreadsheetPreviewWindow : Window
         if (_sheets.Values.Any(HasChanges) || _removedSheetNames.Count > 0)
         {
             var dialog = new Window { Title = "Reload workbook", Width = 500, Height = 190, WindowStartupLocation = WindowStartupLocation.CenterOwner };
-            var answer = new TaskCompletionSource<bool>();
-            var cancel = DashboardStyle.Action("Cancel", () => { answer.TrySetResult(false); dialog.Close(); });
-            var reload = DashboardStyle.Action("Reload and discard", () => { answer.TrySetResult(true); dialog.Close(); }, "primary");
+            var cancel = DashboardStyle.Action("Cancel", () => dialog.Close(false));
+            var reload = DashboardStyle.Action("Reload and discard", () => dialog.Close(true), "primary");
             dialog.Content = new StackPanel { Margin = new Thickness(18), Spacing = 10, Children = { DashboardStyle.Text("Unsaved changes will be discarded.", 15, true), DashboardStyle.Text("Reload the complete workbook from disk?", 12, false, DashboardStyle.Muted), new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { cancel, reload } } } };
-            dialog.Show(this);
-            if (!await answer.Task) return;
+            if (await dialog.ShowDialog<bool>(this) != true) return;
         }
         var owner = Owner;
-        Close();
         var replacement = new SpreadsheetPreviewWindow(_sourcePath, _log);
-        if (owner is Window windowOwner) replacement.Show(windowOwner); else replacement.Show();
+        if (owner is Window windowOwner)
+        {
+            replacement.Show(windowOwner);
+            Close();
+        }
+        else if (Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            desktop.MainWindow = replacement;
+            replacement.Show();
+            Close();
+        }
+        else
+        {
+            replacement.Show();
+            Close();
+        }
         _log?.Invoke($"Spreadsheet workbook reloaded. workbook={_sourcePath}");
     }
 
@@ -435,23 +441,43 @@ public sealed class SpreadsheetPreviewWindow : Window
     private ContextMenu BuildGridMenu(Spreadsheet grid)
     {
         var menu = new ContextMenu();
-        foreach (var item in new Control[]
+        void RefreshMenu()
         {
-            Menu("Copy", () => grid.Copy()), Menu("Cut", () => ApplyDataCommand(grid, g => g.Cut())), Menu("Paste", () => _ = PasteAndSync(grid)),
-            new Separator(),
-            Menu("Bold", () => ApplyFormatCommand("Bold", g => { g.SetTypeface(new Typeface("Arial", FontStyle.Normal, FontWeight.Bold)); CaptureSelectionStyle(g, bold: true); })),
-            Menu("Italic", () => ApplyFormatCommand("Italic", g => { g.SetTypeface(new Typeface("Arial", FontStyle.Italic, FontWeight.Normal)); CaptureSelectionStyle(g, italic: true); })),
-            Menu("Text color: yellow", () => ApplyFormatCommand("Text color", g => { g.SetForeground(Brushes.Yellow); CaptureSelectionStyle(g, textColor: "#FFFF00"); })),
-            Menu("Highlight selection", () => ApplyFormatCommand("Highlight", g => { g.SelectionAccent = new SolidColorBrush(Color.Parse("#3B6EA8")); CaptureSelectionStyle(g, highlight: "#3B6EA8"); })),
-            Menu("Reset format", ResetSelectedFormat),
-            new Separator(),
-            Menu("Insert row", () => ApplyStructuralCommand("Inserted row", true, 1)), Menu("Delete row", () => ApplyStructuralCommand("Deleted row", true, -1)),
-            Menu("Insert column", () => ApplyStructuralCommand("Inserted column", false, 1)), Menu("Delete column", () => ApplyStructuralCommand("Deleted column", false, -1)),
-            Menu("Auto-fit width", AutoFitSelectedColumns), Menu("Auto-fit height", AutoFitSelectedRows),
-            Menu("Undo", () => grid.Undo()), Menu("Redo", () => grid.Redo())
-        }) menu.Items.Add(item);
+            menu.Items.Clear();
+            var hasSelection = grid.Selection.Count > 0;
+            var selection = hasSelection ? grid.Selection[0] : default;
+            var fullRows = hasSelection && selection.Width > 256;
+            var fullColumns = hasSelection && selection.Height > 256;
+            var items = fullRows ? RowMenu(grid) : fullColumns ? ColumnMenu(grid) : CellMenu(grid);
+            foreach (var item in items) menu.Items.Add(item);
+        }
+        menu.Opening += (_, _) => RefreshMenu();
+        RefreshMenu();
         return menu;
     }
+
+    private Control[] CellMenu(Spreadsheet grid) =>
+    [
+        Menu("Copy", () => grid.Copy()), Menu("Cut", () => ApplyDataCommand(grid, g => g.Cut())), Menu("Paste", () => _ = PasteAndSync(grid)),
+        new Separator(), Menu("Bold", () => ApplyFormatCommand("Bold", g => { g.SetTypeface(new Typeface("Arial", FontStyle.Normal, FontWeight.Bold)); CaptureSelectionStyle(g, bold: true); })),
+        Menu("Italic", () => ApplyFormatCommand("Italic", g => { g.SetTypeface(new Typeface("Arial", FontStyle.Italic, FontWeight.Normal)); CaptureSelectionStyle(g, italic: true); })),
+        Menu("Reset format", ResetSelectedFormat), new Separator(), Menu("Undo", () => grid.Undo()), Menu("Redo", () => grid.Redo())
+    ];
+
+    private Control[] RowMenu(Spreadsheet grid) =>
+    [
+        Menu("Insert empty row", () => ApplyStructuralCommand("Inserted empty row", true, 1)),
+        Menu("Duplicate row", () => DuplicateSelection(true)),
+        Menu("Delete row", () => ApplyStructuralCommand("Deleted row", true, -1))
+    ];
+
+    private Control[] ColumnMenu(Spreadsheet grid) =>
+    [
+        Menu("Insert empty column", () => ApplyStructuralCommand("Inserted empty column", false, 1)),
+        Menu("Duplicate column", () => DuplicateSelection(false)),
+        Menu("Delete column", () => ApplyStructuralCommand("Deleted column", false, -1)),
+        new Separator(), Menu("Auto-fit all columns", AutoFitSelectedColumns)
+    ];
 
     private static MenuItem Menu(string text, Action action)
     {
@@ -528,6 +554,36 @@ public sealed class SpreadsheetPreviewWindow : Window
         }
     }
 
+    private void DuplicateSelection(bool rows)
+    {
+        var view = SelectedSheet();
+        var grid = view?.Grid;
+        if (view is null || grid is null || grid.Selection.Count == 0) return;
+        try
+        {
+            if (!view.StructureDirty) SyncView(view);
+            var range = grid.Selection[0];
+            var start = rows ? OriginalRowAt(view, range.Top) : OriginalColumnAt(view, range.Left);
+            var count = rows ? Math.Max(1, Math.Min(range.Height, Math.Max(1, view.RowCount - start))) : Math.Max(1, Math.Min(range.Width, Math.Max(1, view.ColumnCount - start)));
+            var snapshot = view.Cells.Where(x => rows ? x.Key.Row >= start && x.Key.Row < start + count : x.Key.Col >= start && x.Key.Col < start + count).ToArray();
+            if (rows)
+            {
+                ShiftRows(view, start + count, count); view.RowCount += count;
+                foreach (var cell in snapshot) view.Cells[(cell.Key.Col, cell.Key.Row + count)] = cell.Value;
+            }
+            else
+            {
+                ShiftColumns(view, start + count, count); view.ColumnCount += count;
+                foreach (var cell in snapshot) view.Cells[(cell.Key.Col + count, cell.Key.Row)] = cell.Value;
+            }
+            view.StructureDirty = true;
+            RefreshFilteredViews(view, syncExisting: false);
+            _status.Foreground = DashboardStyle.Green;
+            _status.Text = $"Duplicated {(rows ? "row" : "column")} selection. Changes will be written when saved.";
+        }
+        catch (Exception ex) { _status.Text = $"Duplicate failed: {ex.Message}"; _status.Foreground = DashboardStyle.Red; }
+    }
+
     private void ApplyStructuralCommand(string message, bool rows, int direction)
     {
         var view = _sheets.Values.ElementAtOrDefault(_tabs.SelectedIndex);
@@ -573,22 +629,17 @@ public sealed class SpreadsheetPreviewWindow : Window
     {
         var view = SelectedSheet();
         var grid = view?.Grid;
-        if (view is null || grid is null || grid.Selection.Count == 0) return;
+        if (view is null || grid is null) return;
         try
         {
             var widths = new Dictionary<int, double>();
-            foreach (var range in grid.Selection)
+            for (var column = 0; column < view.ColumnCount; column++)
             {
-                var left = Math.Clamp(range.Left, 0, Math.Max(0, view.ColumnCount - 1));
-                var right = Math.Clamp(range.Right, left, Math.Max(0, view.ColumnCount - 1));
-                for (var column = left; column <= right; column++)
-                {
-                    var longest = Enumerable.Range(0, Math.Min(view.RowCount, 10000)).Select(row => Cell(view.Cells, column, row).Length).DefaultIfEmpty(0).Max();
-                    widths[column] = Math.Clamp(24d + longest * 7.2d, 48d, 640d);
-                }
+                var longest = Enumerable.Range(0, Math.Min(view.RowCount, 10000)).Select(row => Cell(view.Cells, column, row).Length).DefaultIfEmpty(0).Max();
+                widths[column] = Math.Clamp(24d + longest * 7.2d, 48d, 640d);
             }
             if (widths.Count > 0) grid.SetWidth(widths);
-            _status.Text = $"Auto-fit {widths.Count} column(s)."; _status.Foreground = DashboardStyle.Green;
+            _status.Text = $"Auto-fit all {widths.Count} column(s)."; _status.Foreground = DashboardStyle.Green;
         }
         catch (Exception ex) { _status.Text = $"Auto-fit columns failed: {ex.Message}"; _status.Foreground = DashboardStyle.Red; Log($"Spreadsheet auto-fit columns failed. error={ex}"); }
     }
@@ -992,14 +1043,24 @@ public sealed class SpreadsheetPreviewWindow : Window
 
     private SheetView? SelectedSheet() => _sheets.Values.ElementAtOrDefault(_tabs.SelectedIndex);
 
+    private Control BuildSheetTabHeader(SheetView view)
+    {
+        var name = DashboardStyle.Text(view.Name, 12, false);
+        name.PointerPressed += (_, e) => { if (e.ClickCount >= 2) RenameSheet(view); };
+        var remove = DashboardStyle.Action("−", () => RemoveSheet(view));
+        remove.Padding = new Thickness(4, 0); remove.Margin = new Thickness(4, 0, 0, 0); remove.MinWidth = 22;
+        return new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, Children = { name, remove } };
+    }
+
     private void AddSheet()
     {
         var number = 1;
         string name;
         do name = $"Sheet{number++}"; while (_sheets.ContainsKey(name));
 
-        var tab = new TabItem { Header = name };
+        var tab = new TabItem { Header = "" };
         var view = new SheetView { Name = name, Cells = [], OriginalCells = [], Tab = tab, RowCount = 1, ColumnCount = 1, OriginalRowCount = 0, OriginalColumnCount = 0 };
+        tab.Header = BuildSheetTabHeader(view);
         _sheets.Add(name, view);
         _tabs.Items.Add(tab);
         _tabs.SelectedIndex = _tabs.ItemCount - 1;
@@ -1008,9 +1069,10 @@ public sealed class SpreadsheetPreviewWindow : Window
         _status.Text = $"Added sheet '{name}'. Press Ctrl+S or click Save workbook to write it.";
     }
 
-    private void RemoveSheet()
+    private void RemoveSheet() => RemoveSheet(SelectedSheet());
+
+    private void RemoveSheet(SheetView? view)
     {
-        var view = SelectedSheet();
         if (view is null) return;
         if (_sheets.Count <= 1)
         {
@@ -1029,9 +1091,10 @@ public sealed class SpreadsheetPreviewWindow : Window
         _status.Text = $"Removed sheet '{view.Name}'. Press Ctrl+S or click Save workbook to write it.";
     }
 
-    private void RenameSheet()
+    private void RenameSheet() => RenameSheet(SelectedSheet());
+
+    private void RenameSheet(SheetView? view)
     {
-        var view = SelectedSheet();
         if (view is null) return;
         var input = new TextBox { Text = view.Name, Width = 300 };
         var dialog = new Window { Title = "Rename sheet", Width = 440, Height = 190, WindowStartupLocation = WindowStartupLocation.CenterOwner };
@@ -1044,7 +1107,7 @@ public sealed class SpreadsheetPreviewWindow : Window
             var oldName = view.Name;
             _sheets.Remove(oldName);
             view.Name = name;
-            view.Tab.Header = name;
+            view.Tab.Header = BuildSheetTabHeader(view);
             _sheets.Add(name, view);
             dialog.Close();
             RefreshFilteredViews(syncExisting: false);

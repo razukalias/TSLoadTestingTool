@@ -108,7 +108,7 @@ internal static class Program
                 try
                 {
                     var historyWriter = new HistoryWriter(config);
-                    historyFiles = historyWriter.WritePerTestcase(overall, workbook).ToArray();
+                    historyFiles = config.GenerateRowHistory ? historyWriter.WritePerTestcase(overall, workbook).ToArray() : Array.Empty<string>();
                     if (config.GenerateAggregateHistory)
                     {
                         var aggregateFolder = Path.Combine(config.HistoryFolder, "_aggregate", overallResult);
@@ -297,6 +297,7 @@ internal static class Program
         config.ResultsFolder = ResolveCentralPath(instanceFolder, instance.ResultsFolder, config.ResultsFolder);
         if (instance.GenerateResults.HasValue) config.GenerateResults = instance.GenerateResults.Value;
         if (instance.GenerateAggregateHistory.HasValue) config.GenerateAggregateHistory = instance.GenerateAggregateHistory.Value;
+        if (instance.GenerateRowHistory.HasValue) config.GenerateRowHistory = instance.GenerateRowHistory.Value;
         if (!string.IsNullOrWhiteSpace(instance.TestcaseSelection)) config.TestcaseSelection = instance.TestcaseSelection;
         if (!string.IsNullOrWhiteSpace(instance.StepSelection)) config.StepSelection = instance.StepSelection;
         if (!string.IsNullOrWhiteSpace(instance.EnvironmentSelection)) config.EnvironmentSelection = instance.EnvironmentSelection;

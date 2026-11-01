@@ -32,6 +32,8 @@ public sealed class UiInstanceDefinition
     public string? ExecutionMode { get; set; }
     public bool? RunScenariosInParallel { get; set; }
     public bool? GenerateResults { get; set; }
+    public bool? GenerateAggregateHistory { get; set; }
+    public bool? GenerateRowHistory { get; set; }
     public bool? InternalLoggingEnabled { get; set; }
     public bool? SaveRequestBodyToHistory { get; set; }
     public bool? SaveResponseBodyToHistory { get; set; }
@@ -46,7 +48,14 @@ public sealed class App : Application
     public override void OnFrameworkInitializationCompleted()
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-            desktop.MainWindow = new MainWindow();
+        {
+            var args = desktop.Args ?? Array.Empty<string>();
+            var editorIndex = Array.FindIndex(args, x => x.Equals("--dataset-editor", StringComparison.OrdinalIgnoreCase));
+            if (editorIndex >= 0 && editorIndex + 1 < args.Length)
+                desktop.MainWindow = new SpreadsheetPreviewWindow(args[editorIndex + 1]);
+            else
+                desktop.MainWindow = new MainWindow();
+        }
         base.OnFrameworkInitializationCompleted();
     }
 }

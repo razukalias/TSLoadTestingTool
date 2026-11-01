@@ -17,6 +17,8 @@ public sealed class InstanceConfigurationWindow : Window
     private readonly CheckBox _saveRequestBody;
     private readonly CheckBox _saveResponseBody;
     private readonly CheckBox _maskSensitive;
+    private readonly CheckBox _aggregateHistory;
+    private readonly CheckBox _rowHistory;
     private readonly Dictionary<string, CheckBox> _historySheets = new(StringComparer.OrdinalIgnoreCase);
 
     public InstanceConfigurationWindow(InstanceInfo item, Action<InstanceInfo, RunSelectionResult> saveSelection, Action<InstanceInfo, string?, string?, string?, string?, bool?, string?, bool?> saveExecution, Action<InstanceInfo, bool> saveReporting)
@@ -37,6 +39,8 @@ public sealed class InstanceConfigurationWindow : Window
         _saveRequestBody = new CheckBox { Content = "Save request bodies to History", IsChecked = item.SaveRequestBodyToHistory };
         _saveResponseBody = new CheckBox { Content = "Save response bodies to History", IsChecked = item.SaveResponseBodyToHistory };
         _maskSensitive = new CheckBox { Content = "Mask sensitive data", IsChecked = item.MaskSensitiveData };
+        _aggregateHistory = new CheckBox { Content = "Enable aggregate history", IsChecked = item.GenerateAggregateHistory };
+        _rowHistory = new CheckBox { Content = "Enable row history", IsChecked = item.GenerateRowHistory };
         _selectionEditor = new RunSelectionEditor(item);
 
         var tabs = new TabControl
@@ -91,6 +95,8 @@ public sealed class InstanceConfigurationWindow : Window
         var panel = new StackPanel { Spacing = 8, Margin = new Thickness(8) };
         panel.Children.Add(DashboardStyle.Text("History reports", 18, true));
         panel.Children.Add(DashboardStyle.Text("Select the worksheets that should be written to each Excel History workbook.", 12, false, DashboardStyle.Muted));
+        panel.Children.Add(_aggregateHistory);
+        panel.Children.Add(_rowHistory);
         foreach (var name in new[] { "RunSummary", "Metrics", "TestcaseSummary", "RequestHistory", "RuntimeReferenceErrors", "AssertionHistory", "Variables", "CorrelationHistory", "DataEngineRequestRows", "DataEngineConfig" })
         {
             var enabled = !_item.HistorySheets.TryGetValue(name, out var value) || value;
@@ -139,6 +145,8 @@ public sealed class InstanceConfigurationWindow : Window
         _item.SaveRequestBodyToHistory = _saveRequestBody.IsChecked == true;
         _item.SaveResponseBodyToHistory = _saveResponseBody.IsChecked == true;
         _item.MaskSensitiveData = _maskSensitive.IsChecked == true;
+        _item.GenerateAggregateHistory = _aggregateHistory.IsChecked == true;
+        _item.GenerateRowHistory = _rowHistory.IsChecked == true;
         foreach (var pair in _historySheets) _item.HistorySheets[pair.Key] = pair.Value.IsChecked == true;
         _saveExecution(_item, selection!.Threads.ToString(), selection.Iterations.ToString(), selection.ThreadIntervalMs.ToString(), selection.IterationIntervalMs.ToString(), _item.GenerateResults, selection.ExecutionMode, selection.ScenariosParallel);
         _saveReporting(_item, true);

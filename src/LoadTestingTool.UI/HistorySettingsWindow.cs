@@ -14,6 +14,8 @@ public sealed class HistorySettingsWindow : Window
     private readonly string _instanceName;
     private readonly string _settingsFile;
     private readonly Dictionary<string, CheckBox> _checks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly CheckBox _aggregateHistory = new() { Content = "Enable aggregate history", Margin = new Thickness(4, 2) };
+    private readonly CheckBox _rowHistory = new() { Content = "Enable row history", Margin = new Thickness(4, 2) };
     private readonly TextBlock _status = DashboardStyle.Text("Changes are saved to the instance appsettings.json.", 12, false, DashboardStyle.Muted);
 
     public HistorySettingsWindow(string instanceFolder, string instanceName, string settingsFile)
@@ -38,7 +40,9 @@ public sealed class HistorySettingsWindow : Window
             }
         };
 
-        var sheetPanel = new StackPanel { Spacing = 4 };
+        var sheetPanel = new StackPanel { Spacing = 4, Children = { _aggregateHistory, _rowHistory, new Border { Height = 1, Background = DashboardStyle.Line, Margin = new Thickness(0, 6) } } };
+        _aggregateHistory.IsChecked = ReadBooleanSetting("GenerateAggregateHistory", false);
+        _rowHistory.IsChecked = ReadBooleanSetting("GenerateRowHistory", true);
         foreach (var name in UiHistorySheetCatalog.Names)
         {
             var check = new CheckBox
@@ -90,6 +94,25 @@ public sealed class HistorySettingsWindow : Window
         catch { return true; }
     }
 
+    private bool ReadBooleanSetting(string name, bool defaultValue)
+    {
+        try
+        {
+            if (File.Exists(_settingsFile))
+            {
+                var central = JsonNode.Parse(File.ReadAllText(_settingsFile));
+                var centralValue = central?["Instances"]?[_instanceName]?[name];
+                if (centralValue is not null) return centralValue.GetValue<bool>();
+            }
+            var path = Path.Combine(_instanceFolder, "appsettings.json");
+            if (!File.Exists(path)) return defaultValue;
+            var node = JsonNode.Parse(File.ReadAllText(path));
+            var value = node?[name];
+            return value is null ? defaultValue : value.GetValue<bool>();
+        }
+        catch { return defaultValue; }
+    }
+
     private void SetAll(bool value)
     {
         foreach (var check in _checks.Values) check.IsChecked = value;
@@ -132,15 +155,24 @@ public sealed class HistorySettingsWindow : Window
             root ??= new JsonObject();
             var sheets = new JsonObject();
             foreach (var name in UiHistorySheetCatalog.Names) sheets[name] = _checks[name].IsChecked == true;
+            var aggregateHistory = _aggregateHistory.IsChecked == true;
+            var rowHistory = _rowHistory.IsChecked == true;
             if (Path.GetFullPath(path).Equals(Path.GetFullPath(_settingsFile), StringComparison.OrdinalIgnoreCase))
             {
                 var instances = root["Instances"] as JsonObject ?? new JsonObject();
                 var instance = instances[_instanceName] as JsonObject ?? new JsonObject();
                 instance["HistorySheets"] = sheets;
+                instance["GenerateAggregateHistory"] = aggregateHistory;
+                instance["GenerateRowHistory"] = rowHistory;
                 instances[_instanceName] = instance;
                 root["Instances"] = instances;
             }
-            else root["HistorySheets"] = sheets;
+            else
+            {
+                root["HistorySheets"] = sheets;
+                root["GenerateAggregateHistory"] = aggregateHistory;
+                root["GenerateRowHistory"] = rowHistory;
+            }
             var options = new JsonSerializerOptions { WriteIndented = true };
             File.WriteAllText(path, root.ToJsonString(options) + Environment.NewLine);
             _status.Foreground = DashboardStyle.Green;
