@@ -4,6 +4,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace LoadTestingTool.UI;
 
@@ -23,7 +24,6 @@ internal sealed class TestStepWizardWindow : Window
     private readonly TextBox _template = Field("request.json");
     private readonly ComboBox _contentType = new() { Width = 240, ItemsSource = new[] { "application/json", "application/xml", "text/plain", "application/graphql", "application/octet-stream" }, SelectedIndex = 0 };
     private readonly TextBox _expectedStatus = Field("200");
-    private readonly TextBox _environments = Field("local");
     private readonly TextBox _graphqlQuery = Field("query Example { field }");
     private readonly TextBox _graphqlOperation = Field("Example");
     private readonly TextBox _graphqlVariables = Field("{}");
@@ -58,7 +58,7 @@ internal sealed class TestStepWizardWindow : Window
         _stepType.SelectionChanged += (_, _) => UpdateTypeFields();
         _stepConfig.TextChanged += (_, _) => UpdatePreview();
         var common = new Grid { ColumnDefinitions = new ColumnDefinitions("170,*"), RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto") };
-        AddRow(common, 0, "Testcase index", _testcaseIndex); AddRow(common, 1, "Testcase", _testcase); AddRow(common, 2, "Step name", _stepName); AddRow(common, 3, "Step type", _stepType); AddRow(common, 4, "Stage", _stage); AddRow(common, 5, "Timeout (seconds)", _timeout); AddRow(common, 6, "Wait (milliseconds)", _waitMs); AddRow(common, 7, "Environments", _environments); AddRow(common, 8, "Enabled", _enabled); AddRow(common, 9, "Assertions", _assertEnabled); AddRow(common, 10, "Assert mode", _assertOnlyResponse); AddRow(common, 11, "Failure handling", _stopOnFailure);
+        AddRow(common, 0, "Testcase index", _testcaseIndex); AddRow(common, 1, "Testcase", _testcase); AddRow(common, 2, "Step name", _stepName); AddRow(common, 3, "Step type", _stepType); AddRow(common, 4, "Stage", _stage); AddRow(common, 5, "Timeout (seconds)", _timeout); AddRow(common, 6, "Wait (milliseconds)", _waitMs); AddRow(common, 7, "Enabled", _enabled); AddRow(common, 8, "Assertions", _assertEnabled); AddRow(common, 9, "Assert mode", _assertOnlyResponse); AddRow(common, 10, "Failure handling", _stopOnFailure);
         _httpFields.Children.Add(Labeled("Target URL", _targetUrl));
         _httpFields.Children.Add(Labeled("HTTP verb", _verb));
         _httpFields.Children.Add(Labeled("Content type", _contentType));
@@ -82,7 +82,7 @@ internal sealed class TestStepWizardWindow : Window
     private static void AddRow(Grid grid, int row, string label, Control control) { grid.Children.Add(DashboardStyle.Text(label, 12, false, DashboardStyle.Muted)); Grid.SetRow(grid.Children[^1], row); grid.Children.Add(control); Grid.SetRow(control, row); Grid.SetColumn(control, 1); }
     private void Load(WizardStepDraft existing)
     {
-        Set(_testcaseIndex, existing.Get("testcaseindex")); Set(_testcase, existing.Get("testcase")); Set(_stepName, existing.Get("stepname")); Set(_timeout, existing.Get("timeout", "30")); Set(_waitMs, existing.Get("wait", "0")); Set(_environments, existing.Get("environments")); Set(_targetUrl, existing.Get("targeturl")); _verb.SelectedItem = existing.Get("verb", "POST"); Set(_template, existing.Get("templetsource")); _contentType.SelectedItem = existing.Get("contenttype", "application/json"); Set(_expectedStatus, existing.Get("expectedstatus")); _assertEnabled.IsChecked = !existing.Get("assert", "true").Equals("false", StringComparison.OrdinalIgnoreCase); _assertOnlyResponse.IsChecked = existing.Get("assertonlyresponse", "false").Equals("true", StringComparison.OrdinalIgnoreCase); _stopOnFailure.IsChecked = !existing.Get("stoponfailure", "true").Equals("false", StringComparison.OrdinalIgnoreCase); _enabled.IsChecked = !existing.Get("enabled", "true").Equals("false", StringComparison.OrdinalIgnoreCase); _stage.SelectedItem = existing.Get("stage", "Test"); _stepType.SelectedItem = existing.Get("steptype", "HTTP"); _stepConfig.Text = existing.Get("stepconfig", "{}");
+        Set(_testcaseIndex, existing.Get("testcaseindex")); Set(_testcase, existing.Get("testcase")); Set(_stepName, existing.Get("stepname")); Set(_timeout, existing.Get("timeout", "30")); Set(_waitMs, existing.Get("wait", "0")); Set(_targetUrl, existing.Get("targeturl")); _verb.SelectedItem = existing.Get("verb", "POST"); Set(_template, existing.Get("templetsource")); _contentType.SelectedItem = existing.Get("contenttype", "application/json"); Set(_expectedStatus, existing.Get("expectedstatus")); _assertEnabled.IsChecked = !existing.Get("assert", "true").Equals("false", StringComparison.OrdinalIgnoreCase); _assertOnlyResponse.IsChecked = existing.Get("assertonlyresponse", "false").Equals("true", StringComparison.OrdinalIgnoreCase); _stopOnFailure.IsChecked = !existing.Get("stoponfailure", "true").Equals("false", StringComparison.OrdinalIgnoreCase); _enabled.IsChecked = !existing.Get("enabled", "true").Equals("false", StringComparison.OrdinalIgnoreCase); _stage.SelectedItem = existing.Get("stage", "Test"); _stepType.SelectedItem = existing.Get("steptype", "HTTP"); _stepConfig.Text = existing.Get("stepconfig", "{}");
     }
     private static void Set(TextBox box, string value) => box.Text = value;
     private void UpdateTypeFields()
@@ -121,7 +121,7 @@ internal sealed class TestStepWizardWindow : Window
     private static object ParseObject(string? text) { try { return JsonDocument.Parse(string.IsNullOrWhiteSpace(text) ? "{}" : text!).RootElement; } catch { return new Dictionary<string, string>(); } }
     private void UpdatePreview()
     {
-        try { _preview.Text = JsonSerializer.Serialize(JsonDocument.Parse(string.IsNullOrWhiteSpace(_stepConfig.Text) ? "{}" : _stepConfig.Text).RootElement, new JsonSerializerOptions { WriteIndented = true }); }
+        try { _preview.Text = JsonSerializer.Serialize(JsonDocument.Parse(NormalizeRuntimeVariables(string.IsNullOrWhiteSpace(_stepConfig.Text) ? "{}" : _stepConfig.Text)).RootElement, new JsonSerializerOptions { WriteIndented = true }); }
         catch { _preview.Text = "Invalid JSON in StepConfig"; }
     }
     private void EditTemplate()
@@ -162,11 +162,13 @@ internal sealed class TestStepWizardWindow : Window
             var templateRoot = _templatesFolder.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
             if (!templatePath.StartsWith(templateRoot, StringComparison.OrdinalIgnoreCase) || !File.Exists(templatePath)) { _error.Text = "Template source does not exist. Use New / edit template first."; return; }
         }
-        try { using var _ = JsonDocument.Parse(string.IsNullOrWhiteSpace(_stepConfig.Text) ? "{}" : _stepConfig.Text); } catch { _error.Text = "StepConfig must contain valid JSON."; return; }
+        try { using var _ = JsonDocument.Parse(NormalizeRuntimeVariables(string.IsNullOrWhiteSpace(_stepConfig.Text) ? "{}" : _stepConfig.Text)); } catch { _error.Text = "StepConfig must contain valid JSON after runtime variables are resolved."; return; }
         var row = new WizardStepDraft(_editRow, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
-            ["testcaseindex"] = index.ToString(), ["testcase"] = _testcase.Text?.Trim() ?? "", ["stepname"] = _stepName.Text?.Trim() ?? "", ["steptype"] = type, ["stage"] = _stage.SelectedItem?.ToString() ?? "Test", ["enabled"] = (_enabled.IsChecked == true).ToString().ToLowerInvariant(), ["timeout"] = timeout.ToString(), ["environments"] = _environments.Text?.Trim() ?? "", ["targeturl"] = _targetUrl.Text?.Trim() ?? "", ["verb"] = (_verb.SelectedItem?.ToString() ?? "POST").ToUpperInvariant(), ["templetsource"] = _template.Text?.Trim() ?? "", ["contenttype"] = (_contentType.SelectedItem?.ToString() ?? "application/json"), ["expectedstatus"] = _expectedStatus.Text?.Trim() ?? "", ["stepconfig"] = string.IsNullOrWhiteSpace(_stepConfig.Text) ? "{}" : _stepConfig.Text!.Trim(), ["stoponfailure"] = (_stopOnFailure.IsChecked == true).ToString().ToLowerInvariant(), ["assert"] = (_assertEnabled.IsChecked == true).ToString().ToLowerInvariant(), ["ignoreempty"] = "false", ["assertonlyresponse"] = (_assertOnlyResponse.IsChecked == true).ToString().ToLowerInvariant(), ["wait"] = int.TryParse(_waitMs.Text, out var wait) ? Math.Max(0, wait).ToString() : "0" });
+            ["testcaseindex"] = index.ToString(), ["testcase"] = _testcase.Text?.Trim() ?? "", ["stepname"] = _stepName.Text?.Trim() ?? "", ["steptype"] = type, ["stage"] = _stage.SelectedItem?.ToString() ?? "Test", ["enabled"] = (_enabled.IsChecked == true).ToString().ToLowerInvariant(), ["timeout"] = timeout.ToString(), ["targeturl"] = _targetUrl.Text?.Trim() ?? "", ["verb"] = (_verb.SelectedItem?.ToString() ?? "POST").ToUpperInvariant(), ["templetsource"] = _template.Text?.Trim() ?? "", ["contenttype"] = (_contentType.SelectedItem?.ToString() ?? "application/json"), ["expectedstatus"] = _expectedStatus.Text?.Trim() ?? "", ["stepconfig"] = string.IsNullOrWhiteSpace(_stepConfig.Text) ? "{}" : _stepConfig.Text!.Trim(), ["stoponfailure"] = (_stopOnFailure.IsChecked == true).ToString().ToLowerInvariant(), ["assert"] = (_assertEnabled.IsChecked == true).ToString().ToLowerInvariant(), ["ignoreempty"] = "false", ["assertonlyresponse"] = (_assertOnlyResponse.IsChecked == true).ToString().ToLowerInvariant(), ["wait"] = int.TryParse(_waitMs.Text, out var wait) ? Math.Max(0, wait).ToString() : "0" });
         _saveStep(row); Close();
     }
+
+    private static string NormalizeRuntimeVariables(string content) => Regex.Replace(content, "(?<![\\\"\\w])_[\\p{L}\\p{N}._-]+_(?![\\\"\\w])", "0");
 }
 
 internal sealed class WizardStepDraft

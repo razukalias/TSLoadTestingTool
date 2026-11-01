@@ -23,11 +23,11 @@ var steps = new[]
 var model = new WorkbookModel { Testcases = [new TestcaseDefinition { TestcaseIndex = 1, Testcase = "First", Steps = steps },
     new TestcaseDefinition { TestcaseIndex = 2, Testcase = "Second", Steps = [new RequestStep { TestcaseIndex = 2, StepName = "Dev", Environments = ["dev"] }] }] };
 var planner = new RunSelectionPlanner();
-var dev = planner.Build(model, [1], null, "dev");
-Check(dev.Count == 1 && dev[0].Testcase.Steps.Select(x => x.StepName).SequenceEqual(new[] { "Shared", "Dev" }), "Environment excludes prod/disabled steps and keeps workbook sequence");
+var dev = planner.Build(model, [1], null, "dev", null, ["dev", "prod"]);
+Check(dev.Count == 1 && dev[0].Testcase.Steps.Select(x => x.StepName).SequenceEqual(new[] { "Prod", "Shared", "Dev" }), "Central environment runs all selected enabled steps in workbook sequence");
 var one = planner.Build(model, [1], "{\"1\":[\"dEv\"]}", "DEV");
 Check(one.Count == 1 && one[0].Testcase.Steps.Count == 1 && one[0].Testcase.Steps[0].StepName == "Dev", "Named step selection is testcase-scoped and case-insensitive");
-Check(planner.Build(model, [1, 2], null, "prod").All(x => x.Testcase.TestcaseIndex == 1), "Testcase with no matching environment is omitted");
+Check(planner.Build(model, [1, 2], null, "prod", null, ["dev", "prod"]).All(x => x.Testcase.Steps.All(s => s.Enabled)), "Central environment does not omit testcases based on workbook tags");
 Check(planner.Build(model, [1], null, "dev,dev").Count == 1, "Duplicate environments do not duplicate runs");
 Reject(() => planner.Build(model, [], null, "dev"), "Empty testcase selection rejected");
 Reject(() => planner.Build(model, [1], "{}", "dev"), "Empty explicit step selection rejected");
@@ -35,7 +35,7 @@ Reject(() => planner.Build(model, [1], "{\"1\":[\"Disabled\"]}", "dev"), "Disabl
 Reject(() => planner.Build(model, [1], "{\"1\":[\"Missing\"]}", "dev"), "Unknown step rejected");
 Reject(() => planner.Build(model, [1, 2], "{\"1\":[\"Dev\"]}", "dev"), "Explicit step JSON must cover all selected testcases");
 Reject(() => planner.Build(model, [1], "{\"2\":[\"Dev\"]}", "dev"), "Unselected testcase step filter rejected");
-Reject(() => planner.Build(model, [1], "{\"1\":[\"Dev\"]}", "prod"), "Incompatible step/environment selection rejected");
+Check(planner.Build(model, [1], "{\"1\":[\"Dev\"]}", "prod", null, ["dev", "prod"]).Single().Testcase.Steps.Single().StepName == "Dev", "Central environment does not reject a step based on workbook tags");
 Reject(() => planner.Build(model, [1], "{\"1\":[\"Dev\"],\"01\":[\"Dev\"]}", "dev"), "Duplicate numeric testcase keys rejected");
 Reject(() => planner.Build(model, [1], "not json", "dev"), "Malformed step JSON rejected");
 var punctuation = new WorkbookModel { Testcases = [new TestcaseDefinition { TestcaseIndex = 1, Steps = [new RequestStep { TestcaseIndex = 1, StepName = "A, B: \"quote\"", Enabled = true }] }] };
@@ -59,7 +59,7 @@ var restored = new RunSelectionDraft(changedCatalog, snapshot!.Testcases, snapsh
 Check(restored.Cases.SetEquals([1]) && restored.Steps[1].SetEquals(["Dev"]) && restored.Environments.SetEquals(["dev"]), "Saved selection does not widen when cases, steps or environments are added");
 var defaultDraft = new RunSelectionDraft([new TestcaseOption(1, "Default", [new("Shared", "File", true, [])])], "0", "", "");
 Check(defaultDraft.TryBuild(out var defaultSelection, out _) && defaultSelection!.EnvironmentsJson == "[\"\"]", "Default environment is explicit in the saved selection");
-Check(planner.Build(model, [1], null, null, "[\"\"]").Single().Testcase.Steps.Single().StepName == "Shared", "Explicit default environment does not expand to tagged environments");
+Check(planner.Build(model, [1], null, null, "[\"\"]").Single().Testcase.Steps.Count == 3, "Explicit default environment runs all selected enabled steps");
 Reject(() => planner.Build(model, [1], null, null, "[]"), "Empty explicit environment array rejected");
 Reject(() => planner.Build(model, [1], null, null, "[null]"), "Invalid explicit environment values rejected");
 var encodedDataIds = DataIdSelectionCodec.Serialize(new[]
@@ -126,9 +126,9 @@ try
     Check(Run("1", "{\"1\":[\"Write dev\"]}", "dev", "only-dev") == 0, "Real runner accepts selected step through ArgumentList");
     Check(File.Exists(Path.Combine(temporary, "out/dev.txt")) && Directory.GetFiles(Path.Combine(temporary, "out")).Length == 1, "Only selected testcase/step executed, no dependency or other environment added");
     Check(Run("1", null, "dev", "all-dev") == 0, "Real runner accepts environment-only selection");
-    Check(File.Exists(Path.Combine(temporary, "out/global.txt")) && !File.Exists(Path.Combine(temporary, "out/prod.txt")), "Real runner excludes prod-tagged steps from dev run");
+    Check(File.Exists(Path.Combine(temporary, "out/global.txt")) && File.Exists(Path.Combine(temporary, "out/prod.txt")), "Real runner ignores workbook environment tags");
     Check(Run("1", "{\"1\":[\"Missing\"]}", "dev", "invalid-step") == 1, "Invalid real-run step fails preflight instead of silently running all");
-    Check(Run("0", null, "prod", "all-prod") == 0 && !File.Exists(Path.Combine(temporary, "out/other-case.txt")), "Environment with no matching steps does not execute unrelated testcase");
+    Check(Run("0", null, "prod", "all-prod") == 0 && File.Exists(Path.Combine(temporary, "out/other-case.txt")), "Central environment does not omit selected testcases based on workbook tags");
     Console.WriteLine($"\nAll {count} regression checks passed.");
 }
 finally { Directory.Delete(temporary, recursive: true); }

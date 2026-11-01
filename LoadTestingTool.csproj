@@ -15,7 +15,6 @@
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.11.0" />
   </ItemGroup>
   <ItemGroup>
-    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
     <Compile Remove="legacy/**/*.cs" />
     <Compile Remove="src/LoadTestingTool.UI/**/*.cs" />
     <Compile Remove="tests/**/*.cs" />

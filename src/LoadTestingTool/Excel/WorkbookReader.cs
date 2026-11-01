@@ -39,7 +39,7 @@ public sealed class WorkbookReader
                 StopOnFailure = Bool(configHeaders, row, "stoponfailure", true), IgnoreEmpty = Bool(configHeaders, row, "ignoreempty", false),
                 AssertEnabled = Bool(configHeaders, row, "assert", Bool(configHeaders, row, "assertenabled", true)),
                 AssertOnlyResponse = Bool(configHeaders, row, "assertonlyresponse", Bool(configHeaders, row, "assertonlyinresponse", false)),
-                Environments = SplitValues(Compile(EnvironmentText(configHeaders, row), workbook, config, compiledCellCache, row.RowNumber())), Headers = ExtractHeaders(configHeaders, row, workbook, config, compiledCellCache)
+                Environments = [], Headers = ExtractHeaders(configHeaders, row, workbook, config, compiledCellCache)
             });
         }
         var duplicate = steps.GroupBy(s => (s.TestcaseIndex, s.StepName), StepTupleComparer.Instance).FirstOrDefault(g => g.Count() > 1);
@@ -180,7 +180,6 @@ public sealed class WorkbookReader
     private static bool Bool(Dictionary<string, int> h, IXLRow row, string key, bool fallback) => bool.TryParse(Text(h, row, key), out var value) ? value : fallback;
     private static bool IsBlank(IXLRow row) => row.CellsUsed().All(c => string.IsNullOrWhiteSpace(c.GetString()));
     private static IReadOnlyList<string> SplitValues(string value) => string.IsNullOrWhiteSpace(value) ? [] : value.Split(',', '|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-    private static string EnvironmentText(Dictionary<string, int> headers, IXLRow row) => new[] { "environments", "environment", "enviromests", "enviromments" }.Select(name => Text(headers, row, name)).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
     private static bool IsVerb(string value) => new[] { "eq", "ne", "lt", "lte", "gt", "gte", "contains", "notcontains", "startswith", "endswith", "regex", "exists", "notexists", "empty", "notempty", "in", "size" }.Contains(value.Trim().ToLowerInvariant());
     private static bool AllowsBlankExpectedValue(string value) => value.Equals("empty", StringComparison.OrdinalIgnoreCase)
         || value.Equals("notempty", StringComparison.OrdinalIgnoreCase)

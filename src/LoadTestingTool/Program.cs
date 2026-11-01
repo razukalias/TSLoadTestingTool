@@ -41,7 +41,7 @@ internal static class Program
             var uiLaunchAt = GetCommandLineValue(args, "--ui-launch-at") ?? "not-provided";
             config.EnvironmentSelection = GetCommandLineValue(args, "--environments") ?? config.EnvironmentSelection;
             config.ExecutionMode = GetCommandLineValue(args, "--execution-mode") ?? config.ExecutionMode;
-            var dataIdSelection = GetCommandLineValue(args, "--dataids");
+            var dataIdSelection = GetCommandLineValue(args, "--dataids") ?? config.DataIdSelection;
             var stepSelection = GetCommandLineValue(args, "--steps") ?? config.StepSelection;
             if (!config.ExecutionMode.Equals("threaded", StringComparison.OrdinalIgnoreCase) && !config.ExecutionMode.Equals("loop", StringComparison.OrdinalIgnoreCase) && !config.ExecutionMode.Equals("sequential", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("execution-mode must be 'threaded', 'loop', or 'sequential'.");
             var runId = string.IsNullOrWhiteSpace(config.RunId) ? $"{DateTime.Now:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}"[..25] : config.RunId;
@@ -81,7 +81,7 @@ internal static class Program
             Console.WriteLine($"Testcase execution order: {(config.RunScenariosInParallel ? "parallel" : "sequential")}");
             var selection = new RuntimeSelection { Input = string.IsNullOrWhiteSpace(expression) ? "0" : expression!, Indexes = indexes, Source = GetCommandLineValue(args, "--testcases") is not null ? "command-line" : "appsettings.json" };
             var overall = new RunResult { RunId = runId, Selection = selection, StartedAt = DateTimeOffset.Now };
-            var work = new RunSelectionPlanner().Build(workbook, indexes, stepSelection, config.EnvironmentSelection, GetCommandLineValue(args, "--environments-json"));
+            var work = new RunSelectionPlanner().Build(workbook, indexes, stepSelection, config.EnvironmentSelection, GetCommandLineValue(args, "--environments-json"), config.Environments);
             Console.WriteLine("Selected work: " + string.Join("; ", work.Select(x => $"{x.Testcase.TestcaseIndex} [{(string.IsNullOrEmpty(x.Environment) ? "default" : x.Environment)}]: {string.Join(", ", x.Testcase.Steps.Select(s => s.StepName))}")));
             var filters = ParseDataIdSelection(dataIdSelection);
             try
@@ -301,6 +301,8 @@ internal static class Program
         if (!string.IsNullOrWhiteSpace(instance.TestcaseSelection)) config.TestcaseSelection = instance.TestcaseSelection;
         if (!string.IsNullOrWhiteSpace(instance.StepSelection)) config.StepSelection = instance.StepSelection;
         if (!string.IsNullOrWhiteSpace(instance.EnvironmentSelection)) config.EnvironmentSelection = instance.EnvironmentSelection;
+        if (!string.IsNullOrWhiteSpace(instance.DataIdSelection)) config.DataIdSelection = instance.DataIdSelection;
+        if (!string.IsNullOrWhiteSpace(instance.RunId)) config.RunId = instance.RunId;
         if (!string.IsNullOrWhiteSpace(instance.ExecutionMode)) config.ExecutionMode = instance.ExecutionMode;
         if (instance.Threads.HasValue) config.Threads = instance.Threads.Value;
         if (instance.Iterations.HasValue) config.Iterations = instance.Iterations.Value;

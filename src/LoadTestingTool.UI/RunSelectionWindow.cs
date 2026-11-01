@@ -31,7 +31,7 @@ public sealed class RunSelectionWindow : Window
         Title = $"Choose what to run — {item.Name}";
         Width = 1260; Height = 760; MinWidth = 980; MinHeight = 600;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        _draft = new RunSelectionDraft(item.TestcaseOptions, item.TestcaseSelection, item.StepSelectionJson, item.EnvironmentSelection, item.EnvironmentSelectionJson);
+        _draft = new RunSelectionDraft(item.TestcaseOptions, item.EnvironmentOptions, item.TestcaseSelection, item.StepSelectionJson, item.EnvironmentSelection, item.EnvironmentSelectionJson);
         _executionMode.SelectedItem = item.ExecutionMode.Equals("loop", StringComparison.OrdinalIgnoreCase) ? "loop" : "threaded";
         _scenarioOrder.SelectedIndex = item.RunScenariosInParallel ? 1 : 0;
         _threads.Text = item.Threads.ToString(); _iterations.Text = item.Iterations.ToString();
@@ -86,7 +86,7 @@ public sealed class RunSelectionWindow : Window
             foreach (var step in testcase.Steps)
             {
                 var check = Check($"{step.Name}  [{step.Type}]" + (step.Enabled ? "" : " — disabled in workbook"), step.Enabled && _draft.Steps[testcase.Index].Contains(step.Name), step.Enabled);
-                ToolTip.SetTip(check, step.Environments.Count == 0 ? "Untagged: applies to selected environments" : "Environments: " + string.Join(", ", step.Environments));
+                ToolTip.SetTip(check, "Enabled steps run for each selected environment.");
                 check.IsCheckedChanged += (_, _) => { if (_rebuilding) return; _draft.SetStep(testcase.Index, step.Name, check.IsChecked == true); BuildEnvironments(); UpdateSummary(); }; _stepItems.Children.Add(check);
             }
         }
@@ -130,7 +130,7 @@ public sealed class RunSelectionWindow : Window
         var count = _draft.Catalog.Where(c => _draft.Cases.Contains(c.Index)).Sum(c => c.Steps.Count(s => s.Enabled && _draft.Steps[c.Index].Contains(s.Name)));
         var env = _draft.AvailableEnvironments.Where(e => _draft.Environments.Contains(e)).Select(e => string.IsNullOrEmpty(e) ? "Default" : e).ToList();
         var chosen = _draft.AvailableEnvironments.Where(e => _draft.Environments.Contains(e)).ToList();
-        var matching = _draft.Catalog.Where(c => _draft.Cases.Contains(c.Index)).SelectMany(c => chosen.Select(e => c.Steps.Count(s => s.Enabled && _draft.Steps[c.Index].Contains(s.Name) && (s.Environments.Count == 0 || s.Environments.Contains(e, StringComparer.OrdinalIgnoreCase))))).ToList();
+        var matching = _draft.Catalog.Where(c => _draft.Cases.Contains(c.Index)).SelectMany(c => chosen.Select(_ => c.Steps.Count(s => s.Enabled && _draft.Steps[c.Index].Contains(s.Name)))).ToList();
         var data = SerializeDataIds(); _summary.Text = $"Selected: {_draft.Cases.Count} testcase(s), {count} enabled step(s), environments: {(env.Count == 0 ? "none" : string.Join(", ", env))}.\nExecutable: {matching.Count(n => n > 0)} testcase/environment pair(s), {matching.Sum()} step execution(s) per data row / iteration.\nData IDs: {(string.IsNullOrWhiteSpace(data) ? "all rows" : data)}";
         _apply.IsEnabled = _draft.TryBuild(out _, out var error); _error.Text = error;
     }

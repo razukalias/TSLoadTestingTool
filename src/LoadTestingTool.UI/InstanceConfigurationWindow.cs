@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Input;
 
 namespace LoadTestingTool.UI;
 
@@ -20,6 +21,7 @@ public sealed class InstanceConfigurationWindow : Window
     private readonly CheckBox _aggregateHistory;
     private readonly CheckBox _rowHistory;
     private readonly Dictionary<string, CheckBox> _historySheets = new(StringComparer.OrdinalIgnoreCase);
+    private readonly TestStepConfigurationEditor _testStepsEditor;
 
     public InstanceConfigurationWindow(InstanceInfo item, Action<InstanceInfo, RunSelectionResult> saveSelection, Action<InstanceInfo, string?, string?, string?, string?, bool?, string?, bool?> saveExecution, Action<InstanceInfo, bool> saveReporting)
     {
@@ -33,6 +35,13 @@ public sealed class InstanceConfigurationWindow : Window
         MinWidth = 780;
         MinHeight = 560;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.S && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control)
+            {
+                Save(); e.Handled = true;
+            }
+        };
 
         _generateResults = new CheckBox { Content = "Generate technical Results artifacts", IsChecked = item.GenerateResults };
         _internalLogging = new CheckBox { Content = "Enable internal logging", IsChecked = item.InternalLoggingEnabled };
@@ -42,6 +51,7 @@ public sealed class InstanceConfigurationWindow : Window
         _aggregateHistory = new CheckBox { Content = "Enable aggregate history", IsChecked = item.GenerateAggregateHistory };
         _rowHistory = new CheckBox { Content = "Enable row history", IsChecked = item.GenerateRowHistory };
         _selectionEditor = new RunSelectionEditor(item);
+        _testStepsEditor = new TestStepConfigurationEditor(item);
 
         var tabs = new TabControl
         {
@@ -49,8 +59,10 @@ public sealed class InstanceConfigurationWindow : Window
             ItemsSource = new object[]
             {
                 Tab("Execution", BuildExecutionTab()),
-                Tab("Storage", BuildStorageTab()),
+                Tab("Configure test steps", _testStepsEditor),
                 Tab("History", BuildHistoryTab()),
+                Tab("Reporting", BuildReportingTab()),
+                Tab("Storage", BuildStorageTab()),
                 Tab("Logging", BuildLoggingTab()),
                 Tab("Security", BuildSecurityTab()),
                 Tab("Help", BuildHelpTab())
@@ -72,7 +84,6 @@ public sealed class InstanceConfigurationWindow : Window
         var panel = new StackPanel { Spacing = 12, Margin = new Thickness(8) };
         panel.Children.Add(DashboardStyle.Text("Choose what runs and how the instance executes. All selection and execution settings are editable here and saved together.", 12, false, DashboardStyle.Muted));
         panel.Children.Add(_selectionEditor);
-        panel.Children.Add(_generateResults);
         return panel;
     }
 
@@ -136,9 +147,34 @@ public sealed class InstanceConfigurationWindow : Window
         return new StackPanel { Spacing = 12, Margin = new Thickness(8), Children = { DashboardStyle.Text("Configuration help", 18, true), text, DashboardStyle.Text("When Generate technical Results artifacts is disabled, History and the dashboard remain available; persistent Results folders and metrics.json are omitted.", 12, false, DashboardStyle.Muted) } };
     }
 
+    private Control BuildReportingTab()
+    {
+        var panel = new StackPanel { Spacing = 12, Margin = new Thickness(8) };
+        panel.Children.Add(DashboardStyle.Text("Reporting and diagnostics", 18, true));
+        panel.Children.Add(_generateResults);
+        panel.Children.Add(DashboardStyle.Text("Technical Results artifacts are generated from the completed execution and stored under the instance Results folder.", 12, false, DashboardStyle.Muted));
+        panel.Children.Add(DashboardStyle.Text("Storage locations", 14, true));
+        panel.Children.Add(KeyValue("History", _item.HistoryFolder)); panel.Children.Add(KeyValue("Results", _item.ResultsFolder)); panel.Children.Add(KeyValue("Logs", _item.LogsFolder)); panel.Children.Add(KeyValue("Templates", _item.TemplatesFolder));
+        return panel;
+    }
+
     private void Save()
     {
-        if (!_selectionEditor.TryBuild(out var selection, out _)) return;
+        if (!_testStepsEditor.TrySave(out var stepError))
+        {
+            var dialog = new Window { Title = "Could not save configuration", Width = 520, Height = 220, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            dialog.Content = new Border { Padding = new Thickness(18), Child = new StackPanel { Spacing = 12, Children = { DashboardStyle.Text(stepError, 13), DashboardStyle.Action("Close", dialog.Close, "primary") } } };
+            dialog.ShowDialog(this);
+            return;
+        }
+        if (!_selectionEditor.TryBuild(out var selection, out var selectionError)) return;
+        if (!_selectionEditor.EnableSelectedDisabledSteps(selection!, out var enableError))
+        {
+            var dialog = new Window { Title = "Could not update step enablement", Width = 520, Height = 220, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            dialog.Content = new Border { Padding = new Thickness(18), Child = new StackPanel { Spacing = 12, Children = { DashboardStyle.Text(enableError, 13), DashboardStyle.Action("Close", dialog.Close, "primary") } } };
+            dialog.ShowDialog(this);
+            return;
+        }
         _saveSelection(_item, selection!);
         _item.GenerateResults = _generateResults.IsChecked == true;
         _item.InternalLoggingEnabled = _internalLogging.IsChecked == true;

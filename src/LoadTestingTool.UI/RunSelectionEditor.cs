@@ -3,11 +3,14 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
+using ClosedXML.Excel;
+using System.Text.Json;
 
 namespace LoadTestingTool.UI;
 
 internal sealed class RunSelectionEditor : UserControl
 {
+    private readonly InstanceInfo _item;
     private readonly RunSelectionDraft _draft;
     private readonly IReadOnlyDictionary<int, List<string>> _dataOptions;
     private readonly Dictionary<int, List<CheckBox>> _dataChecks = [];
@@ -28,7 +31,8 @@ internal sealed class RunSelectionEditor : UserControl
 
     public RunSelectionEditor(InstanceInfo item)
     {
-        _draft = new RunSelectionDraft(item.TestcaseOptions, item.TestcaseSelection, item.StepSelectionJson, item.EnvironmentSelection, item.EnvironmentSelectionJson);
+        _item = item;
+        _draft = new RunSelectionDraft(item.TestcaseOptions, item.EnvironmentOptions, item.TestcaseSelection, item.StepSelectionJson, item.EnvironmentSelection, item.EnvironmentSelectionJson);
         _executionMode.SelectedItem = item.ExecutionMode.Equals("loop", StringComparison.OrdinalIgnoreCase) ? "loop" : "threaded";
         _scenarioOrder.SelectedIndex = item.RunScenariosInParallel ? 1 : 0;
         _threads.Text = item.Threads.ToString();
@@ -88,6 +92,32 @@ internal sealed class RunSelectionEditor : UserControl
         return true;
     }
 
+    public bool EnableSelectedDisabledSteps(RunSelectionResult selection, out string error)
+    {
+        error = "";
+        try
+        {
+            var selected = JsonSerializer.Deserialize<Dictionary<int, string[]>>(selection.StepsJson) ?? [];
+            using var workbook = new XLWorkbook(_item.WorkbookPath);
+            var sheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("config", StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidDataException("The workbook has no config sheet.");
+            var headers = sheet.FirstRowUsed()?.CellsUsed().ToDictionary(x => x.GetString().Trim(), x => x.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase) ?? throw new InvalidDataException("The config sheet has no headers.");
+            if (!headers.TryGetValue("enabled", out var enabledColumn)) return true;
+            var changed = false;
+            foreach (var row in sheet.RowsUsed().Skip(1))
+            {
+                if (!int.TryParse(row.Cell(headers.GetValueOrDefault("testcaseindex")).GetString(), out var index) || !selected.TryGetValue(index, out var names)) continue;
+                var name = row.Cell(headers.GetValueOrDefault("stepname")).GetString();
+                if (!names.Contains(name, StringComparer.OrdinalIgnoreCase) || !row.Cell(enabledColumn).GetString().Equals("false", StringComparison.OrdinalIgnoreCase)) continue;
+                row.Cell(enabledColumn).Value = "true"; changed = true;
+            }
+            if (!changed) return true;
+            var backup = $"{_item.WorkbookPath}.backup.{DateTime.Now:yyyyMMdd_HHmmssfff}.xlsx";
+            File.Copy(_item.WorkbookPath, backup, false); workbook.Save();
+            return true;
+        }
+        catch (Exception ex) { error = ex.Message; return false; }
+    }
+
     private static Border Panel(string title, Control items, Action all, Action clear)
     {
         var header = new StackPanel { Spacing = 8, Children = { DashboardStyle.Text(title, 15, true), new StackPanel { Orientation = Orientation.Horizontal, Children = { DashboardStyle.Action("All", all), DashboardStyle.Action("Clear", clear) } } } };
@@ -122,8 +152,8 @@ internal sealed class RunSelectionEditor : UserControl
             _stepItems.Children.Add(DashboardStyle.Text($"{testcase.Index}  {testcase.Name}", 12, true, DashboardStyle.Muted));
             foreach (var step in testcase.Steps)
             {
-                var check = Check($"{step.Name}  [{step.Type}]" + (step.Enabled ? "" : " — disabled in workbook"), step.Enabled && _draft.Steps[testcase.Index].Contains(step.Name), step.Enabled);
-                ToolTip.SetTip(check, step.Environments.Count == 0 ? "Untagged: applies to selected environments" : "Environments: " + string.Join(", ", step.Environments));
+                var check = Check($"{step.Name}  [{step.Type}]" + (step.Enabled ? "" : " — disabled in workbook"), _draft.Steps[testcase.Index].Contains(step.Name), true);
+                ToolTip.SetTip(check, step.Enabled ? "Selected steps run for each selected environment." : "This step is disabled in the workbook. Check it to enable it for this run and save the workbook configuration.");
                 check.IsCheckedChanged += (_, _) => { if (_rebuilding) return; _draft.SetStep(testcase.Index, step.Name, check.IsChecked == true); BuildEnvironments(); UpdateSummary(); };
                 _stepItems.Children.Add(check);
             }
@@ -176,7 +206,7 @@ internal sealed class RunSelectionEditor : UserControl
         var count = _draft.Catalog.Where(c => _draft.Cases.Contains(c.Index)).Sum(c => c.Steps.Count(s => s.Enabled && _draft.Steps[c.Index].Contains(s.Name)));
         var env = _draft.AvailableEnvironments.Where(e => _draft.Environments.Contains(e)).Select(e => string.IsNullOrEmpty(e) ? "Default" : e).ToList();
         var chosen = _draft.AvailableEnvironments.Where(e => _draft.Environments.Contains(e)).ToList();
-        var matching = _draft.Catalog.Where(c => _draft.Cases.Contains(c.Index)).SelectMany(c => chosen.Select(e => c.Steps.Count(s => s.Enabled && _draft.Steps[c.Index].Contains(s.Name) && (s.Environments.Count == 0 || s.Environments.Contains(e, StringComparer.OrdinalIgnoreCase))))).ToList();
+        var matching = _draft.Catalog.Where(c => _draft.Cases.Contains(c.Index)).SelectMany(c => chosen.Select(_ => c.Steps.Count(s => s.Enabled && _draft.Steps[c.Index].Contains(s.Name)))).ToList();
         var data = SerializeDataIds();
         _summary.Text = $"Selected: {_draft.Cases.Count} testcase(s), {count} enabled step(s), environments: {(env.Count == 0 ? "none" : string.Join(", ", env))}.\nExecutable: {matching.Count(n => n > 0)} testcase/environment pair(s), {matching.Sum()} step execution(s) per data row / iteration.\nData IDs: {(string.IsNullOrWhiteSpace(data) ? "all rows" : data)}";
         _error.Text = _draft.TryBuild(out _, out var error) ? "" : error;

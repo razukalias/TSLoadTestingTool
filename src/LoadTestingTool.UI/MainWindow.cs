@@ -427,28 +427,18 @@ public sealed partial class MainWindow : Window
                 item.SaveRequestBodyToHistory = centralInstance.SaveRequestBodyToHistory ?? true;
                 item.SaveResponseBodyToHistory = centralInstance.SaveResponseBodyToHistory ?? true;
                 item.MaskSensitiveData = centralInstance.MaskSensitiveData ?? true;
+                item.TestcaseSelection = centralInstance.TestcaseSelection ?? item.TestcaseSelection;
+                item.StepSelectionJson = centralInstance.StepSelection ?? item.StepSelectionJson;
+                item.EnvironmentSelection = centralInstance.EnvironmentSelection ?? item.EnvironmentSelection;
+                item.DataIdSelection = centralInstance.DataIdSelection ?? item.DataIdSelection;
+                item.CurrentRunId = centralInstance.RunId ?? item.CurrentRunId;
+                item.EnvironmentSelectionJson = string.IsNullOrWhiteSpace(item.EnvironmentSelection) ? "" : JsonSerializer.Serialize(item.EnvironmentSelection.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+                item.HasAppliedSelection = !string.IsNullOrWhiteSpace(centralInstance.TestcaseSelection) || !string.IsNullOrWhiteSpace(centralInstance.EnvironmentSelection);
                 if (centralInstance.HistorySheets is not null)
                     foreach (var sheet in centralInstance.HistorySheets) item.HistorySheets[sheet.Key] = sheet.Value;
             }
-            try
-            {
-                var profile = Path.Combine(folder, ".run-selection.json");
-                if (File.Exists(profile))
-                {
-                    var saved = JsonSerializer.Deserialize<RunSelectionResult>(File.ReadAllText(profile));
-                    if (saved is not null && !string.IsNullOrWhiteSpace(saved.Testcases) && !string.IsNullOrWhiteSpace(saved.StepsJson) && !string.IsNullOrWhiteSpace(saved.EnvironmentsJson))
-                    {
-                        item.TestcaseSelection = saved.Testcases; item.StepSelectionJson = saved.StepsJson;
-                        item.EnvironmentSelection = saved.Environments; item.EnvironmentSelectionJson = saved.EnvironmentsJson; item.DataIdSelection = saved.DataIds; item.ExecutionMode = saved.ExecutionMode; item.RunScenariosInParallel = saved.ScenariosParallel; item.HasAppliedSelection = true;
-                        if (saved.Threads > 0) item.Threads = saved.Threads;
-                        if (saved.Iterations > 0) item.Iterations = saved.Iterations;
-                        item.ThreadIntervalMs = Math.Max(0, saved.ThreadIntervalMs);
-                        item.IterationIntervalMs = Math.Max(0, saved.IterationIntervalMs);
-                    }
-                }
-            }
-            catch (Exception ex) { UiLog($"Could not load run selection profile for {item.Name}: {ex.Message}"); }
             item.EnvironmentOptions.Clear();
+            item.EnvironmentOptions.AddRange(_config.Environments.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase));
             item.DataIdOptions.Clear();
             item.SelectionReadError = "";
             try
@@ -469,7 +459,6 @@ public sealed partial class MainWindow : Window
                                 item.DataIdOptions[testcaseIndex].Add(dataId);
                             }
                         }
-                item.EnvironmentOptions.AddRange(item.TestcaseOptions.SelectMany(c => c.Steps.Where(s => s.Enabled)).SelectMany(s => s.Environments).Distinct(StringComparer.OrdinalIgnoreCase));
             }
             catch (Exception ex) { item.SelectionReadError = ex.Message; UiLog($"Instance refresh could not read workbook '{workbook}': {ex}"); }
             _instances.Add(item);
@@ -564,6 +553,17 @@ public sealed partial class MainWindow : Window
             UiLog($"Could not save execution settings for {item.Name}: {ex}");
             _details.Text = $"Could not save execution settings: {ex.Message}";
         }
+    }
+
+    private void SaveCentralRunId(InstanceInfo item)
+    {
+        var root = File.Exists(_config.SettingsFile) ? JsonNode.Parse(File.ReadAllText(_config.SettingsFile)) as JsonObject : new JsonObject();
+        root ??= new JsonObject();
+        var instances = root["Instances"] as JsonObject ?? new JsonObject();
+        var instance = instances[item.Name] as JsonObject ?? new JsonObject();
+        instance["RunId"] = item.CurrentRunId;
+        instances[item.Name] = instance; root["Instances"] = instances;
+        File.WriteAllText(_config.SettingsFile, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
     }
 
     private void SaveInstanceReportingSettings(InstanceInfo item, bool _)
@@ -781,8 +781,10 @@ public sealed partial class MainWindow : Window
         var latest = _instances.Where(x => x.RequestsPerSecond.HasValue).OrderByDescending(x => x.CompletedAt).FirstOrDefault();
         _rpsValue.Text = latest?.RequestsPerSecond?.ToString("F2") ?? "—";
         _footer.Text = $"{_instances.Count} instances  /  {_instances.Count(x => x.Selected)} selected  /  {DashboardStyle.Build}";
-        _chooseButton.IsEnabled = _selectedInstance is not null || _instances.Any(x => x.Selected);
-        _runButton.IsEnabled = _instances.Any(x => x.Selected && (x.Process is null || x.Process.HasExited));
+        var selected = _instances.Where(x => x.Selected).ToList();
+        var selectedRunning = selected.Any(x => x.Process is { HasExited: false });
+        _chooseButton.IsEnabled = !selectedRunning && (_selectedInstance is not null || selected.Count > 0);
+        _runButton.IsEnabled = selected.Count > 0 && !selectedRunning && selected.Any(x => x.Process is null || x.Process.HasExited);
         _stopButton.IsEnabled = _forceButton.IsEnabled = _instances.Any(x => x.Selected && x.Process is { HasExited: false });
         if (_page == "Active runs")
         {
@@ -807,10 +809,11 @@ public sealed partial class MainWindow : Window
                 item.CurrentRunFolder = item.GenerateResults ? item.ResultsFolder : item.LogsFolder;
                 var environments = item.EnvironmentSelection;
                 if (!string.IsNullOrWhiteSpace(item.SelectionReadError)) throw new InvalidDataException(item.SelectionReadError);
-                var draft = new RunSelectionDraft(item.TestcaseOptions, selection, item.StepSelectionJson, environments, item.EnvironmentSelectionJson);
+                var draft = new RunSelectionDraft(item.TestcaseOptions, item.EnvironmentOptions, selection, item.StepSelectionJson, environments, item.EnvironmentSelectionJson);
                 if (!draft.TryBuild(out _, out var validationError)) throw new InvalidDataException(validationError);
                 var uiLaunchId = $"ui-{Guid.NewGuid():N}";
                 var uiLaunchAt = DateTimeOffset.Now;
+                SaveCentralRunId(item);
                 var runnerIsDll = runner.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
                 var start = new ProcessStartInfo(runnerIsDll ? "dotnet" : runner)
                 {
@@ -823,17 +826,7 @@ public sealed partial class MainWindow : Window
                 if (runnerIsDll) start.ArgumentList.Add(runner);
                 void Arg(string name, string value) { start.ArgumentList.Add(name); start.ArgumentList.Add(value); }
                 Arg("--config", _config.SettingsFile); Arg("--instance", item.Name);
-                Arg("--excel", item.WorkbookPath); Arg("--templates", item.TemplatesFolder);
-                Arg("--history", item.HistoryFolder); Arg("--logs", item.LogsFolder); Arg("--results", item.ResultsFolder); Arg("--generate-results", item.GenerateResults.ToString());
-                Arg("--instance-id", item.InstanceId); Arg("--run-id", item.CurrentRunId);
                 Arg("--ui-launch-id", uiLaunchId); Arg("--ui-launch-at", uiLaunchAt.ToString("O"));
-                Arg("--internal-log", item.InternalLoggingEnabled.ToString());
-                Arg("--scenarios-parallel", item.RunScenariosInParallel.ToString()); Arg("--execution-mode", item.ExecutionMode);
-                Arg("--testcases", selection);
-                if (!string.IsNullOrWhiteSpace(item.EnvironmentSelectionJson)) Arg("--environments-json", item.EnvironmentSelectionJson);
-                else if (!string.IsNullOrWhiteSpace(environments)) Arg("--environments", environments);
-                if (!string.IsNullOrWhiteSpace(item.StepSelectionJson)) Arg("--steps", item.StepSelectionJson);
-                if (!string.IsNullOrWhiteSpace(item.DataIdSelection)) Arg("--dataids", item.DataIdSelection);
                 UiLog($"Runner launch requested. instance={item.Name}; runId={item.CurrentRunId}; runner={runner}; args={JsonSerializer.Serialize(start.ArgumentList)}");
                 item.Process = Process.Start(start);
                 if (item.Process is null) throw new InvalidOperationException("The runner process could not be started.");
@@ -1446,6 +1439,8 @@ public sealed partial class MainWindow : Window
                     if (int.TryParse(central["ThreadIntervalMs"]?.ToString(), out var threadInterval)) config.ThreadIntervalMs = Math.Max(0, threadInterval);
                     if (int.TryParse(central["IterationIntervalMs"]?.ToString(), out var iterationInterval)) config.IterationIntervalMs = Math.Max(0, iterationInterval);
                     if (bool.TryParse(central["GenerateResults"]?.ToString(), out var generateResults)) config.GenerateResults = generateResults;
+                    var environments = central["Environments"]?.Deserialize<List<string>>();
+                    if (environments is not null) config.Environments = environments.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
                     var instances = central["Instances"]?.Deserialize<Dictionary<string, UiInstanceDefinition>>();
                     if (instances is not null) config.Instances = new Dictionary<string, UiInstanceDefinition>(instances, StringComparer.OrdinalIgnoreCase);
                 }

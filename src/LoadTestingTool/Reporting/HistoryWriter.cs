@@ -116,10 +116,10 @@ public sealed class HistoryWriter
             if (Enabled("DataEngineConfig"))
             {
                 var config = workbook.AddWorksheet("DataEngineConfig");
-                WriteTable(config, "testcaseindex", "testcase", "stepname", "steptype", "stage", "enabled", "sequence", "templetsource", "targeturl", "verb", "contenttype", "stepconfig", "headers", "stoponfailure", "assertonlyresponse", "environments");
+                WriteTable(config, "testcaseindex", "testcase", "stepname", "steptype", "stage", "enabled", "sequence", "templetsource", "targeturl", "verb", "contenttype", "stepconfig", "headers", "stoponfailure", "assertonlyresponse");
                 foreach (var testcase in workbookModel.Testcases)
                     foreach (var step in testcase.Steps)
-                        config.AddRow(step.TestcaseIndex, testcase.Testcase, step.StepName, step.StepType.WireName(), step.Stage.ToString(), step.Enabled, step.Sequence, step.TemplateSource, step.TargetUrl, step.Verb, step.ContentType, Mask(step.StepConfig), Mask(string.Join("; ", step.Headers.Select(h => $"{h.Key}={h.Value}"))), step.StopOnFailure, step.AssertOnlyResponse, string.Join(',', step.Environments));
+                        config.AddRow(step.TestcaseIndex, testcase.Testcase, step.StepName, step.StepType.WireName(), step.Stage.ToString(), step.Enabled, step.Sequence, step.TemplateSource, step.TargetUrl, step.Verb, step.ContentType, Mask(step.StepConfig), Mask(string.Join("; ", step.Headers.Select(h => $"{h.Key}={h.Value}"))), step.StopOnFailure, step.AssertOnlyResponse);
             }
         }
         foreach (var sheet in workbook.Worksheets) { sheet.Columns().AdjustToContents(1, 80); sheet.SheetView.FreezeRows(1); sheet.Row(1).Style.Font.Bold = true; sheet.Row(1).Style.Fill.SetBackgroundColor(XLColor.LightBlue); }

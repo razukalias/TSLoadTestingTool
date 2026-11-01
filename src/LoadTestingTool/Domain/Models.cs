@@ -23,11 +23,13 @@ public sealed class AppConfig
     public string TestcaseSelection { get; set; } = "0";
     public string StepSelection { get; set; } = "";
     public string EnvironmentSelection { get; set; } = "";
+    public string DataIdSelection { get; set; } = "";
     public bool PromptForTestcaseSelection { get; set; }
     public bool SaveRequestBodyToHistory { get; set; } = true;
     public bool SaveResponseBodyToHistory { get; set; } = true;
     public Dictionary<string, bool> HistorySheets { get; set; } = HistorySheetCatalog.CreateDefaults();
     public bool MaskSensitiveData { get; set; } = true;
+    public List<string> Environments { get; set; } = [];
     public string WorkspaceRoot { get; set; } = ".";
     public Dictionary<string, SqlConnectionProfile> Connections { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, CentralInstanceConfig> Instances { get; set; } = new(StringComparer.OrdinalIgnoreCase);
@@ -49,6 +51,8 @@ public sealed class CentralInstanceConfig
     public string? TestcaseSelection { get; set; }
     public string? StepSelection { get; set; }
     public string? EnvironmentSelection { get; set; }
+    public string? DataIdSelection { get; set; }
+    public string? RunId { get; set; }
     public string? ExecutionMode { get; set; }
     public int? Threads { get; set; }
     public int? Iterations { get; set; }

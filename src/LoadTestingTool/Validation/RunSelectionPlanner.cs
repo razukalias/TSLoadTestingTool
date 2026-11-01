@@ -10,7 +10,8 @@ public sealed class RunSelectionPlanner
     // Empty step selection means all enabled steps. Explicit JSON must cover every selected testcase.
     // Selected steps retain workbook order; dependencies are never silently added.
     public IReadOnlyList<SelectedTestcaseRun> Build(WorkbookModel workbook, IReadOnlyList<int> indexes,
-        string? stepSelectionJson, string? environmentSelection, string? environmentSelectionJson = null)
+        string? stepSelectionJson, string? environmentSelection, string? environmentSelectionJson = null,
+        IReadOnlyList<string>? availableEnvironments = null)
     {
         if (indexes.Count == 0) throw new InvalidDataException("Select at least one testcase.");
         var cases = workbook.Testcases.Where(t => indexes.Contains(t.TestcaseIndex)).OrderBy(t => t.TestcaseIndex).ToList();
@@ -39,7 +40,7 @@ public sealed class RunSelectionPlanner
         }).ToList();
         if (chosen.Any(t => t.Steps.Count == 0))
             throw new InvalidDataException("A selected testcase has no enabled steps. Select an executable testcase.");
-        var availableEnvironments = chosen.SelectMany(t => t.Steps).SelectMany(s => s.Environments)
+        var definedEnvironments = (availableEnvironments ?? []).Where(x => !string.IsNullOrWhiteSpace(x))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         string[] environments;
         if (!string.IsNullOrWhiteSpace(environmentSelectionJson))
@@ -54,23 +55,18 @@ public sealed class RunSelectionPlanner
             catch (JsonException ex) { throw new InvalidDataException("Invalid --environments-json.", ex); }
         }
         else environments = string.IsNullOrWhiteSpace(environmentSelection)
-            ? (availableEnvironments.Count == 0 ? [""] : availableEnvironments.ToArray())
+            ? (definedEnvironments.Count == 0 ? [""] : definedEnvironments.ToArray())
             : environmentSelection.Split([',', '|'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         if (environments.Length == 0) throw new InvalidDataException("Select at least one environment.");
-        if (availableEnvironments.Count > 0 && environments.Any(e => e.Length > 0 && !availableEnvironments.Contains(e, StringComparer.OrdinalIgnoreCase)))
-            throw new InvalidDataException("The environment selection is not available for the selected test steps.");
+        if (definedEnvironments.Count > 0 && environments.Any(e => e.Length > 0 && !definedEnvironments.Contains(e, StringComparer.OrdinalIgnoreCase)))
+            throw new InvalidDataException("The environment selection is not available in the central environment list.");
         var work = new List<SelectedTestcaseRun>();
         foreach (var environment in environments)
         foreach (var testcase in chosen)
         {
-            // Untagged steps apply to every selected environment, preserving the existing workbook convention.
-            var steps = testcase.Steps.Where(s => s.Environments.Count == 0 || s.Environments.Contains(environment, StringComparer.OrdinalIgnoreCase)).ToList();
-            if (steps.Count == 0) continue;
             work.Add(new SelectedTestcaseRun(new TestcaseDefinition
-            {
-                TestcaseIndex = testcase.TestcaseIndex, Testcase = testcase.Testcase, Steps = steps
-            }, environment));
+            { TestcaseIndex = testcase.TestcaseIndex, Testcase = testcase.Testcase, Steps = testcase.Steps }, environment));
         }
         if (work.Count == 0) throw new InvalidDataException("The selected testcases, steps and environments produce no executable work.");
         return work;

@@ -10,17 +10,15 @@ namespace LoadTestingTool.UI;
 
 public sealed class HistorySettingsWindow : Window
 {
-    private readonly string _instanceFolder;
     private readonly string _instanceName;
     private readonly string _settingsFile;
     private readonly Dictionary<string, CheckBox> _checks = new(StringComparer.OrdinalIgnoreCase);
     private readonly CheckBox _aggregateHistory = new() { Content = "Enable aggregate history", Margin = new Thickness(4, 2) };
     private readonly CheckBox _rowHistory = new() { Content = "Enable row history", Margin = new Thickness(4, 2) };
-    private readonly TextBlock _status = DashboardStyle.Text("Changes are saved to the instance appsettings.json.", 12, false, DashboardStyle.Muted);
+    private readonly TextBlock _status = DashboardStyle.Text("Changes are saved to central appsettings.json.", 12, false, DashboardStyle.Muted);
 
     public HistorySettingsWindow(string instanceFolder, string instanceName, string settingsFile)
     {
-        _instanceFolder = instanceFolder;
         _instanceName = instanceName;
         _settingsFile = settingsFile;
         Title = "History output settings";
@@ -85,11 +83,7 @@ public sealed class HistorySettingsWindow : Window
                 var centralValue = central?["Instances"]?[_instanceName]?["HistorySheets"]?[name];
                 if (centralValue is not null) return centralValue.GetValue<bool>();
             }
-            var path = Path.Combine(_instanceFolder, "appsettings.json");
-            if (!File.Exists(path)) return true;
-            var node = JsonNode.Parse(File.ReadAllText(path));
-            var value = node?["HistorySheets"]?[name];
-            return value is null || value.GetValue<bool>();
+            return true;
         }
         catch { return true; }
     }
@@ -104,11 +98,7 @@ public sealed class HistorySettingsWindow : Window
                 var centralValue = central?["Instances"]?[_instanceName]?[name];
                 if (centralValue is not null) return centralValue.GetValue<bool>();
             }
-            var path = Path.Combine(_instanceFolder, "appsettings.json");
-            if (!File.Exists(path)) return defaultValue;
-            var node = JsonNode.Parse(File.ReadAllText(path));
-            var value = node?[name];
-            return value is null ? defaultValue : value.GetValue<bool>();
+            return defaultValue;
         }
         catch { return defaultValue; }
     }
@@ -149,30 +139,21 @@ public sealed class HistorySettingsWindow : Window
                 _status.Text = "Select at least one history sheet before saving.";
                 return;
             }
-            Directory.CreateDirectory(_instanceFolder);
-            var path = File.Exists(_settingsFile) ? _settingsFile : Path.Combine(_instanceFolder, "appsettings.json");
+            var path = _settingsFile;
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             var root = File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path)) as JsonObject : new JsonObject();
             root ??= new JsonObject();
             var sheets = new JsonObject();
             foreach (var name in UiHistorySheetCatalog.Names) sheets[name] = _checks[name].IsChecked == true;
             var aggregateHistory = _aggregateHistory.IsChecked == true;
             var rowHistory = _rowHistory.IsChecked == true;
-            if (Path.GetFullPath(path).Equals(Path.GetFullPath(_settingsFile), StringComparison.OrdinalIgnoreCase))
-            {
-                var instances = root["Instances"] as JsonObject ?? new JsonObject();
-                var instance = instances[_instanceName] as JsonObject ?? new JsonObject();
-                instance["HistorySheets"] = sheets;
-                instance["GenerateAggregateHistory"] = aggregateHistory;
-                instance["GenerateRowHistory"] = rowHistory;
-                instances[_instanceName] = instance;
-                root["Instances"] = instances;
-            }
-            else
-            {
-                root["HistorySheets"] = sheets;
-                root["GenerateAggregateHistory"] = aggregateHistory;
-                root["GenerateRowHistory"] = rowHistory;
-            }
+            var instances = root["Instances"] as JsonObject ?? new JsonObject();
+            var instance = instances[_instanceName] as JsonObject ?? new JsonObject();
+            instance["HistorySheets"] = sheets;
+            instance["GenerateAggregateHistory"] = aggregateHistory;
+            instance["GenerateRowHistory"] = rowHistory;
+            instances[_instanceName] = instance;
+            root["Instances"] = instances;
             var options = new JsonSerializerOptions { WriteIndented = true };
             File.WriteAllText(path, root.ToJsonString(options) + Environment.NewLine);
             _status.Foreground = DashboardStyle.Green;

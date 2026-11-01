@@ -35,12 +35,6 @@ if manual.is_file():
 central = root / 'appsettings.json'
 if central.is_file():
     shutil.copy2(central, target / 'appsettings.json')
-    central_json = json.loads(central.read_text())
-    ui_settings_path = target / 'UI' / 'appsettings.json'
-    ui_settings = json.loads(ui_settings_path.read_text())
-    ui_settings['SettingsFile'] = '../appsettings.json'
-    ui_settings['Instances'] = central_json.get('Instances', ui_settings.get('Instances', {}))
-    ui_settings_path.write_text(json.dumps(ui_settings, indent=2) + '\n')
 manifest = {
     'build': f'Dashboard {os.environ["VERSION"]}',
     'sourceCommit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
@@ -83,7 +77,7 @@ If startup fails silently, `Start-Dashboard.cmd` keeps the error visible and the
 5. The central `appsettings.json` at the archive root contains the instance registry. To run without the UI, use `Runner/LoadTestingTool.exe --config appsettings.json --instance DataEngine_IntegrationScenarios`, or run all registered instances with `Runner/LoadTestingTool.exe --config appsettings.json --run-all`.
 **Force stop** terminates the process tree and may leave incomplete artifacts.
 Files and folders open with your system default applications (no forced Excel or PDF reader).
-Path changes are made in `UI/appsettings.json`, followed by restarting the UI.
+Path and execution changes are made in the central `appsettings.json` at the archive root.
 No complete-run timeout was added.
 ''')
 for directory, executable in (('UI', 'LoadTestingTool.UI.exe'), ('Runner', 'LoadTestingTool.exe')):
@@ -91,9 +85,9 @@ for directory, executable in (('UI', 'LoadTestingTool.UI.exe'), ('Runner', 'Load
         assert (target / directory / f).stat().st_size > 0, f'Missing runtime file: {directory}/{f}'
     config = json.loads(next((target / directory).glob('*.runtimeconfig.json')).read_text())
     assert 'includedFrameworks' in config['runtimeOptions'], 'Publish is not self-contained'
-ui = json.loads((target / 'UI' / 'appsettings.json').read_text())
-assert (target / 'UI' / ui['RunnerDll']).resolve().is_file()
-assert (target / 'UI' / ui['InstancesRoot']).resolve().is_dir()
+assert (target / 'appsettings.json').is_file(), 'Central appsettings.json is missing'
+assert (target / 'Runner' / 'LoadTestingTool.exe').is_file(), 'Runner executable is missing'
+assert (target / 'Instances').is_dir(), 'Instances folder is missing'
 assert list((target / 'Instances').glob('DataEngine_*/*.xlsx')), 'No workbook packaged'
 print('Publish layout and bundled runtime validated.')
 PY

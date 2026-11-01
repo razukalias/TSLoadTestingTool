@@ -9,7 +9,7 @@ namespace LoadTestingTool.UI;
 public sealed class InstanceBuilderWindow : Window
 {
     private readonly TextBox _name = new() { Text = "DataEngine_" };
-    private readonly TextBox _folder = new() { Text = "" };
+    private readonly string _defaultRoot;
     private readonly ComboBox _template = new() { ItemsSource = new[] { "Full DataEngine template", "Minimal HTTP template" }, SelectedIndex = 0 };
     private readonly TextBox _message = new() { TextWrapping = Avalonia.Media.TextWrapping.Wrap };
     private readonly Button _create;
@@ -17,25 +17,21 @@ public sealed class InstanceBuilderWindow : Window
 
     public InstanceBuilderWindow(string defaultRoot)
     {
+        _defaultRoot = Path.GetFullPath(defaultRoot);
         Title = "Create DataEngine instance";
         Width = 900; Height = 680; MinWidth = 760; MinHeight = 560;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         var suffix = 1;
         while (Directory.Exists(Path.Combine(defaultRoot, _name.Text))) _name.Text = $"DataEngine_{suffix++}";
-        _folder.Text = Path.Combine(defaultRoot, _name.Text);
         _name.TextChanged += (_, _) =>
         {
-            if (string.IsNullOrWhiteSpace(_folder.Text) || _folder.Text.EndsWith(Path.DirectorySeparatorChar + "DataEngine_", StringComparison.OrdinalIgnoreCase) || _folder.Text.EndsWith("NewDataEngineInstance", StringComparison.OrdinalIgnoreCase))
-                _folder.Text = Path.Combine(defaultRoot, _name.Text.Trim());
             Validate();
         };
-        _folder.TextChanged += (_, _) => Validate();
         _create = DashboardStyle.Action("Create instance", Create, "primary");
         var form = new StackPanel { Spacing = 12 };
         form.Children.Add(DashboardStyle.Text("Create DataEngine instance", 22, true));
         form.Children.Add(DashboardStyle.Text("Generate a valid workbook, folders, examples, and a README sheet. You can edit the generated instance in the guided editor afterward.", 12, false, DashboardStyle.Muted));
         form.Children.Add(Field("Instance name", _name));
-        form.Children.Add(Field("Instance folder", _folder));
         form.Children.Add(Field("Template", _template));
         var preview = new Border { Background = DashboardStyle.Panel, BorderBrush = DashboardStyle.Line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(14), Child = new StackPanel { Spacing = 8, Children =
         {
@@ -58,16 +54,17 @@ public sealed class InstanceBuilderWindow : Window
     private static Control Field(string label, Control control) => new StackPanel { Spacing = 5, Children = { DashboardStyle.Text(label, 12, false, DashboardStyle.Muted), control } };
     private void Validate()
     {
-        var name = _name.Text?.Trim() ?? ""; var folder = _folder.Text?.Trim() ?? "";
+        var name = _name.Text?.Trim() ?? "";
         var validName = name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
-        _message.Text = string.IsNullOrWhiteSpace(name) ? "Enter an instance name." : !validName ? "Instance name contains invalid filename characters." : string.IsNullOrWhiteSpace(folder) ? "Choose an instance folder." : "";
+        _message.Text = string.IsNullOrWhiteSpace(name) ? "Enter an instance name." : !validName ? "Instance name contains invalid filename characters." : "";
         _create.IsEnabled = string.IsNullOrWhiteSpace(_message.Text);
     }
     private void Create()
     {
         try
         {
-            var name = _name.Text!.Trim(); var folder = Path.GetFullPath(_folder.Text!.Trim());
+            var name = _name.Text!.Trim();
+            var folder = Path.GetFullPath(Path.Combine(_defaultRoot, name));
             if (Directory.Exists(folder) && Directory.EnumerateFileSystemEntries(folder).Any()) throw new InvalidOperationException("The target folder already exists and is not empty.");
             Directory.CreateDirectory(folder);
             foreach (var sub in new[] { "Templates", "Queries", "Scripts", "Inputs", "Artifacts", "History", "Logs", "Results" }) Directory.CreateDirectory(Path.Combine(folder, sub));
@@ -77,7 +74,6 @@ public sealed class InstanceBuilderWindow : Window
                 CreateConfig(workbook); CreateRequest(workbook); CreateResponse(workbook); CreateReadme(workbook);
                 workbook.SaveAs(workbookPath);
             }
-            File.WriteAllText(Path.Combine(folder, "appsettings.json"), JsonSerializer.Serialize(new { WorkspaceRoot = ".", InstanceName = name, HistorySheets = UiHistorySheetCatalog.CreateDefaults() }, new JsonSerializerOptions { WriteIndented = true }));
             File.WriteAllText(Path.Combine(folder, "Templates", "login.json"), "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}\n");
             File.WriteAllText(Path.Combine(folder, "README.md"), $"# {name}\n\nCreated by LoadTestingTool. Open the DataEngine workbook or use the guided editor.\n");
             CreatedFolder = folder; Close();
@@ -87,8 +83,8 @@ public sealed class InstanceBuilderWindow : Window
     private static void CreateConfig(XLWorkbook w)
     {
         var s = w.Worksheets.Add("config");
-        var headers = new[] { "testcaseindex", "testcase", "stepname", "steptype", "stage", "enabled", "timeout", "stoponfailure", "environments", "templetsource", "targetUrl", "verb", "contenttype", "wait", "expectedstatus", "assert", "ignoreempty", "assertonlyresponse", "stepconfig", "header_Accept", "header_ContentType" };
-        WriteRow(s, 1, headers); WriteRow(s, 2, new object[] { 1, "ExampleHttp", "GetUser", "HTTP", "Test", true, 30, true, "local", "login.json", "https://jsonplaceholder.typicode.com/users/1", "GET", "application/json", 0, 200, true, false, false, "{}", "application/json", "" });
+        var headers = new[] { "testcaseindex", "testcase", "stepname", "steptype", "stage", "enabled", "timeout", "stoponfailure", "templetsource", "targetUrl", "verb", "contenttype", "wait", "expectedstatus", "assert", "ignoreempty", "assertonlyresponse", "stepconfig", "header_Accept", "header_ContentType" };
+        WriteRow(s, 1, headers); WriteRow(s, 2, new object[] { 1, "ExampleHttp", "GetUser", "HTTP", "Test", true, 30, true, "login.json", "https://jsonplaceholder.typicode.com/users/1", "GET", "application/json", 0, 200, true, false, false, "{}", "application/json", "" });
         Style(s, headers.Length);
     }
     private static void CreateRequest(XLWorkbook w)
@@ -114,7 +110,7 @@ public sealed class InstanceBuilderWindow : Window
             new object[] { "Response header", "stepname.responsepath, for example GetUser.statusCode or CreateOrder.id" },
             new object[] { "Assertion cell", "{eq}200 or {contains}completed; blank is optional for eq" },
             new object[] { "Correlation", "extractvariable: GetUser.id:userId, then use _userId_ in a later step" },
-            new object[] { "Environments", "Comma-separated names in config; blank means untagged/default" },
+            new object[] { "Environments", "Manage global environments in the centralized application settings" },
             new object[] { "Safety", "Trusted scripts are disabled by default; enable only for trusted workbooks" }
         };
         for (var i = 0; i < rows.Length; i++) { s.Cell(i + 1, 1).Value = rows[i][0].ToString(); s.Cell(i + 1, 2).Value = rows[i][1].ToString(); }

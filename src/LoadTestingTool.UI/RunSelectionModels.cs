@@ -41,14 +41,10 @@ public static class WorkbookSelectionCatalog
             var name = Text(row, "stepname");
             if (string.IsNullOrWhiteSpace(name)) throw new InvalidDataException($"Missing step name in config row {row.RowNumber()}.");
             var enabled = !bool.TryParse(Text(row, "enabled"), out var flag) || flag;
-            var env = new[] { "environments", "environment", "enviromests", "enviromments" }
-                .Select(key => Text(row, key)).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? "";
-            var environments = env.Split([',', '|'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             if (!groups.TryGetValue(index, out var group)) groups[index] = group = (Text(row, "testcase"), []);
             if (group.Steps.Any(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidDataException($"Duplicate step name in testcase {index}: {name}.");
-            group.Steps.Add(new TestStepOption(name, Text(row, "steptype", "HTTP"), enabled, environments));
+            group.Steps.Add(new TestStepOption(name, Text(row, "steptype", "HTTP"), enabled, []));
         }
         return groups.OrderBy(x => x.Key).Select(x => new TestcaseOption(x.Key, x.Value.Name, x.Value.Steps)).ToList();
     }
@@ -65,12 +61,17 @@ public sealed class RunSelectionDraft
     {
         get
         {
+            if (!_legacyCatalogEnvironments) return _globalEnvironments;
             var values = Catalog.Where(c => Cases.Contains(c.Index)).SelectMany(c => c.Steps.Where(s => s.Enabled && Steps[c.Index].Contains(s.Name)))
                 .SelectMany(s => s.Environments).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
             return values.Count == 0 ? [""] : values;
         }
     }
+    private bool _legacyCatalogEnvironments;
     public RunSelectionDraft(IReadOnlyList<TestcaseOption> catalog, string testcases, string stepsJson, string environments, string? environmentsJson = null)
+        : this(catalog, catalog.SelectMany(c => c.Steps).SelectMany(s => s.Environments).Distinct(StringComparer.OrdinalIgnoreCase).ToList(), testcases, stepsJson, environments, environmentsJson)
+    { _legacyCatalogEnvironments = true; }
+    public RunSelectionDraft(IReadOnlyList<TestcaseOption> catalog, IReadOnlyList<string> globalEnvironments, string testcases, string stepsJson, string environments, string? environmentsJson = null)
     {
         Catalog = catalog;
         if (string.IsNullOrWhiteSpace(testcases) || testcases == "0") Cases.UnionWith(catalog.Where(c => c.Steps.Any(s => s.Enabled)).Select(c => c.Index));
@@ -85,15 +86,19 @@ public sealed class RunSelectionDraft
         var saved = string.IsNullOrWhiteSpace(stepsJson) ? null : JsonSerializer.Deserialize<Dictionary<int, string[]>>(stepsJson);
         foreach (var c in catalog)
         {
-            var available = c.Steps.Where(s => s.Enabled).Select(s => s.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var available = c.Steps.Select(s => s.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
             if (saved is not null && saved.TryGetValue(c.Index, out var selected)) available.IntersectWith(selected);
             Steps[c.Index] = available;
         }
+        var globalAvailable = globalEnvironments.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (globalAvailable.Count == 0) globalAvailable.Add("");
+        _globalEnvironments = globalAvailable;
         AllEnvironments = string.IsNullOrWhiteSpace(environments) && string.IsNullOrWhiteSpace(environmentsJson);
         if (!string.IsNullOrWhiteSpace(environmentsJson)) Environments.UnionWith(JsonSerializer.Deserialize<string[]>(environmentsJson) ?? []);
-        else if (AllEnvironments) Environments.UnionWith(AvailableEnvironments);
+        else if (AllEnvironments) Environments.UnionWith(_globalEnvironments);
         else Environments.UnionWith(environments.Split([',', '|'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
     }
+    private readonly IReadOnlyList<string> _globalEnvironments;
     public void SetCase(int index, bool selected) { if (selected) Cases.Add(index); else Cases.Remove(index); SyncEnvironments(); }
     public void SetStep(int index, string name, bool selected) { if (selected) Steps[index].Add(name); else Steps[index].Remove(name); SyncEnvironments(); }
     public void SetEnvironment(string name, bool selected)
@@ -103,17 +108,17 @@ public sealed class RunSelectionDraft
     }
     public void SelectAllEnvironments() { AllEnvironments = true; SyncEnvironments(); }
     public void ClearEnvironments() { AllEnvironments = false; Environments.Clear(); }
-    private void SyncEnvironments() { if (AllEnvironments) { Environments.Clear(); Environments.UnionWith(AvailableEnvironments); } }
+    private void SyncEnvironments() { if (AllEnvironments) { Environments.Clear(); Environments.UnionWith(_globalEnvironments); } }
     public bool TryBuild(out RunSelectionResult? result, out string error)
     {
         result = null;
         var cases = Catalog.Where(c => Cases.Contains(c.Index)).ToList();
         if (cases.Count == 0) { error = "Choose at least one testcase."; return false; }
-        if (cases.Any(c => !c.Steps.Any(s => s.Enabled && Steps[c.Index].Contains(s.Name))))
-        { error = "Choose at least one enabled test step in each selected testcase."; return false; }
+        if (cases.Any(c => !c.Steps.Any(s => Steps[c.Index].Contains(s.Name))))
+        { error = "Choose at least one test step in each selected testcase."; return false; }
         var environments = AvailableEnvironments.Where(e => Environments.Contains(e)).ToList();
         if (environments.Count == 0) { error = "Choose at least one environment (or Default for untagged steps)."; return false; }
-        var selectedSteps = cases.ToDictionary(c => c.Index, c => c.Steps.Where(s => s.Enabled && Steps[c.Index].Contains(s.Name)).Select(s => s.Name).ToArray());
+        var selectedSteps = cases.ToDictionary(c => c.Index, c => c.Steps.Where(s => Steps[c.Index].Contains(s.Name)).Select(s => s.Name).ToArray());
         result = new RunSelectionResult(string.Join(',', cases.Select(c => c.Index)), JsonSerializer.Serialize(selectedSteps),
             string.Join(',', environments.Select(e => string.IsNullOrEmpty(e) ? "Default" : e)), JsonSerializer.Serialize(environments));
         error = ""; return true;

@@ -9,6 +9,7 @@ using Avalonia.Threading;
 using ClosedXML.Excel;
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace LoadTestingTool.UI;
 
@@ -143,6 +144,7 @@ internal sealed class InstanceRow : Border
     private readonly TextBlock _order = DashboardStyle.Text("");
     private readonly TextBlock _environment = DashboardStyle.Text("");
     private readonly Border _badgeHost = new();
+    private Button _runButton = null!;
     public InstanceRow(InstanceInfo item, Action<InstanceInfo> select, Action<InstanceInfo> configure, Action<InstanceInfo> addStep, Action<InstanceInfo> editStep, Action<InstanceInfo> trySpreadsheet, Action<InstanceInfo> openWorkbook, Action<InstanceInfo> run, Action<InstanceInfo> stop, Action<InstanceInfo, string, string, string, string> openSelectedLog, Action<InstanceInfo> openLatestLog, Action<InstanceInfo> openAllLogs, Action<InstanceInfo, string, string, string, string, bool> openSelectedHistory, Action<InstanceInfo, bool> openLatestHistory, Action<string> log)
     {
         _item = item;
@@ -156,7 +158,8 @@ internal sealed class InstanceRow : Border
         var name = DashboardStyle.Text(item.Name, 12, true);
         ToolTip.SetTip(name, item.WorkbookPath);
         var actions = new WrapPanel { Orientation = Orientation.Horizontal, ItemWidth = double.NaN, ItemHeight = double.NaN };
-        var runButton = DashboardStyle.Action("Run", () => run(item), "primary");
+        _runButton = DashboardStyle.Action("Run", () => run(item), "primary");
+        var runButton = _runButton;
         ToolTip.SetTip(runButton, "Run all enabled workbook steps using workbook defaults. Use Configure first for a custom selection.");
         var logButton = BuildInternalLogButton(item, openSelectedLog, openLatestLog, openAllLogs);
         var historyButton = BuildHistoryButton(item, openSelectedHistory, openLatestHistory);
@@ -176,6 +179,7 @@ internal sealed class InstanceRow : Border
         _environment.Text = string.IsNullOrWhiteSpace(_item.EnvironmentSelection) ? "All" : _item.EnvironmentSelection;
         ToolTip.SetTip(_environment, string.Join(", ", _item.EnvironmentOptions));
         _badgeHost.Child = DashboardStyle.Badge(_item.Status);
+        _runButton.IsEnabled = _item.Process is null || _item.Process.HasExited;
         Background = _item.Selected ? DashboardStyle.Brush("#173559") : Brushes.Transparent;
     }
     public void SetEnvironmentOptions(IEnumerable<string> options) => Refresh();
@@ -302,10 +306,12 @@ public sealed partial class MainWindow
     private readonly TextBlock _footer = DashboardStyle.Text("", 11, false, DashboardStyle.Muted);
     private readonly TextBox _search = new() { Watermark = "Search instances…", Width = 200, FontSize = 12 };
     private readonly Dictionary<string, Button> _navigation = [];
+    private readonly List<(string Text, string Severity)> _validationLog = [];
     private readonly Grid _workspace = new() { RowDefinitions = new RowDefinitions("Auto,*") };
     private readonly TabControl _detailTabs = new();
     private Button _runButton = null!;
     private Button _chooseButton = null!;
+    private Button _validateButton = null!;
     private Button _stopButton = null!;
     private Button _forceButton = null!;
     private string _page = "Instances";
@@ -313,6 +319,7 @@ public sealed partial class MainWindow
     private Control _settingsPage = null!;
     private Control _historyPage = null!;
     private string _detailSignature = "";
+    private double _logFontSize = 11;
 
     private void BuildLayout()
     {
@@ -342,7 +349,8 @@ public sealed partial class MainWindow
         _runButton = DashboardStyle.Action("▶  Run selected instances", () => RunSelected(promptForMissingSelection: false), "primary");
         _stopButton = DashboardStyle.Action("Stop selected", () => StopSelected(false));
         _forceButton = DashboardStyle.Action("Force stop", () => StopSelected(true), "danger");
-        var commands = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Children = { _chooseButton, _runButton, _stopButton, _forceButton } };
+        _validateButton = DashboardStyle.Action("✓ Validate all", OpenGlobalValidation, "primary");
+        var commands = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Children = { _validateButton, _chooseButton, _runButton, _stopButton, _forceButton } };
         var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(18, 16) };
         header.Children.Add(heading); Grid.SetColumn(commands, 1); header.Children.Add(commands);
 
@@ -378,9 +386,11 @@ public sealed partial class MainWindow
         var table = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*") };
         table.Children.Add(toolbar); Grid.SetRow(columnHeader, 1); table.Children.Add(columnHeader); Grid.SetRow(_instanceList, 2); table.Children.Add(_instanceList);
         var tableCard = DashboardStyle.Card(table, new Thickness(0));
-        var eventHeader = DashboardStyle.Text("Event log  /  selected instance", 13, true);
+        var eventHeader = DashboardStyle.Text("Log", 13, true);
         var events = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
-        events.Children.Add(eventHeader);
+        var logTools = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { eventHeader,
+            DashboardStyle.Action("−", () => ChangeLogFont(-1)), DashboardStyle.Action("+", () => ChangeLogFont(1)), DashboardStyle.Action("Clear", ClearUnifiedLog) } };
+        events.Children.Add(logTools);
         var eventScroll = new ScrollViewer { Content = _eventPanel, Margin = new Thickness(0, 10, 0, 0) };
         Grid.SetRow(eventScroll, 1); events.Children.Add(eventScroll);
         var eventCard = DashboardStyle.Card(events); eventCard.Margin = new Thickness(0, 12, 0, 0);
@@ -431,6 +441,11 @@ public sealed partial class MainWindow
     private static ScrollViewer Scroll(Control control) => new() { Content = control, Padding = new Thickness(14), HorizontalScrollBarVisibility = ScrollBarVisibility.Auto };
     private void Navigate(string page)
     {
+        if (page.Equals("History", StringComparison.OrdinalIgnoreCase))
+        {
+            LaunchHistoryWorkspace();
+            return;
+        }
         _page = page; _pageTitle.Text = page;
         foreach (var (name, button) in _navigation) { if (name == page) button.Classes.Add("active"); else button.Classes.Remove("active"); }
         _workspace.Children.Remove(_body); _workspace.Children.Remove(_settingsPage); _workspace.Children.Remove(_historyPage);
@@ -438,6 +453,23 @@ public sealed partial class MainWindow
         Grid.SetRow(view, 1); _workspace.Children.Add(view);
         if (page == "History") RefreshHistoryPanel();
         FilterInstances();
+    }
+
+    private void LaunchHistoryWorkspace()
+    {
+        try
+        {
+            var processPath = Environment.ProcessPath ?? throw new InvalidOperationException("The dashboard process path is unavailable.");
+            var start = new ProcessStartInfo { FileName = processPath, UseShellExecute = false, CreateNoWindow = true };
+            var entryAssembly = System.Reflection.Assembly.GetEntryAssembly()?.Location;
+            if (!string.IsNullOrWhiteSpace(entryAssembly) && (Path.GetFileNameWithoutExtension(processPath).Equals("dotnet", StringComparison.OrdinalIgnoreCase) || Path.GetFileNameWithoutExtension(processPath).Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase))) start.ArgumentList.Add(entryAssembly);
+            start.ArgumentList.Add("--history"); start.ArgumentList.Add(Path.GetFullPath(_config.InstancesRoot));
+            var history = Process.Start(start) ?? throw new InvalidOperationException("The History workspace process could not be started.");
+            history.EnableRaisingEvents = true;
+            history.Exited += (_, _) => Dispatcher.UIThread.Post(() => UiLog($"History workspace closed. exitCode={history.ExitCode}"));
+            UiLog($"History workspace started. processId={history.Id}; root={_config.InstancesRoot}");
+        }
+        catch (Exception ex) { _details.Text = $"Could not start History workspace: {ex.Message}"; UiLog($"History workspace failed to start. error={ex}"); }
     }
     private void FilterInstances()
     {
@@ -458,10 +490,37 @@ public sealed partial class MainWindow
             panel.Children.Add(KeyValue(label, Path.GetFullPath(value)));
         panel.Children.Add(DashboardStyle.Text("Files and folders open with your system default applications. Set file associations in your OS settings.", 12, false, DashboardStyle.Muted));
         panel.Children.Add(_enableInternalLog);
+        panel.Children.Add(DashboardStyle.Action("Manage global environments", OpenEnvironmentManager, "primary"));
         panel.Children.Add(DashboardStyle.Action("Open UI log", () => OpenFile(Path.GetFullPath(_config.UiLogFile), "UI log")));
         panel.Children.Add(DashboardStyle.Action("Open user manual", () => OpenFile(Path.GetFullPath(_config.DocumentationFile), "user manual")));
-        panel.Children.Add(DashboardStyle.Text("Edit UI/appsettings.json to change configured paths, then restart the app.", 12, false, DashboardStyle.Muted));
+        panel.Children.Add(DashboardStyle.Text("The dashboard reads and writes the central appsettings.json beside the application installation.", 12, false, DashboardStyle.Muted));
         return Scroll(panel);
+    }
+
+    private void OpenEnvironmentManager()
+    {
+        var manager = new EnvironmentManagerWindow(_config.Environments, SaveGlobalEnvironments);
+        manager.Closed += (_, _) => RefreshInstances();
+        manager.Show(this);
+    }
+
+    private void SaveGlobalEnvironments(IReadOnlyList<string> environments)
+    {
+        var root = File.Exists(_config.SettingsFile) ? JsonNode.Parse(File.ReadAllText(_config.SettingsFile)) as JsonObject : new JsonObject();
+        root ??= new JsonObject();
+        var environmentArray = new JsonArray();
+        foreach (var environment in environments) environmentArray.Add(environment);
+        root["Environments"] = environmentArray;
+        if (root["Instances"] is JsonObject instances)
+            foreach (var pair in instances)
+                if (pair.Value is JsonObject instance && instance["EnvironmentSelection"] is JsonValue selectedValue)
+                {
+                    var selected = selectedValue.ToString().Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Where(value => environments.Contains(value, StringComparer.OrdinalIgnoreCase));
+                    instance["EnvironmentSelection"] = string.Join(',', selected);
+                }
+        File.WriteAllText(_config.SettingsFile, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
+        _config.Environments = environments.ToList();
     }
     private static Control KeyValue(string label, string value)
     {
@@ -480,12 +539,12 @@ public sealed partial class MainWindow
             var error = DashboardStyle.Text("Cannot read run choices: " + item.SelectionReadError, 12, false, DashboardStyle.Red);
             error.TextWrapping = TextWrapping.Wrap; _configurationPanel.Children.Add(error); return;
         }
-        _configurationPanel.Children.Add(DashboardStyle.Text("Choose named testcases, steps and environments using the picker below.", 12, false, DashboardStyle.Muted));
+        _configurationPanel.Children.Add(DashboardStyle.Text("Choose named testcases, steps and centrally defined environments using the picker below.", 12, false, DashboardStyle.Muted));
         _configurationPanel.Children.Add(DashboardStyle.Action("Choose tests, steps, environments…", () => _ = ChooseRunSelectionAsync(), "primary"));
-        var draft = new RunSelectionDraft(item.TestcaseOptions, item.TestcaseSelection, item.StepSelectionJson, item.EnvironmentSelection, item.EnvironmentSelectionJson);
+        var draft = new RunSelectionDraft(item.TestcaseOptions, item.EnvironmentOptions, item.TestcaseSelection, item.StepSelectionJson, item.EnvironmentSelection, item.EnvironmentSelectionJson);
         _configurationPanel.Children.Add(KeyValue("Testcases", string.Join(", ", item.TestcaseOptions.Where(c => draft.Cases.Contains(c.Index)).Select(c => $"{c.Index}: {c.Name}"))));
         _configurationPanel.Children.Add(KeyValue("Test steps", string.IsNullOrWhiteSpace(item.StepSelectionJson) ? "All enabled steps" : string.Join(", ", item.TestcaseOptions.Where(c => draft.Cases.Contains(c.Index)).SelectMany(c => c.Steps.Where(s => draft.Steps[c.Index].Contains(s.Name)).Select(s => $"{c.Index}: {s.Name}")))));
-        _configurationPanel.Children.Add(KeyValue("Environments", string.IsNullOrWhiteSpace(item.EnvironmentSelection) ? "All available for selected steps" : item.EnvironmentSelection));
+        _configurationPanel.Children.Add(KeyValue("Environments", string.IsNullOrWhiteSpace(item.EnvironmentSelection) ? "All global environments" : item.EnvironmentSelection));
         var mode = new ComboBox { ItemsSource = new[] { "Threaded", "Sequential loop" }, SelectedIndex = item.ExecutionMode == "loop" ? 1 : 0, HorizontalAlignment = HorizontalAlignment.Stretch };
         mode.SelectionChanged += (_, _) => item.ExecutionMode = mode.SelectedIndex == 1 ? "loop" : "threaded";
         _configurationPanel.Children.Add(Field("Execution mode", mode));
@@ -507,6 +566,121 @@ public sealed partial class MainWindow
         _configurationPanel.Children.Add(DashboardStyle.Action("Save execution settings", () => SaveInstanceExecutionSettings(item, threads.Text, iterations.Text, threadInterval.Text, iterationInterval.Text, generateResults.IsChecked == true, item.ExecutionMode, item.RunScenariosInParallel), "primary"));
         _configurationPanel.Children.Add(KeyValue("Data IDs", string.IsNullOrWhiteSpace(item.DataIdSelection) ? "All data rows" : item.DataIdSelection));
         _configurationPanel.Children.Add(DashboardStyle.Text("Workbook actions are available directly on the instance row: Add step, Edit step, Edit dataset, and Open workbook. The legacy editor is available in Handcraft.", 12, false, DashboardStyle.Muted));
+    }
+
+    private void OpenGlobalValidation()
+    {
+        _ = RunGlobalValidationAsync();
+    }
+
+    private async Task RunGlobalValidationAsync()
+    {
+        _validateButton.IsEnabled = false;
+        _validateButton.Content = "… Validating";
+        _validateButton.Background = DashboardStyle.Brush("#245A8D");
+        _validationLog.Clear();
+        _validationLog.Add(("[validate]", "INFO"));
+        _validationLog.Add(("Validation started for all instances. Requests will not be executed.", "INFO"));
+        RenderUnifiedLog();
+        try
+        {
+            var results = await Task.Run(() => GlobalValidationService.ValidateAll(_instances.ToList(), _config.Environments.ToList()));
+            var errors = results.Sum(x => x.Issues.Count(i => i.Severity == "ERROR"));
+            var warnings = results.Sum(x => x.Issues.Count(i => i.Severity == "WARNING"));
+            var status = errors > 0 ? "ERROR" : warnings > 0 ? "WARNING" : "PASS";
+            _validationLog.Add(($"Validation completed: {errors} error(s), {warnings} warning(s) across {results.Count} instance(s).", status));
+            foreach (var result in results)
+            {
+                _validationLog.Add(($"\n{(result.HasErrors ? "FAILED" : result.HasWarnings ? "WARNINGS" : "PASSED")}  {result.Instance}", result.HasErrors ? "ERROR" : result.HasWarnings ? "WARNING" : "PASS"));
+                foreach (var issue in result.Issues)
+                    _validationLog.Add((issue.ToString(), issue.Severity));
+            }
+            _validationLog.Add(("[end validate]", status));
+            SetValidationButton(status, errors, warnings);
+            UiLog($"Global validation completed. instances={results.Count}; errors={errors}; warnings={warnings}");
+        }
+        catch (Exception ex)
+        {
+            _validationLog.Add(($"[ERROR] Validation could not complete.\n{ex.Message}\nFix: Review central appsettings.json and validate again.", "ERROR"));
+            _validationLog.Add(("[end validate]", "ERROR"));
+            SetValidationButton("ERROR", 1, 0);
+            UiLog($"Global validation failed: {ex}");
+        }
+        finally
+        {
+            _validateButton.IsEnabled = true;
+            RenderUnifiedLog();
+        }
+    }
+
+    private void SetValidationButton(string status, int errors, int warnings)
+    {
+        _validateButton.Content = status switch
+        {
+            "ERROR" => $"✕ Validate all ({errors} errors)",
+            "WARNING" => $"⚠ Validate all ({warnings} warnings)",
+            "PASS" => "✓ Validate all (passed)",
+            _ => "✓ Validate all"
+        };
+        _validateButton.Background = DashboardStyle.Brush(status switch
+        {
+            "ERROR" => "#8B2635",
+            "WARNING" => "#8A5A18",
+            "PASS" => "#176B50",
+            _ => "#245A8D"
+        });
+    }
+
+    private void ChangeLogFont(double delta)
+    {
+        _logFontSize = Math.Clamp(_logFontSize + delta, 9, 24);
+        RenderUnifiedLog();
+    }
+
+    private void ClearUnifiedLog()
+    {
+        _validationLog.Clear();
+        if (_selectedInstance is not null) _selectedInstance.EventMessages.Clear();
+        SetValidationButton("READY", 0, 0);
+        RenderUnifiedLog();
+    }
+
+    private void RenderUnifiedLog()
+    {
+        if (_eventPanel is null) return;
+        _eventPanel.Children.Clear();
+        var lines = new List<(string Text, string Severity)>();
+        if (_selectedInstance is not null)
+            lines.AddRange(_selectedInstance.EventMessages.TakeLast(100).Reverse().Select(x => (x, "INFO")));
+        lines.AddRange(_validationLog);
+        if (lines.Count == 0)
+        {
+            _eventPanel.Children.Add(DashboardStyle.Text("No log entries yet. Events and validation output will appear here.", 12, false, DashboardStyle.Muted));
+            return;
+        }
+        foreach (var (text, severity) in lines)
+        {
+            var box = new TextBox
+            {
+                Text = text,
+                IsReadOnly = true,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = _logFontSize,
+                FontFamily = new FontFamily("monospace"),
+                Foreground = severity switch
+                {
+                    "ERROR" => DashboardStyle.Red,
+                    "WARNING" => DashboardStyle.Brush("#F6A623"),
+                    "PASS" => DashboardStyle.Green,
+                    _ => DashboardStyle.Muted
+                },
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(2, 1)
+            };
+            _eventPanel.Children.Add(box);
+        }
     }
     private async Task EditWorkbookAsync()
     {
@@ -531,10 +705,22 @@ public sealed partial class MainWindow
         SaveInstanceExecutionSettings(item, result.Threads.ToString(), result.Iterations.ToString(), result.ThreadIntervalMs.ToString(), result.IterationIntervalMs.ToString());
         try
         {
-            var profile = Path.Combine(item.FolderPath, ".run-selection.json");
-            var temporary = profile + ".tmp";
-            File.WriteAllText(temporary, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
-            File.Move(temporary, profile, overwrite: true);
+            var root = File.Exists(_config.SettingsFile) ? JsonNode.Parse(File.ReadAllText(_config.SettingsFile)) as JsonObject : new JsonObject();
+            root ??= new JsonObject();
+            var instances = root["Instances"] as JsonObject ?? new JsonObject();
+            var instance = instances[item.Name] as JsonObject ?? new JsonObject();
+            instance["TestcaseSelection"] = result.Testcases;
+            instance["StepSelection"] = result.StepsJson;
+            instance["EnvironmentSelection"] = result.Environments;
+            instance["DataIdSelection"] = result.DataIds;
+            instance["ExecutionMode"] = result.ExecutionMode;
+            instance["RunScenariosInParallel"] = result.ScenariosParallel;
+            instance["Threads"] = result.Threads;
+            instance["Iterations"] = result.Iterations;
+            instance["ThreadIntervalMs"] = result.ThreadIntervalMs;
+            instance["IterationIntervalMs"] = result.IterationIntervalMs;
+            instances[item.Name] = instance; root["Instances"] = instances;
+            File.WriteAllText(_config.SettingsFile, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
             _details.Text = $"Selection saved for {item.Name}. Testcases: {result.Testcases}; Data IDs: {(string.IsNullOrWhiteSpace(result.DataIds) ? "all rows" : result.DataIds)}";
         }
         catch (Exception ex) { _details.Text = $"Selection applied, but could not save it: {ex.Message}"; UiLog($"Could not save selection profile for {item.Name}: {ex}"); }
@@ -572,12 +758,12 @@ public sealed partial class MainWindow
         if (item is null)
         {
             _overviewPanel.Children.Add(DashboardStyle.Text("Select an instance to inspect its run.", color: DashboardStyle.Muted));
-            _eventPanel.Children.Clear(); _eventPanel.Children.Add(DashboardStyle.Text("No selected instance.", color: DashboardStyle.Muted));
+            RenderUnifiedLog();
             _artifactPanel.Children.Clear(); return;
         }
         void AddOverview(Control control, string searchable) { if (MatchesTerms(searchable, _overviewFilter.Text)) _overviewPanel.Children.Add(control); }
         AddOverview(DashboardStyle.Badge(item.Status), item.Status);
-        AddOverview(KeyValue("Environment", string.IsNullOrWhiteSpace(item.EnvironmentSelection) ? "All workbook environments" : item.EnvironmentSelection), item.EnvironmentSelection);
+        AddOverview(KeyValue("Environment", string.IsNullOrWhiteSpace(item.EnvironmentSelection) ? "All global environments" : item.EnvironmentSelection), item.EnvironmentSelection);
         AddOverview(KeyValue("Mode / order", $"{(item.ExecutionMode == "loop" ? "Loop" : "Threaded")} / {(item.RunScenariosInParallel ? "Parallel" : "Sequential")}"), $"{item.ExecutionMode} {(item.RunScenariosInParallel ? "Parallel" : "Sequential")}");
         AddOverview(KeyValue("Started", item.StartedAt?.ToString("HH:mm:ss") ?? "Not started"), item.StartedAt?.ToString() ?? "Not started");
         AddOverview(KeyValue("Requests", (item.CompletedRequests ?? item.Requests.Count).ToString()), $"{item.CompletedRequests} {item.Requests.Count}");
@@ -610,12 +796,7 @@ public sealed partial class MainWindow
             _overviewPanel.Children.Add(new LatencyChart(item.Requests.TakeLast(30).Select(r => (double)r.DurationMs).ToArray()) { Height = 90 });
             _overviewPanel.Children.Add(DashboardStyle.Text($"Range: 0–{item.Requests.TakeLast(30).Max(r => r.DurationMs)} ms / observed completion order", 10, false, DashboardStyle.Muted));
         }
-        _eventPanel.Children.Clear();
-        foreach (var line in item.EventMessages.TakeLast(100).Reverse())
-        {
-            var text = DashboardStyle.Text(line, 11, false, DashboardStyle.Muted); text.FontFamily = new FontFamily("monospace"); text.TextWrapping = TextWrapping.Wrap; _eventPanel.Children.Add(text);
-        }
-        if (item.EventMessages.Count == 0) _eventPanel.Children.Add(DashboardStyle.Text("No events yet. Runner events will appear here.", 12, false, DashboardStyle.Muted));
+        RenderUnifiedLog();
         RefreshAssertionList(); RefreshArtifacts();
     }
     private void RefreshArtifacts()
@@ -624,7 +805,6 @@ public sealed partial class MainWindow
         if (item is null) return;
         _artifactPanel.Children.Add(DashboardStyle.Text("Workbooks and run artifacts", 16, true));
         _artifactPanel.Children.Add(DashboardStyle.Action("Handcraft: Edit workbook (legacy)", () => _ = EditWorkbookAsync()));
-        _artifactPanel.Children.Add(DashboardStyle.Action("Open DataEngine", OpenSelectedDataEngine));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open latest result workbook", OpenLatestResultWorkbook));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open Templates folder", OpenTemplatesFolder));
         _artifactPanel.Children.Add(DashboardStyle.Action("Open Results folder", () =>
@@ -636,7 +816,6 @@ public sealed partial class MainWindow
             }
             OpenFolder(item.ResultsFolder, "results folder");
         }));
-        _artifactPanel.Children.Add(DashboardStyle.Action("Open latest comparison", OpenLatestAssertionComparison));
         _artifactPanel.Children.Add(KeyValue("Workbook", item.WorkbookPath));
         _artifactPanel.Children.Add(KeyValue("Results", item.ResultsFolder));
         _artifactPanel.Children.Add(KeyValue("Current run", item.CurrentRunFolder));
