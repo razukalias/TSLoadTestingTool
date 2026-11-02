@@ -53,7 +53,8 @@ internal static class DashboardStyle
             "Passed" => ("#39D39B", "#143F35"),
             "Failed" or "Launch failed" or "Stop failed" => ("#FF7588", "#432333"),
             "Running" => ("#72B7FF", "#193B61"),
-            "Stopping" or "Cancelled" or "Force stopped" => ("#F6C76B", "#443A25"),
+            "Stopping" or "Cancelled" or "Force stopped" or "Incomplete" => ("#F6C76B", "#443A25"),
+            "Unexpected error" => ("#FFB36B", "#4A3220"),
             _ => ("#A6B9CE", "#24364B")
         };
         return new Border { CornerRadius = new CornerRadius(12), Padding = new Thickness(8, 4),
@@ -811,23 +812,61 @@ public sealed partial class MainWindow
         AddOverview(KeyValue("p95 latency", item.P95Ms is null ? "Available on completion" : $"{item.P95Ms} ms"), item.P95Ms?.ToString() ?? "Available");
         AddOverview(KeyValue("Throughput", item.RequestsPerSecond is null ? "Available on completion" : $"{item.RequestsPerSecond:F2} requests / sec"), item.RequestsPerSecond?.ToString() ?? "Available");
         AddOverview(KeyValue("Assertions", $"{item.Assertions.Count(a => a.Result == "PASS")} passed / {item.Assertions.Count(a => a.Result == "FAIL")} failed"), $"{item.Assertions.Count} pass fail");
+        var rowSummaries = BuildDashboardRowSummaries(item.Requests);
+        var testcaseSummaries = rowSummaries.GroupBy(x => x.Testcase, StringComparer.OrdinalIgnoreCase).ToList();
+        var passedRows = rowSummaries.Count(x => x.Status == "Passed");
+        var failedRows = rowSummaries.Count(x => x.Status == "Failed");
+        var unexpectedRows = rowSummaries.Count(x => x.Status == "Unexpected error");
+        var incompleteRows = rowSummaries.Count(x => x.Status == "Incomplete" || x.Status == "Cancelled");
+        var passedCases = testcaseSummaries.Count(x => x.All(row => row.Status == "Passed"));
+        var failedCases = testcaseSummaries.Count(x => x.Any(row => row.Status == "Failed"));
+        var unexpectedCases = testcaseSummaries.Count(x => x.Any(row => row.Status == "Unexpected error"));
         _overviewPanel.Children.Add(new Border { Height = 1, Background = DashboardStyle.Line });
-        _overviewPanel.Children.Add(DashboardStyle.Text("Run timeline  /  completed steps", 14, true));
-        if (item.Requests.Count == 0) _overviewPanel.Children.Add(DashboardStyle.Text("No completed steps yet. Run this instance to see results.", 12, false, DashboardStyle.Muted));
-        foreach (var request in item.Requests.TakeLast(20))
+        _overviewPanel.Children.Add(DashboardStyle.Text("Execution summary", 14, true));
+        var summaryCards = new WrapPanel { Orientation = Orientation.Horizontal, ItemWidth = 158, ItemHeight = 76 };
+        void SummaryCard(string label, int value, IBrush color)
         {
+            var card = DashboardStyle.Card(new StackPanel { Spacing = 4, Children = { DashboardStyle.Text(label, 11, false, DashboardStyle.Muted), DashboardStyle.Text(value.ToString(), 22, true, color) } }, new Thickness(10));
+            card.Margin = new Thickness(0, 0, 8, 8); summaryCards.Children.Add(card);
+        }
+        SummaryCard("Testcases observed", testcaseSummaries.Count, DashboardStyle.Blue);
+        SummaryCard("Testcases passed", passedCases, DashboardStyle.Green);
+        SummaryCard("Testcases failed", failedCases, DashboardStyle.Red);
+        SummaryCard("Testcases unexpected", unexpectedCases, DashboardStyle.Brush("#FFB36B"));
+        SummaryCard("Rows observed", rowSummaries.Count, DashboardStyle.Blue);
+        SummaryCard("Rows passed", passedRows, DashboardStyle.Green);
+        SummaryCard("Rows failed", failedRows, DashboardStyle.Red);
+        SummaryCard("Rows unexpected", unexpectedRows, DashboardStyle.Brush("#FFB36B"));
+        SummaryCard("Rows incomplete", incompleteRows, DashboardStyle.Brush("#F6C76B"));
+        _overviewPanel.Children.Add(summaryCards);
+        _overviewPanel.Children.Add(DashboardStyle.Text($"Observed {rowSummaries.Count} unique testcase/data rows and {item.Requests.Count} completed step executions. A row is passed only when all observed steps passed.", 11, false, DashboardStyle.Muted));
+        _overviewPanel.Children.Add(new Border { Height = 1, Background = DashboardStyle.Line });
+        _overviewPanel.Children.Add(DashboardStyle.Text($"Executed rows  /  {rowSummaries.Count} total", 14, true));
+        if (rowSummaries.Count == 0) _overviewPanel.Children.Add(DashboardStyle.Text("No completed rows yet. Run this instance to see results.", 12, false, DashboardStyle.Muted));
+        foreach (var row in rowSummaries)
+        {
+            var searchable = $"{row.Testcase} {row.DataId} {row.Environment} {row.Status} {row.Details}";
+            if (!MatchesTerms(searchable, _overviewFilter.Text)) continue;
+            var heading = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+            var name = DashboardStyle.Text($"{row.Testcase}  /  Row {row.DataId}", 12, true); name.TextWrapping = TextWrapping.Wrap;
+            heading.Children.Add(name);
+            var badge = DashboardStyle.Badge(row.Status); Grid.SetColumn(badge, 1); heading.Children.Add(badge);
+            var metadata = DashboardStyle.Text($"Environment: {row.Environment}  ·  Steps: {row.Steps}  ·  Passed: {row.Passed}  ·  Failed: {row.Failed}  ·  Unexpected: {row.Unexpected}  ·  Skipped: {row.Skipped}", 10, false, DashboardStyle.Muted); metadata.TextWrapping = TextWrapping.Wrap;
+            var line = new StackPanel { Spacing = 5, Children = { heading, metadata } };
+            if (!string.IsNullOrWhiteSpace(row.Details)) { var details = DashboardStyle.Text(row.Details, 11, false, row.Status == "Passed" ? DashboardStyle.Muted : DashboardStyle.Red); details.TextWrapping = TextWrapping.Wrap; line.Children.Add(details); }
+            _overviewPanel.Children.Add(DashboardStyle.Card(line, new Thickness(10)));
+        }
+        _overviewPanel.Children.Add(DashboardStyle.Text("Step execution timeline  /  all completed steps", 13, true));
+        foreach (var request in item.Requests)
+        {
+            var searchable = $"{request.StepType} {request.StepName} {request.Testcase} {request.DataId} {request.Environment} {request.Result} {request.Error}";
+            if (!MatchesTerms(searchable, _overviewFilter.Text)) continue;
             var top = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
-            top.Children.Add(DashboardStyle.Text($"{request.StepType}  ·  {request.StepName}", 12, true));
-            var time = DashboardStyle.Text($"{request.DurationMs} ms", 11, false, DashboardStyle.Muted);
-            Grid.SetColumn(time, 1); top.Children.Add(time);
-            var bottom = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
-            bottom.Children.Add(DashboardStyle.Text($"{request.Testcase} / {request.DataId}", 10, false, DashboardStyle.Muted));
-            var badge = DashboardStyle.Badge(request.Result == "PASS" ? "Passed" : "Failed");
-            Grid.SetColumn(badge, 1); bottom.Children.Add(badge);
-            var line = new StackPanel { Spacing = 4, Children = { top, bottom } };
-            if (!string.IsNullOrWhiteSpace(request.FailureCategory) && request.FailureCategory != "None")
-                line.Children.Add(DashboardStyle.Text($"{request.FailureCategory}: {request.Error}", 11, false, DashboardStyle.Red));
-            if (MatchesTerms($"{request.StepType} {request.StepName} {request.Testcase} {request.DataId} {request.Result} {request.Error}", _overviewFilter.Text)) _overviewPanel.Children.Add(DashboardStyle.Card(line, new Thickness(10)));
+            top.Children.Add(DashboardStyle.Text($"{request.StepType}  ·  {request.StepName}", 11, true));
+            var time = DashboardStyle.Text($"{request.DurationMs} ms", 10, false, DashboardStyle.Muted); Grid.SetColumn(time, 1); top.Children.Add(time);
+            var line = new StackPanel { Spacing = 3, Children = { top, DashboardStyle.Text($"{request.Testcase} / {request.DataId} / {request.Environment}", 10, false, DashboardStyle.Muted), DashboardStyle.Badge(IsUnexpectedRequest(request) ? "Unexpected error" : request.Result == "PASS" ? "Passed" : "Failed") } };
+            if (!string.IsNullOrWhiteSpace(request.FailureCategory) && request.FailureCategory != "None") { var error = DashboardStyle.Text($"{request.FailureCategory}: {request.Error}", 10, false, DashboardStyle.Red); error.TextWrapping = TextWrapping.Wrap; line.Children.Add(error); }
+            _overviewPanel.Children.Add(DashboardStyle.Card(line, new Thickness(8)));
         }
         if (item.Requests.Count > 0)
         {
@@ -837,6 +876,25 @@ public sealed partial class MainWindow
         }
         RenderUnifiedLog();
         RefreshAssertionList(); RefreshArtifacts();
+    }
+    private static bool IsUnexpectedRequest(DashboardRequest request)
+        => !string.IsNullOrWhiteSpace(request.Error) || (!string.IsNullOrWhiteSpace(request.FailureCategory) && request.FailureCategory is not "None" and not "Assertion" and not "HttpStatus");
+    private static IReadOnlyList<DashboardRowSummary> BuildDashboardRowSummaries(IReadOnlyList<DashboardRequest> requests)
+    {
+        return requests.GroupBy(request => $"{request.Testcase}\u001F{request.DataId}\u001F{request.Environment}", StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var values = group.ToList();
+                var unexpected = values.Count(IsUnexpectedRequest);
+                var failed = values.Count(x => x.Result.Equals("FAIL", StringComparison.OrdinalIgnoreCase) && !IsUnexpectedRequest(x));
+                var passed = values.Count(x => x.Result.Equals("PASS", StringComparison.OrdinalIgnoreCase));
+                var skipped = values.Count(x => x.Result.Equals("SKIPPED", StringComparison.OrdinalIgnoreCase));
+                var status = unexpected > 0 ? "Unexpected error" : failed > 0 ? "Failed" : skipped > 0 && passed == 0 ? "Cancelled" : passed == values.Count && values.Count > 0 ? "Passed" : "Incomplete";
+                var details = string.Join("  |  ", values.Where(x => !string.IsNullOrWhiteSpace(x.Error) || (!string.IsNullOrWhiteSpace(x.FailureCategory) && x.FailureCategory != "None")).Select(x => $"{x.StepName}: {x.FailureCategory} {x.Error}"));
+                var first = values[0];
+                return new DashboardRowSummary(first.Testcase, first.DataId, string.IsNullOrWhiteSpace(first.Environment) ? "default" : first.Environment, values.Count, passed, failed, unexpected, skipped, status, details);
+            })
+            .OrderBy(x => x.Testcase, StringComparer.OrdinalIgnoreCase).ThenBy(x => x.DataId, StringComparer.OrdinalIgnoreCase).ThenBy(x => x.Environment, StringComparer.OrdinalIgnoreCase).ToList();
     }
     private void RefreshArtifacts()
     {
@@ -1058,7 +1116,7 @@ public sealed partial class MainWindow
         var type = Str("eventType");
         if (type == "request-completed")
         {
-            item.Requests.Add(new DashboardRequest(Str("stepName"), Str("stepType"), Str("testcase"), Str("dataId"), Str("result"), Long("durationMs"), Str("failureCategory"), Str("errorMessage")));
+            item.Requests.Add(new DashboardRequest(Str("stepName"), Str("stepType"), Str("testcase"), Str("dataId"), Str("environment"), Str("result"), Long("durationMs"), Str("failureCategory"), Str("errorMessage")));
             item.EventMessages.Add($"{DateTime.Now:HH:mm:ss}  {Str("result"),-5}  {Str("stepType")} / {Str("stepName")} / {Long("durationMs")} ms / {Str("failureCategory")}");
         }
         else if (type == "run-completed")
@@ -1071,7 +1129,8 @@ public sealed partial class MainWindow
     }
 }
 
-public sealed record DashboardRequest(string StepName, string StepType, string Testcase, string DataId, string Result, long DurationMs, string FailureCategory, string Error);
+public sealed record DashboardRequest(string StepName, string StepType, string Testcase, string DataId, string Environment, string Result, long DurationMs, string FailureCategory, string Error);
+internal sealed record DashboardRowSummary(string Testcase, string DataId, string Environment, int Steps, int Passed, int Failed, int Unexpected, int Skipped, string Status, string Details);
 internal sealed record HistoryRequest(string Testcase, string DataId, string Step, string Result, long DurationMs, int HttpStatus, string RequestBody, string ResponseBody, string RequestHeaders, string ResponseHeaders, string StepConfig);
 internal sealed record HistoryAssertion(string Testcase, string DataId, string Step, string Path, string Verb, string Type, string Meaning, string Expected, string Actual, string Result);
 internal sealed record HistoryEntry(string Path, string Instance, string Status, string RunId, DateTime Started, IReadOnlyList<HistoryRequest> Requests, IReadOnlyList<HistoryAssertion> Assertions, int Passed, int Failed, string P95Ms, string SearchText);
