@@ -371,7 +371,9 @@ public sealed partial class MainWindow : Window
         var candidateMap = new Dictionary<string, (string Name, string Folder, string Workbook)>(StringComparer.OrdinalIgnoreCase);
         foreach (var pair in _config.Instances.Where(pair => pair.Value.Enabled))
         {
-            var folder = Path.GetFullPath(pair.Value.Folder, centralBase);
+            var derivedFolder = Path.GetFullPath(pair.Key, root);
+            var legacyFolder = string.IsNullOrWhiteSpace(pair.Value.Folder) ? string.Empty : Path.GetFullPath(pair.Value.Folder, centralBase);
+            var folder = Directory.Exists(derivedFolder) || string.IsNullOrWhiteSpace(legacyFolder) ? derivedFolder : legacyFolder;
             candidateMap[folder] = (pair.Key, folder, pair.Value.Workbook);
         }
 
@@ -400,15 +402,17 @@ public sealed partial class MainWindow : Window
                 .Where(x => !Path.GetFileName(x).StartsWith("~$", StringComparison.Ordinal))
                 .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault();
-            var configuredWorkbook = string.IsNullOrWhiteSpace(candidate.Workbook) ? null : Path.GetFullPath(candidate.Workbook, folder);
+            var preferredWorkbook = Path.Combine(folder, _config.WorkbookName);
+            var legacyWorkbook = string.IsNullOrWhiteSpace(candidate.Workbook) ? null : Path.GetFullPath(candidate.Workbook, folder);
+            var configuredWorkbook = File.Exists(preferredWorkbook) ? preferredWorkbook : legacyWorkbook;
             var workbook = configuredWorkbook is not null && File.Exists(configuredWorkbook) ? configuredWorkbook : discoveredWorkbook;
             if (workbook is null)
             {
                 UiLog($"Skipping registered instance '{candidate.Name}': no XLSX workbook exists in {folder}");
                 continue;
             }
-            if (configuredWorkbook is not null && !File.Exists(configuredWorkbook))
-                UiLog($"Configured workbook is missing for '{candidate.Name}'; using discovered workbook: {workbook}");
+            if (!File.Exists(preferredWorkbook) && workbook is not null && !Path.GetFileName(workbook).Equals(_config.WorkbookName, StringComparison.OrdinalIgnoreCase))
+                UiLog($"Global workbook '{_config.WorkbookName}' is missing for '{candidate.Name}'; using existing workbook: {workbook}");
             var item = previous.GetValueOrDefault(folder) ?? new InstanceInfo { Name = candidate.Name, FolderPath = folder, WorkbookPath = workbook };
             item.Name = candidate.Name;
             item.WorkbookPath = workbook;
@@ -473,7 +477,7 @@ public sealed partial class MainWindow : Window
     private async Task CreateInstanceAsync()
     {
         var root = Path.GetFullPath(_config.InstancesRoot);
-        var builder = new InstanceBuilderWindow(root);
+        var builder = new InstanceBuilderWindow(root, _config.WorkbookName);
         builder.Closed += (_, _) =>
         {
             var createdFolder = builder.CreatedFolder;
@@ -496,12 +500,10 @@ public sealed partial class MainWindow : Window
             root ??= new JsonObject();
             var instances = root["Instances"] as JsonObject ?? new JsonObject();
             var name = Path.GetFileName(folder);
-            var workbook = Directory.GetFiles(folder, "*.xlsx", SearchOption.TopDirectoryOnly).FirstOrDefault(x => !Path.GetFileName(x).StartsWith("~$", StringComparison.Ordinal));
-            var relativeFolder = Path.GetRelativePath(Path.GetDirectoryName(_config.SettingsFile)!, folder).Replace('\\', '/');
-            instances[name] = new JsonObject { ["Folder"] = relativeFolder, ["Workbook"] = workbook is null ? $"{name}.xlsx" : Path.GetFileName(workbook), ["Enabled"] = true };
+            instances[name] = new JsonObject { ["Enabled"] = true };
             root["Instances"] = instances;
             File.WriteAllText(_config.SettingsFile, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
-            _config.Instances[name] = new UiInstanceDefinition { Folder = relativeFolder, Workbook = workbook is null ? $"{name}.xlsx" : Path.GetFileName(workbook), Enabled = true };
+            _config.Instances[name] = new UiInstanceDefinition { Enabled = true };
             UiLog($"Registered instance centrally. instance={name}; settings={_config.SettingsFile}");
         }
         catch (Exception ex) { UiLog($"Could not register instance centrally: {ex}"); _details.Text = $"Instance created, but central registration failed: {ex.Message}"; }
@@ -1434,6 +1436,10 @@ public sealed partial class MainWindow : Window
                 var central = JsonNode.Parse(File.ReadAllText(config.SettingsFile)) as JsonObject;
                 if (central is not null)
                 {
+                    if (central["InstancesRoot"] is JsonValue instancesRoot && !string.IsNullOrWhiteSpace(instancesRoot.ToString()))
+                        config.InstancesRoot = ResolveConfiguredPath(instancesRoot.ToString(), Path.GetDirectoryName(config.SettingsFile)!);
+                    if (central["WorkbookName"] is JsonValue workbookName && !string.IsNullOrWhiteSpace(workbookName.ToString()))
+                        config.WorkbookName = Path.GetFileName(workbookName.ToString());
                     if (int.TryParse(central["Threads"]?.ToString(), out var threads)) config.Threads = Math.Max(1, threads);
                     if (int.TryParse(central["Iterations"]?.ToString(), out var iterations)) config.Iterations = Math.Max(1, iterations);
                     if (int.TryParse(central["ThreadIntervalMs"]?.ToString(), out var threadInterval)) config.ThreadIntervalMs = Math.Max(0, threadInterval);

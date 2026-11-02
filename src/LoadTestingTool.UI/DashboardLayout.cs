@@ -485,9 +485,16 @@ public sealed partial class MainWindow
     {
         var panel = new StackPanel { Spacing = 16 };
         panel.Children.Add(DashboardStyle.Text("Local runner settings", 20, true));
-        panel.Children.Add(DashboardStyle.Text("Paths are resolved relative to the UI executable, not your current folder.", 12, false, DashboardStyle.Muted));
-        foreach (var (label, value) in new[] { ("Instances root", _config.InstancesRoot), ("Runner", _config.RunnerDll), ("UI log", _config.UiLogFile), ("Documentation", _config.DocumentationFile) })
-            panel.Children.Add(KeyValue(label, Path.GetFullPath(value)));
+        panel.Children.Add(DashboardStyle.Text("Global paths are stored in the central appsettings.json. Instance folders are derived as InstancesRoot/<instance name>.", 12, false, DashboardStyle.Muted));
+        var instancesRoot = new TextBox { Text = _config.InstancesRoot, HorizontalAlignment = HorizontalAlignment.Stretch };
+        var workbookName = new TextBox { Text = _config.WorkbookName, HorizontalAlignment = HorizontalAlignment.Stretch };
+        panel.Children.Add(Field("Instances root", instancesRoot));
+        panel.Children.Add(Field("Global workbook filename", workbookName));
+        panel.Children.Add(DashboardStyle.Action("Save global paths", () => SaveGlobalPathSettings(instancesRoot.Text, workbookName.Text), "primary"));
+        panel.Children.Add(DashboardStyle.Text("Runner", 12, false, DashboardStyle.Muted));
+        panel.Children.Add(KeyValue("Path", Path.GetFullPath(_config.RunnerDll)));
+        panel.Children.Add(KeyValue("UI log", Path.GetFullPath(_config.UiLogFile)));
+        panel.Children.Add(KeyValue("Documentation", Path.GetFullPath(_config.DocumentationFile)));
         panel.Children.Add(DashboardStyle.Text("Files and folders open with your system default applications. Set file associations in your OS settings.", 12, false, DashboardStyle.Muted));
         panel.Children.Add(_enableInternalLog);
         panel.Children.Add(DashboardStyle.Action("Manage global environments", OpenEnvironmentManager, "primary"));
@@ -495,6 +502,38 @@ public sealed partial class MainWindow
         panel.Children.Add(DashboardStyle.Action("Open user manual", () => OpenFile(Path.GetFullPath(_config.DocumentationFile), "user manual")));
         panel.Children.Add(DashboardStyle.Text("The dashboard reads and writes the central appsettings.json beside the application installation.", 12, false, DashboardStyle.Muted));
         return Scroll(panel);
+    }
+    private void SaveGlobalPathSettings(string? instancesRootText, string? workbookNameText)
+    {
+        var workbookName = Path.GetFileName((workbookNameText ?? string.Empty).Trim());
+        if (string.IsNullOrWhiteSpace(workbookName) || workbookName.Equals(".", StringComparison.Ordinal) || workbookName.Equals("..", StringComparison.Ordinal) || !workbookName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
+        {
+            _details.Text = "Global workbook filename must be a valid .xlsx filename, for example DataEngine.xlsx.";
+            return;
+        }
+        try
+        {
+            var settingsDirectory = Path.GetDirectoryName(_config.SettingsFile)!;
+            var fullRoot = Path.GetFullPath(string.IsNullOrWhiteSpace(instancesRootText) ? _config.InstancesRoot : instancesRootText.Trim(), settingsDirectory);
+            var storedRoot = Path.GetRelativePath(settingsDirectory, fullRoot).Replace('\\', '/');
+            var root = File.Exists(_config.SettingsFile) ? JsonNode.Parse(File.ReadAllText(_config.SettingsFile)) as JsonObject : new JsonObject();
+            root ??= new JsonObject();
+            root["InstancesRoot"] = storedRoot;
+            root["WorkbookName"] = workbookName;
+            if (root["Instances"] is JsonObject instances)
+                foreach (var pair in instances)
+                    if (pair.Value is JsonObject instance)
+                    {
+                        instance.Remove("Folder");
+                        instance.Remove("Workbook");
+                    }
+            File.WriteAllText(_config.SettingsFile, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
+            _config.InstancesRoot = fullRoot;
+            _config.WorkbookName = workbookName;
+            RefreshInstances();
+            _details.Text = $"Saved global paths. Instances use {fullRoot}/<instance name>/{workbookName}. Existing workbook names remain supported until migrated.";
+        }
+        catch (Exception ex) { _details.Text = $"Could not save global paths: {ex.Message}"; }
     }
 
     private void OpenEnvironmentManager()

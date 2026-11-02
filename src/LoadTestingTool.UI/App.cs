@@ -7,6 +7,7 @@ namespace LoadTestingTool.UI;
 public sealed class UiConfig
 {
     public string InstancesRoot { get; set; } = "../Instances";
+    public string WorkbookName { get; set; } = "DataEngine.xlsx";
     public string RunnerDll { get; set; } = "../Runner/LoadTestingTool.exe";
     public string SettingsFile { get; set; } = "../appsettings.json";
     public string InstancePrefix { get; set; } = "DataEngine_";
@@ -23,6 +24,7 @@ public sealed class UiConfig
 
 public sealed class UiInstanceDefinition
 {
+    // Legacy migration fields. New instances derive paths from the key and UiConfig.
     public string Folder { get; set; } = string.Empty;
     public string Workbook { get; set; } = string.Empty;
     public bool Enabled { get; set; } = true;

@@ -2,6 +2,8 @@ namespace LoadTestingTool.Domain;
 
 public sealed class AppConfig
 {
+    public string InstancesRoot { get; set; } = "Instances";
+    public string WorkbookName { get; set; } = "DataEngine.xlsx";
     public string ExcelFilePath { get; set; } = "DataEngine.xlsx";
     public string TemplatesFolder { get; set; } = "Templates";
     public string LogsFolder { get; set; } = "Logs";
@@ -38,6 +40,7 @@ public sealed class AppConfig
 public sealed class CentralInstanceConfig
 {
     public bool Enabled { get; set; } = true;
+    // Legacy migration fields. New settings derive these values from the instance key and AppConfig.
     public string Folder { get; set; } = string.Empty;
     public string Workbook { get; set; } = string.Empty;
     public string? TemplatesFolder { get; set; }

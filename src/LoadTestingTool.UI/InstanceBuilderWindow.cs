@@ -10,14 +10,16 @@ public sealed class InstanceBuilderWindow : Window
 {
     private readonly TextBox _name = new() { Text = "DataEngine_" };
     private readonly string _defaultRoot;
+    private readonly string _workbookName;
     private readonly ComboBox _template = new() { ItemsSource = new[] { "Full DataEngine template", "Minimal HTTP template" }, SelectedIndex = 0 };
     private readonly TextBox _message = new() { TextWrapping = Avalonia.Media.TextWrapping.Wrap };
     private readonly Button _create;
     public string? CreatedFolder { get; private set; }
 
-    public InstanceBuilderWindow(string defaultRoot)
+    public InstanceBuilderWindow(string defaultRoot, string workbookName = "DataEngine.xlsx")
     {
         _defaultRoot = Path.GetFullPath(defaultRoot);
+        _workbookName = Path.GetFileName(string.IsNullOrWhiteSpace(workbookName) ? "DataEngine.xlsx" : workbookName);
         Title = "Create DataEngine instance";
         Width = 900; Height = 680; MinWidth = 760; MinHeight = 560;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -36,7 +38,7 @@ public sealed class InstanceBuilderWindow : Window
         var preview = new Border { Background = DashboardStyle.Panel, BorderBrush = DashboardStyle.Line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(14), Child = new StackPanel { Spacing = 8, Children =
         {
             DashboardStyle.Text("Generated structure", 14, true),
-            DashboardStyle.Text("DataEngine.xlsx", 12),
+            DashboardStyle.Text(_workbookName, 12),
             DashboardStyle.Text("  config — testcase and step definitions", 12, false, DashboardStyle.Muted),
             DashboardStyle.Text("  request — data rows and step variables", 12, false, DashboardStyle.Muted),
             DashboardStyle.Text("  response — assertion columns and extraction", 12, false, DashboardStyle.Muted),
@@ -68,7 +70,7 @@ public sealed class InstanceBuilderWindow : Window
             if (Directory.Exists(folder) && Directory.EnumerateFileSystemEntries(folder).Any()) throw new InvalidOperationException("The target folder already exists and is not empty.");
             Directory.CreateDirectory(folder);
             foreach (var sub in new[] { "Templates", "Queries", "Scripts", "Inputs", "Artifacts", "History", "Logs", "Results" }) Directory.CreateDirectory(Path.Combine(folder, sub));
-            var workbookPath = Path.Combine(folder, $"{name}.xlsx");
+            var workbookPath = Path.Combine(folder, _workbookName);
             using (var workbook = new XLWorkbook())
             {
                 CreateConfig(workbook); CreateRequest(workbook); CreateResponse(workbook); CreateReadme(workbook);

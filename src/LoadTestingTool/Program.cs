@@ -287,10 +287,20 @@ internal static class Program
         var config = new AppConfig(); root.Bind(config);
         if (string.IsNullOrWhiteSpace(instanceKey)) return config;
         if (!config.Instances.TryGetValue(instanceKey, out var instance)) throw new InvalidDataException($"Instance '{instanceKey}' was not found in central settings '{path}'.");
-        var instanceFolder = ResolveCentralPath(baseDirectory, instance.Folder, instanceKey);
+        var instancesRoot = ResolveCentralPath(baseDirectory, config.InstancesRoot, "Instances");
+        var derivedFolder = Path.GetFullPath(instanceKey, instancesRoot);
+        var legacyFolder = string.IsNullOrWhiteSpace(instance.Folder) ? string.Empty : ResolveCentralPath(baseDirectory, instance.Folder, instanceKey);
+        var instanceFolder = Directory.Exists(derivedFolder) || string.IsNullOrWhiteSpace(legacyFolder) ? derivedFolder : legacyFolder;
         config.InstanceId = instanceKey;
         config.WorkspaceRoot = ResolveCentralPath(instanceFolder, instance.WorkspaceRoot, instanceFolder);
-        config.ExcelFilePath = ResolveCentralPath(instanceFolder, instance.Workbook, config.ExcelFilePath);
+        var globalWorkbook = string.IsNullOrWhiteSpace(config.WorkbookName) ? Path.GetFileName(config.ExcelFilePath) : config.WorkbookName;
+        var preferredWorkbook = ResolveCentralPath(instanceFolder, globalWorkbook, config.ExcelFilePath);
+        var legacyWorkbook = string.IsNullOrWhiteSpace(instance.Workbook) ? string.Empty : ResolveCentralPath(instanceFolder, instance.Workbook, globalWorkbook);
+        config.ExcelFilePath = File.Exists(preferredWorkbook) ? preferredWorkbook
+            : File.Exists(legacyWorkbook) ? legacyWorkbook
+            : Directory.Exists(instanceFolder)
+                ? Directory.GetFiles(instanceFolder, "*.xlsx", SearchOption.TopDirectoryOnly).FirstOrDefault(x => !Path.GetFileName(x).StartsWith("~$", StringComparison.OrdinalIgnoreCase)) ?? preferredWorkbook
+                : preferredWorkbook;
         config.TemplatesFolder = ResolveCentralPath(instanceFolder, instance.TemplatesFolder, config.TemplatesFolder);
         config.LogsFolder = ResolveCentralPath(instanceFolder, instance.LogsFolder, config.LogsFolder);
         config.HistoryFolder = ResolveCentralPath(instanceFolder, instance.HistoryFolder, config.HistoryFolder);
