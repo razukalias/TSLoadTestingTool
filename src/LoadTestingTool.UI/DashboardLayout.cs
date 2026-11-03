@@ -288,6 +288,7 @@ internal sealed class InstanceRow : Border
 public sealed partial class MainWindow
 {
     private readonly StackPanel _overviewPanel = new() { Spacing = 8 };
+    private readonly StackPanel _runSummaryPanel = new() { Spacing = 10 };
     private readonly StackPanel _configurationPanel = new() { Spacing = 12 };
     private readonly StackPanel _artifactPanel = new() { Spacing = 10 };
     private readonly StackPanel _historyPanel = new() { Spacing = 10 };
@@ -414,6 +415,7 @@ public sealed partial class MainWindow
         _detailTabs.ItemsSource = new[]
         {
             new TabItem { Header = "Overview", Content = Scroll(_overviewPanel) },
+            new TabItem { Header = "Run Summary", Content = Scroll(_runSummaryPanel) },
             new TabItem { Header = "Assertions", Content = assertionPanel },
             new TabItem { Header = "Artifacts", Content = Scroll(_artifactPanel) }
         };
@@ -784,6 +786,233 @@ public sealed partial class MainWindow
 
     private static Control Field(string label, Control control) => new StackPanel { Spacing = 6, Children = { DashboardStyle.Text(label, 12, false, DashboardStyle.Muted), control } };
 
+    private void RefreshRunSummary(InstanceInfo? item)
+    {
+        _runSummaryPanel.Children.Clear();
+        if (item is null)
+        {
+            _runSummaryPanel.Children.Add(DashboardStyle.Text("Select an instance to inspect its planned execution.", color: DashboardStyle.Muted));
+            return;
+        }
+
+        RunPlanSummary summary;
+        try { summary = BuildRunPlanSummary(item); }
+        catch (Exception ex)
+        {
+            _runSummaryPanel.Children.Add(DashboardStyle.Badge("Unexpected error"));
+            _runSummaryPanel.Children.Add(DashboardStyle.Text($"Could not calculate the run summary: {ex.Message}", 12, false, DashboardStyle.Red));
+            UiLog($"Run Summary calculation failed. instance={item.Name}; error={ex}");
+            return;
+        }
+
+        var state = item.Process is { HasExited: false } ? "Running" : item.Status;
+        var title = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(0, 0, 0, 4) };
+        title.Children.Add(DashboardStyle.Text("Run Summary", 17, true));
+        var stateBadge = DashboardStyle.Badge(string.IsNullOrWhiteSpace(state) ? "Ready" : state); Grid.SetColumn(stateBadge, 1); title.Children.Add(stateBadge);
+        _runSummaryPanel.Children.Add(title);
+        _runSummaryPanel.Children.Add(DashboardStyle.Text("Selection preview. dontrun skips individual steps inside a row; it does not automatically remove the whole row.", 11, false, DashboardStyle.Muted));
+
+        Border Metric(string label, long value, IBrush color) => DashboardStyle.Card(new StackPanel { Spacing = 4, Children = { DashboardStyle.Text(label, 10, false, DashboardStyle.Muted), DashboardStyle.Text(value.ToString("N0"), 20, true, color) } }, new Thickness(10));
+        Grid MetricRow(params Control[] controls)
+        {
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*"), Margin = new Thickness(0, 0, 0, 8) };
+            for (var i = 0; i < controls.Length; i++) { controls[i].Margin = new Thickness(0, 0, i == controls.Length - 1 ? 0 : 8, 0); Grid.SetColumn(controls[i], i); row.Children.Add(controls[i]); }
+            return row;
+        }
+        _runSummaryPanel.Children.Add(MetricRow(
+            Metric("Testcases selected", summary.Testcases, DashboardStyle.Blue),
+            Metric("Steps selected", summary.SelectedSteps, DashboardStyle.Blue),
+            Metric("Rows selected", summary.RowsSelected, DashboardStyle.Blue)));
+        _runSummaryPanel.Children.Add(MetricRow(
+            Metric("Environments", summary.Environments, DashboardStyle.Blue),
+            Metric("Threads", summary.Threads, DashboardStyle.Blue),
+            Metric("Iterations", summary.Iterations, DashboardStyle.Blue)));
+        _runSummaryPanel.Children.Add(MetricRow(
+            Metric("Step executions planned", summary.PlannedSteps, DashboardStyle.Green),
+            Metric("Steps skipped by dontrun", summary.SkippedSteps, DashboardStyle.Brush("#F6C76B")),
+            Metric("Rows fully skipped", summary.RowsFullySkipped, DashboardStyle.Red)));
+        var passedRequests = item.Requests.Where(request => request.Result.Equals("PASS", StringComparison.OrdinalIgnoreCase)).ToList();
+        var failedRequests = item.Requests.Where(request => request.Result.Equals("FAIL", StringComparison.OrdinalIgnoreCase) && !IsUnexpectedRequest(request)).ToList();
+        var unexpectedRequests = item.Requests.Where(IsUnexpectedRequest).ToList();
+        _runSummaryPanel.Children.Add(MetricRow(
+            Metric("Passed environments", passedRequests.Select(x => x.Environment).Distinct(StringComparer.OrdinalIgnoreCase).Count(), DashboardStyle.Green),
+            Metric("Passed testcases", passedRequests.Select(x => x.Testcase).Distinct(StringComparer.OrdinalIgnoreCase).Count(), DashboardStyle.Green),
+            Metric("Passed steps", passedRequests.Count, DashboardStyle.Green)));
+        _runSummaryPanel.Children.Add(MetricRow(
+            Metric("Failed environments", failedRequests.Select(x => x.Environment).Distinct(StringComparer.OrdinalIgnoreCase).Count(), DashboardStyle.Red),
+            Metric("Failed testcases", failedRequests.Select(x => x.Testcase).Distinct(StringComparer.OrdinalIgnoreCase).Count(), DashboardStyle.Red),
+            Metric("Failed steps", failedRequests.Count, DashboardStyle.Red)));
+        _runSummaryPanel.Children.Add(MetricRow(
+            Metric("Error environments", unexpectedRequests.Select(x => x.Environment).Distinct(StringComparer.OrdinalIgnoreCase).Count(), DashboardStyle.Brush("#FFB36B")),
+            Metric("Error testcases", unexpectedRequests.Select(x => x.Testcase).Distinct(StringComparer.OrdinalIgnoreCase).Count(), DashboardStyle.Brush("#FFB36B")),
+            Metric("Error steps", unexpectedRequests.Count, DashboardStyle.Brush("#FFB36B"))));
+
+        Control ResultColumn(string title, IReadOnlyList<DashboardRequest> requests, IBrush color, string emptyText)
+        {
+            var content = new StackPanel { Spacing = 4 };
+            content.Children.Add(DashboardStyle.Text(title, 13, true, color));
+            if (requests.Count == 0)
+                content.Children.Add(DashboardStyle.Text(emptyText, 11, false, DashboardStyle.Muted));
+            else
+                foreach (var environmentGroup in requests.GroupBy(x => string.IsNullOrWhiteSpace(x.Environment) ? "default" : x.Environment, StringComparer.OrdinalIgnoreCase).OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+                {
+                    content.Children.Add(DashboardStyle.Text(environmentGroup.Key, 11, true, color));
+                    foreach (var testcaseGroup in environmentGroup.GroupBy(x => x.Testcase, StringComparer.OrdinalIgnoreCase).OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+                    {
+                        content.Children.Add(DashboardStyle.Text($"  {testcaseGroup.Key}", 11, true));
+                        foreach (var stepGroup in testcaseGroup.GroupBy(x => x.StepName, StringComparer.OrdinalIgnoreCase).OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+                        {
+                            var rowCount = stepGroup.Select(x => x.DataId).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+                            var stepLine = DashboardStyle.Text($"    {stepGroup.Key} — {rowCount:N0} row(s)", 11, false, DashboardStyle.Muted);
+                            stepLine.TextWrapping = TextWrapping.Wrap;
+                            content.Children.Add(stepLine);
+                        }
+                    }
+                }
+            return DashboardStyle.Card(new ScrollViewer { Content = content, MaxHeight = 260, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }, new Thickness(10));
+        }
+        var resultColumns = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*"), Margin = new Thickness(0, 0, 0, 8) };
+        var failedColumn = ResultColumn("Failed results", failedRequests, DashboardStyle.Red, "No failed environments, testcases, or steps.");
+        var passedColumn = ResultColumn("Passed results", passedRequests, DashboardStyle.Green, "No passed environments, testcases, or steps yet.");
+        failedColumn.Margin = new Thickness(0, 0, 8, 0); passedColumn.Margin = new Thickness(0);
+        resultColumns.Children.Add(failedColumn); Grid.SetColumn(passedColumn, 1); resultColumns.Children.Add(passedColumn);
+        _runSummaryPanel.Children.Add(resultColumns);
+
+        var warnings = new List<string>();
+        if (summary.RowsWithDontrun > 0) warnings.Add($"{summary.RowsWithDontrun:N0} row(s) contain dontrun steps; {summary.SkippedSteps:N0} step execution(s) will be skipped.");
+        if (summary.RowsFullySkipped > 0) warnings.Add($"{summary.RowsFullySkipped:N0} row(s) have every selected step listed in dontrun and will produce no step executions.");
+        if (summary.RowsWithoutAssertions > 0) warnings.Add($"{summary.RowsWithoutAssertions:N0} selected row(s) have no response assertions.");
+        foreach (var warning in warnings) _runSummaryPanel.Children.Add(DashboardStyle.Text($"⚠ {warning}", 11, false, DashboardStyle.Brush("#F6C76B")));
+        if (summary.PlannedExecutions == 0) _runSummaryPanel.Children.Add(DashboardStyle.Text("✗ No executable step executions are planned for the current selection.", 11, true, DashboardStyle.Red));
+        else if (warnings.Count == 0) _runSummaryPanel.Children.Add(DashboardStyle.Text("✓ Selection is ready: every selected row has at least one executable step.", 11, true, DashboardStyle.Green));
+
+        _runSummaryPanel.Children.Add(new Border { Height = 1, Background = DashboardStyle.Line, Margin = new Thickness(0, 4) });
+        _runSummaryPanel.Children.Add(DashboardStyle.Text("Status summary", 13, true));
+        _runSummaryPanel.Children.Add(DashboardStyle.Text("Expand a status to see its environments, testcase names, step names, data IDs, counts, and errors.", 11, false, DashboardStyle.Muted));
+        var statusEntries = new[]
+        {
+            (Name: "Passed", Color: DashboardStyle.Green, Match: new Func<DashboardRequest, bool>(request => request.Result.Equals("PASS", StringComparison.OrdinalIgnoreCase))),
+            (Name: "Failed", Color: DashboardStyle.Red, Match: new Func<DashboardRequest, bool>(request => request.Result.Equals("FAIL", StringComparison.OrdinalIgnoreCase) && !IsUnexpectedRequest(request))),
+            (Name: "Unexpected errors", Color: DashboardStyle.Brush("#FFB36B"), Match: new Func<DashboardRequest, bool>(IsUnexpectedRequest)),
+            (Name: "Skipped by dontrun", Color: DashboardStyle.Brush("#F6C76B"), Match: new Func<DashboardRequest, bool>(_ => false))
+        };
+        foreach (var entry in statusEntries)
+        {
+            var values = item.Requests.Where(entry.Match).ToList();
+            if (entry.Name == "Skipped by dontrun")
+            {
+                var skippedHeader = DashboardStyle.Text($"●  {entry.Name}  ·  {summary.SkippedSteps:N0} step(s) / {summary.RowsWithDontrun:N0} row(s)", 12, true, entry.Color);
+                var skippedDetails = DashboardStyle.Text(summary.Rows.Count(x => x.SkippedSteps > 0) == 0 ? "No selected rows contain dontrun steps." : string.Join("\n", summary.Rows.Where(x => x.SkippedSteps > 0).GroupBy(x => x.Testcase, StringComparer.OrdinalIgnoreCase).Select(group => $"{group.Key}: {group.Count():N0} row(s), {group.Sum(x => x.SkippedSteps):N0} skipped step(s)")), 11, false, DashboardStyle.Muted);
+                skippedDetails.TextWrapping = TextWrapping.Wrap;
+                _runSummaryPanel.Children.Add(new Expander { Header = skippedHeader, Content = skippedDetails, IsExpanded = summary.SkippedSteps > 0 });
+                continue;
+            }
+            var environments = values.Select(x => string.IsNullOrWhiteSpace(x.Environment) ? "default" : x.Environment).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+            var testcases = values.Select(x => x.Testcase).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+            var steps = values.Select(x => x.StepName).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+            var rows = values.Select(x => $"{x.Testcase} / {x.DataId}").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+            var details = new StackPanel { Spacing = 3 };
+            string GroupCounts(Func<DashboardRequest, string> keySelector)
+                => string.Join(", ", values.GroupBy(keySelector, StringComparer.OrdinalIgnoreCase).OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase).Select(group => $"{group.Key} — {group.Count():N0} step(s) / {group.Select(x => x.DataId).Distinct(StringComparer.OrdinalIgnoreCase).Count():N0} row(s)"));
+            details.Children.Add(DashboardStyle.Text($"Environments ({environments.Count}): {(environments.Count == 0 ? "—" : GroupCounts(x => string.IsNullOrWhiteSpace(x.Environment) ? "default" : x.Environment))}", 11, false, DashboardStyle.Muted));
+            details.Children.Add(DashboardStyle.Text($"Testcases ({testcases.Count}): {(testcases.Count == 0 ? "—" : GroupCounts(x => x.Testcase))}", 11, false, DashboardStyle.Muted));
+            details.Children.Add(DashboardStyle.Text($"Steps ({steps.Count}): {(steps.Count == 0 ? "—" : GroupCounts(x => x.StepName))}", 11, false, DashboardStyle.Muted));
+            details.Children.Add(DashboardStyle.Text($"Rows / data IDs ({rows.Count}): {(rows.Count == 0 ? "—" : string.Join(", ", rows.Take(30)))}{(rows.Count > 30 ? $" … +{rows.Count - 30:N0} more" : "")}", 11, false, DashboardStyle.Muted));
+            var errors = values.Select(x => x.Error).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Take(10).ToList();
+            if (errors.Count > 0) details.Children.Add(DashboardStyle.Text($"Errors:\n{string.Join("\n", errors)}", 11, false, entry.Color));
+            var headerText = $"●  {entry.Name}  ·  {values.Count:N0} step(s) / {rows.Count:N0} row(s)";
+            _runSummaryPanel.Children.Add(new Expander { Header = DashboardStyle.Text(headerText, 12, true, entry.Color), Content = details, IsExpanded = values.Count > 0 });
+        }
+
+        _runSummaryPanel.Children.Add(new Border { Height = 1, Background = DashboardStyle.Line, Margin = new Thickness(0, 4) });
+        _runSummaryPanel.Children.Add(DashboardStyle.Text("Per-testcase breakdown", 13, true));
+        var header = new Grid { ColumnDefinitions = new ColumnDefinitions("2*,80,105,105,105,110"), Margin = new Thickness(8, 4) };
+        foreach (var (text, column) in new[] { ("Testcase", 0), ("Rows", 1), ("dontrun rows", 2), ("Skipped steps", 3), ("Planned steps", 4), ("Status", 5) })
+        {
+            var label = DashboardStyle.Text(text, 10, true, DashboardStyle.Muted); Grid.SetColumn(label, column); header.Children.Add(label);
+        }
+        _runSummaryPanel.Children.Add(header);
+        foreach (var group in summary.Rows.GroupBy(x => x.Testcase, StringComparer.OrdinalIgnoreCase).OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            var rows = group.ToList();
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("2*,80,105,105,105,110"), Margin = new Thickness(8, 3) };
+            var values = new Control[]
+            {
+                DashboardStyle.Text(group.Key, 11, true),
+                DashboardStyle.Text(rows.Count.ToString("N0"), 11),
+                DashboardStyle.Text(rows.Count(x => x.SkippedSteps > 0).ToString("N0"), 11),
+                DashboardStyle.Text(rows.Sum(x => x.SkippedSteps).ToString("N0"), 11, false, DashboardStyle.Brush("#F6C76B")),
+                DashboardStyle.Text(rows.Sum(x => x.ExecutableSteps).ToString("N0"), 11, false, DashboardStyle.Green),
+                DashboardStyle.Badge(rows.All(x => x.ExecutableSteps == 0) ? "Skipped" : rows.Any(x => x.SkippedSteps > 0) ? "Warning" : "Ready")
+            };
+            for (var i = 0; i < values.Length; i++) { Grid.SetColumn(values[i], i); row.Children.Add(values[i]); }
+            _runSummaryPanel.Children.Add(row);
+        }
+
+        _runSummaryPanel.Children.Add(new Border { Height = 1, Background = DashboardStyle.Line, Margin = new Thickness(0, 4) });
+        _runSummaryPanel.Children.Add(DashboardStyle.Text("Execution parameters", 13, true));
+        _runSummaryPanel.Children.Add(KeyValue("Mode / order", $"{(item.ExecutionMode == "loop" ? "Loop" : "Threaded")} / {(item.RunScenariosInParallel ? "Parallel" : "Sequential")}"));
+        _runSummaryPanel.Children.Add(KeyValue("Threads / iterations", $"{Math.Max(1, item.Threads)} / {Math.Max(1, item.Iterations)}"));
+        _runSummaryPanel.Children.Add(KeyValue("Environments", summary.EnvironmentNames.Count == 0 ? "None" : string.Join(", ", summary.EnvironmentNames)));
+        _runSummaryPanel.Children.Add(KeyValue("Data IDs", string.IsNullOrWhiteSpace(item.DataIdSelection) ? "All workbook rows" : item.DataIdSelection));
+        _runSummaryPanel.Children.Add(KeyValue("Assertions", $"{summary.RowsWithAssertions:N0} row(s) with assertions / {summary.RowsWithoutAssertions:N0} without assertions"));
+    }
+
+    private RunPlanSummary BuildRunPlanSummary(InstanceInfo item)
+    {
+        if (!File.Exists(item.WorkbookPath)) throw new FileNotFoundException("Workbook was not found.", item.WorkbookPath);
+        var draft = new RunSelectionDraft(item.TestcaseOptions, item.EnvironmentOptions, item.TestcaseSelection, item.StepSelectionJson, item.EnvironmentSelection, item.EnvironmentSelectionJson);
+        var selectedCases = draft.Cases.ToHashSet();
+        var selectedSteps = draft.Steps.ToDictionary(x => x.Key, x => x.Value, EqualityComparer<int>.Default);
+        var environments = draft.AvailableEnvironments.Where(x => draft.Environments.Contains(x)).Select(x => string.IsNullOrWhiteSpace(x) ? "Default" : x).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var dataIds = DataIdSelectionCodec.Parse(item.DataIdSelection);
+        using var workbook = new XLWorkbook(item.WorkbookPath);
+        var config = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("config", StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidDataException("The workbook has no config sheet.");
+        var request = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("request", StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidDataException("The workbook has no request sheet.");
+        var response = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("response", StringComparison.OrdinalIgnoreCase));
+        var configHeaders = config.FirstRowUsed()?.CellsUsed().ToDictionary(c => c.GetString().Trim().ToLowerInvariant(), c => c.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase) ?? throw new InvalidDataException("The config sheet has no header row.");
+        var requestHeaders = request.FirstRowUsed()?.CellsUsed().ToDictionary(c => c.GetString().Trim().ToLowerInvariant(), c => c.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase) ?? throw new InvalidDataException("The request sheet has no header row.");
+        string ConfigText(IXLRow row, string key, string fallback = "") => configHeaders.TryGetValue(key, out var column) ? row.Cell(column).GetString().Trim() : fallback;
+        string RequestText(IXLRow row, string key, string fallback = "") => requestHeaders.TryGetValue(key, out var column) ? row.Cell(column).GetString().Trim() : fallback;
+        var stepNames = new Dictionary<int, List<(string Name, bool Enabled)>>();
+        foreach (var row in config.RowsUsed().Skip(1))
+        {
+            if (!int.TryParse(ConfigText(row, "testcaseindex"), out var index) || !selectedCases.Contains(index)) continue;
+            var name = ConfigText(row, "stepname"); if (string.IsNullOrWhiteSpace(name)) continue;
+            var enabled = !bool.TryParse(ConfigText(row, "enabled"), out var flag) || flag;
+            if (!stepNames.TryGetValue(index, out var list)) stepNames[index] = list = [];
+            list.Add((name, enabled));
+        }
+        var rows = new List<RunPlanRow>();
+        var rowsWithAssertions = 0;
+        var responseHeaders = response?.FirstRowUsed()?.CellsUsed().ToDictionary(c => c.GetString().Trim(), c => c.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase) ?? [];
+        foreach (var row in request.RowsUsed().Skip(1))
+        {
+            if (!int.TryParse(RequestText(row, "testcaseindex"), out var index) || !selectedCases.Contains(index)) continue;
+            var dataId = RequestText(row, "dataid");
+            if (dataIds.TryGetValue(index, out var chosenIds) && chosenIds.Count > 0 && !chosenIds.Contains(dataId)) continue;
+            var selected = stepNames.GetValueOrDefault(index, []).Where(x => x.Enabled && selectedSteps.GetValueOrDefault(index, []).Contains(x.Name)).Select(x => x.Name).ToList();
+            var skippedNames = RequestText(row, "dontrun").Split(',', '|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var skipped = selected.Count(x => skippedNames.Contains(x));
+            var executable = Math.Max(0, selected.Count - skipped);
+            var testcase = RequestText(row, "testcase", index.ToString());
+            var hasAssertions = false;
+            if (response is not null)
+            {
+                var responseRow = response.RowsUsed().Skip(1).FirstOrDefault(x => int.TryParse(x.Cell(FindHeader(response, "testcaseindex")).GetString(), out var responseIndex) && responseIndex == index && x.Cell(FindHeader(response, "dataid")).GetString().Trim().Equals(dataId, StringComparison.OrdinalIgnoreCase));
+                hasAssertions = responseRow is not null && responseHeaders.Any(x => !x.Key.Equals("testcaseindex", StringComparison.OrdinalIgnoreCase) && !x.Key.Equals("testcase", StringComparison.OrdinalIgnoreCase) && !x.Key.Equals("dataid", StringComparison.OrdinalIgnoreCase) && selected.Any(step => x.Key.TrimStart('{').Contains(step + ".", StringComparison.OrdinalIgnoreCase)) && !string.IsNullOrWhiteSpace(responseRow.Cell(x.Value).GetString()));
+            }
+            if (hasAssertions) rowsWithAssertions++;
+            rows.Add(new RunPlanRow(testcase, skipped, executable, hasAssertions));
+        }
+        var plannedBase = rows.Sum(x => x.ExecutableSteps); var skippedBase = rows.Sum(x => x.SkippedSteps);
+        var multiplier = Math.Max(1, environments.Count) * Math.Max(1, item.Threads) * Math.Max(1, item.Iterations);
+        return new RunPlanSummary(selectedCases.Count, selectedCases.Sum(index => selectedSteps.GetValueOrDefault(index, []).Count), rows.Count, rows.Count(x => x.SkippedSteps > 0), rows.Count(x => x.ExecutableSteps == 0), skippedBase * multiplier, plannedBase * multiplier, environments.Count, Math.Max(1, item.Threads), Math.Max(1, item.Iterations), rowsWithAssertions, rows.Count - rowsWithAssertions, environments, rows);
+    }
+
+    private static int FindHeader(IXLWorksheet sheet, string name)
+        => sheet.FirstRowUsed()?.CellsUsed().FirstOrDefault(c => c.GetString().Trim().Equals(name, StringComparison.OrdinalIgnoreCase))?.Address.ColumnNumber ?? throw new InvalidDataException($"Worksheet '{sheet.Name}' is missing '{name}'.");
+
     private void RefreshDashboardDetails(bool force = false)
     {
         var item = _selectedInstance;
@@ -798,9 +1027,11 @@ public sealed partial class MainWindow
         if (item is null)
         {
             _overviewPanel.Children.Add(DashboardStyle.Text("Select an instance to inspect its run.", color: DashboardStyle.Muted));
+            RefreshRunSummary(null);
             RenderUnifiedLog();
             _artifactPanel.Children.Clear(); return;
         }
+        RefreshRunSummary(item);
         void AddOverview(Control control, string searchable) { if (MatchesTerms(searchable, _overviewFilter.Text)) _overviewPanel.Children.Add(control); }
         AddOverview(DashboardStyle.Badge(item.Status), item.Status);
         AddOverview(KeyValue("Environment", string.IsNullOrWhiteSpace(item.EnvironmentSelection) ? "All global environments" : item.EnvironmentSelection), item.EnvironmentSelection);
@@ -1131,6 +1362,11 @@ public sealed partial class MainWindow
 
 public sealed record DashboardRequest(string StepName, string StepType, string Testcase, string DataId, string Environment, string Result, long DurationMs, string FailureCategory, string Error);
 internal sealed record DashboardRowSummary(string Testcase, string DataId, string Environment, int Steps, int Passed, int Failed, int Unexpected, int Skipped, string Status, string Details);
+internal sealed record RunPlanRow(string Testcase, int SkippedSteps, int ExecutableSteps, bool HasAssertions);
+internal sealed record RunPlanSummary(int Testcases, int SelectedSteps, int RowsSelected, int RowsWithDontrun, int RowsFullySkipped, long SkippedSteps, long PlannedSteps, int Environments, int Threads, int Iterations, int RowsWithAssertions, int RowsWithoutAssertions, IReadOnlyList<string> EnvironmentNames, IReadOnlyList<RunPlanRow> Rows)
+{
+    public long PlannedExecutions => PlannedSteps;
+};
 internal sealed record HistoryRequest(string Testcase, string DataId, string Step, string Result, long DurationMs, int HttpStatus, string RequestBody, string ResponseBody, string RequestHeaders, string ResponseHeaders, string StepConfig);
 internal sealed record HistoryAssertion(string Testcase, string DataId, string Step, string Path, string Verb, string Type, string Meaning, string Expected, string Actual, string Result);
 internal sealed record HistoryEntry(string Path, string Instance, string Status, string RunId, DateTime Started, IReadOnlyList<HistoryRequest> Requests, IReadOnlyList<HistoryAssertion> Assertions, int Passed, int Failed, string P95Ms, string SearchText);
