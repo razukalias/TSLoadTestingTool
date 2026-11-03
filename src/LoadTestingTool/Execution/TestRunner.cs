@@ -166,9 +166,11 @@ public sealed class TestRunner
                 if (runtimeVariable.Value is string runtimeText)
                     variables[runtimeVariable.Key] = runtimeText;
             var resolvedUrl = await ResolveDynamicValueAsync(step.TargetUrl.Replace("{env}", environment, StringComparison.OrdinalIgnoreCase), correlation, requestReferences, executionContext, cancellationToken);
-            result.TargetUrl = Substitute(resolvedUrl, variables); var resolvedTemplate = await ResolveDynamicValueAsync(File.ReadAllText(templatePath), correlation, requestReferences, executionContext, cancellationToken);
+            result.TargetUrl = Substitute(resolvedUrl, variables); var originalTemplate = await File.ReadAllTextAsync(templatePath, cancellationToken); var resolvedTemplate = await ResolveDynamicValueAsync(originalTemplate, correlation, requestReferences, executionContext, cancellationToken);
             var streamedTemplate = PrepareStreamingBinaryTemplate(resolvedTemplate, result.ContentType, variables, executionContext);
             var body = streamedTemplate is null ? TemplateRenderer.Render(resolvedTemplate, result.ContentType, variables) : string.Empty;
+            var resolvedTemplateForLog = streamedTemplate is null ? body : resolvedTemplate;
+            _logger.Info($"STEP RESOLUTION [{requestId}]\nORIGINAL URL: {step.TargetUrl}\nRESOLVED URL: {result.TargetUrl}\nORIGINAL TEMPLATE:\n{originalTemplate}\nRESOLVED TEMPLATE:\n{InternalLogger.RedactVariableValues(resolvedTemplateForLog, redactedVariables, variables)}\nVARIABLES:\n{FormatVariables(variables, redactedVariables)}");
             using var request = new HttpRequestMessage(new HttpMethod(step.Verb), result.TargetUrl);
             var binaryBody = ResolveBinaryHttpBody(step, executionContext);
             if (streamedTemplate is not null)
@@ -237,7 +239,7 @@ public sealed class TestRunner
         finally
         {
             sw.Stop(); result.DurationMs = sw.ElapsedMilliseconds; result.EndedAt = DateTimeOffset.Now;
-            _logger.Info($"REQUEST COMPLETED [{requestId}] testcase={testcase.TestcaseIndex}; testcaseName={testcase.Testcase}; dataid={dataId}; stepName={step.StepName}; result={result.Result}; status={result.HttpStatus}; durationMs={result.DurationMs}; error={result.ErrorMessage}");
+            _logger.Info($"REQUEST COMPLETED [{requestId}] testcase={testcase.TestcaseIndex}; testcaseName={testcase.Testcase}; dataid={dataId}; stepName={step.StepName}; result={result.Result}; status={result.HttpStatus}; durationMs={result.DurationMs}{OptionalError(result.ErrorMessage)}");
         }
         _requestCompleted?.Invoke(result); return result;
     }
@@ -252,6 +254,7 @@ public sealed class TestRunner
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(step.TimeoutSeconds > 0 ? step.TimeoutSeconds : _timeoutSeconds));
             var templateText = string.Empty;
+            var originalTemplate = string.Empty;
             result.TargetUrl = context.ResolveUrl(step.TargetUrl);
             _logger.Info($"STEP TEMPLATE LOAD [{requestId}] testcase={testcase.TestcaseIndex}; testcaseName={testcase.Testcase}; dataid={dataId}; stepName={step.StepName}; stepType={step.StepType.WireName()}; environment={environment}; template={templatePath}; templateExists={(!string.IsNullOrWhiteSpace(templatePath) && File.Exists(templatePath))}; configuredTargetUrl={step.TargetUrl}; resolvedTargetUrl={result.TargetUrl}; ignoreempty={step.IgnoreEmpty}; stepConfig={step.StepConfig}");
             foreach (var runtimeVariable in context.Snapshot())
@@ -259,15 +262,17 @@ public sealed class TestRunner
                     variables[runtimeVariable.Key] = runtimeText;
             if (!string.IsNullOrWhiteSpace(step.TemplateSource))
             {
-                templateText = await ResolveDynamicValueAsync(await File.ReadAllTextAsync(templatePath, timeout.Token), correlation, requestReferences, context, timeout.Token);
+                originalTemplate = await File.ReadAllTextAsync(templatePath, timeout.Token);
+                templateText = await ResolveDynamicValueAsync(originalTemplate, correlation, requestReferences, context, timeout.Token);
                 templateText = TemplateRenderer.Render(templateText, result.ContentType, variables);
             }
+            _logger.Info($"STEP RESOLUTION [{requestId}]\nSTEP TYPE: {step.StepType.WireName()}\nORIGINAL TARGET: {step.TargetUrl}\nRESOLVED TARGET: {result.TargetUrl}\nORIGINAL TEMPLATE:\n{originalTemplate}\nRESOLVED TEMPLATE:\n{InternalLogger.RedactVariableValues(templateText, redactedVariables, variables)}\nVARIABLES:\n{FormatVariables(variables, redactedVariables)}");
             _logger.Info($"STEP REQUEST [{requestId}]\nTYPE: {step.StepType.WireName()}\nSTEP: {step.StepName}\nENVIRONMENT: {environment}\nCONFIGURED URL: {step.TargetUrl}\nRESOLVED URL: {result.TargetUrl}\nTEMPLATE: {step.TemplateSource}\nREQUEST:\n{InternalLogger.RedactVariableValues(templateText, redactedVariables, variables)}\nMETADATA:\n{step.StepConfig}");
             var execution = await _pipeline.ExecuteAsync(new StepExecutionRequest { Step = step, Context = context, WorkspaceRoot = _features.WorkspaceRoot, TemplateText = templateText, CancellationToken = timeout.Token });
             StepExecutionResultMapper.PublishOutputs(execution, context);
             result.RequestBody = InternalLogger.RedactVariableValues(execution.RequestText, redactedVariables, variables); result.ResponseBody = execution.ResponseText; result.HttpStatus = execution.StatusCode == 0 && execution.Succeeded ? 200 : execution.StatusCode; result.ErrorMessage = execution.ErrorMessage;
             PublishResponseValues(step.StepName, result.ResponseBody, "json", correlation);
-            _logger.Info($"STEP RESPONSE [{requestId}]\nTYPE: {step.StepType.WireName()}\nSTATUS: {result.HttpStatus}\nREQUEST PAYLOAD:\n{result.RequestBody}\nRESPONSE PAYLOAD:\n{execution.ResponseText}\nERROR: {execution.ErrorMessage}");
+            _logger.Info($"STEP EXECUTED INPUT [{requestId}]\nTYPE: {step.StepType.WireName()}\nPAYLOAD:\n{result.RequestBody}\nSTEP RESPONSE [{requestId}]\nSTATUS: {result.HttpStatus}\nREQUEST PAYLOAD:\n{result.RequestBody}\nRESPONSE PAYLOAD:\n{execution.ResponseText}{OptionalErrorLine(execution.ErrorMessage)}");
             if (!execution.Succeeded || !string.IsNullOrWhiteSpace(execution.ErrorMessage))
                 _logger.Error($"STEP EXECUTION FAILURE [{requestId}] testcase={testcase.TestcaseIndex}; testcaseName={testcase.Testcase}; dataid={dataId}; stepName={step.StepName}; stepType={step.StepType.WireName()}; template={templatePath}; templateExists={(!string.IsNullOrWhiteSpace(templatePath) && File.Exists(templatePath))}; targetUrl={step.TargetUrl}; status={result.HttpStatus}; error={execution.ErrorMessage}");
             foreach (var output in execution.Outputs) { var text = output.Value is string s ? s : JsonSerializer.Serialize(output.Value); var record = new CorrelationRecord { DataId = dataId, SourceStepName = step.StepName, ResponsePath = output.Key, Variable = output.Key, ExtractedValue = text }; correlation[output.Key] = text; correlationSources[output.Key] = record; result.Correlations.Add(record); }
@@ -303,9 +308,16 @@ public sealed class TestRunner
         finally
         {
             result.EndedAt = DateTimeOffset.Now; result.DurationMs = (long)(result.EndedAt - result.StartedAt).TotalMilliseconds;
-            _logger.Info($"STEP COMPLETED [{requestId}] testcase={testcase.TestcaseIndex}; testcaseName={testcase.Testcase}; dataid={dataId}; stepName={step.StepName}; stepType={step.StepType.WireName()}; result={result.Result}; status={result.HttpStatus}; durationMs={result.DurationMs}; error={result.ErrorMessage}");
+            _logger.Info($"STEP COMPLETED [{requestId}] testcase={testcase.TestcaseIndex}; testcaseName={testcase.Testcase}; dataid={dataId}; stepName={step.StepName}; stepType={step.StepType.WireName()}; result={result.Result}; status={result.HttpStatus}; durationMs={result.DurationMs}{OptionalError(result.ErrorMessage)}");
         }
         _requestCompleted?.Invoke(result); return result;
+    }
+    private static string OptionalError(string? error) => string.IsNullOrWhiteSpace(error) ? string.Empty : $"; error={error}";
+    private static string OptionalErrorLine(string? error) => string.IsNullOrWhiteSpace(error) ? string.Empty : $"\nERROR: {error}";
+    private static string FormatVariables(IReadOnlyDictionary<string, string> variables, IReadOnlySet<string> redactedVariables)
+    {
+        if (variables.Count == 0) return "(none)";
+        return string.Join(Environment.NewLine, variables.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase).Select(x => $"{x.Key}={InternalLogger.RedactVariableValues(x.Value, redactedVariables, variables)}"));
     }
     private static string FormatException(string context, Exception exception) => $"{context}: {exception.GetType().Name}: {exception.Message}";
     private static string ClassifyException(Exception exception, string fallback, CancellationToken cancellationToken)

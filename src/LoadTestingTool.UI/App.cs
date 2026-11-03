@@ -63,6 +63,13 @@ public sealed class App : Application
                 desktop.MainWindow = new SpreadsheetPreviewWindow(args[editorIndex + 1]);
             else
             {
+                var detailsIndex = Array.FindIndex(args, x => x.Equals("--step-details", StringComparison.OrdinalIgnoreCase));
+                if (detailsIndex >= 0 && detailsIndex + 6 < args.Length)
+                {
+                    desktop.MainWindow = new StepDetailsWindow(args[detailsIndex + 1], args[detailsIndex + 2], args[detailsIndex + 3], args[detailsIndex + 4], args[detailsIndex + 5], args[detailsIndex + 6]);
+                    base.OnFrameworkInitializationCompleted();
+                    return;
+                }
                 var historyIndex = Array.FindIndex(args, x => x.Equals("--history", StringComparison.OrdinalIgnoreCase));
                 desktop.MainWindow = historyIndex >= 0 && historyIndex + 1 < args.Length
                     ? new HistoryWorkspaceWindow(args[historyIndex + 1])

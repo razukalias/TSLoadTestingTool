@@ -81,9 +81,12 @@ public sealed class InternalLogger : IDisposable
         {
             var timestamp = DateTimeOffset.Now.ToString("O");
             var lines = (message ?? string.Empty).Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
-            foreach (var rawLine in lines)
+            for (var index = 0; index < lines.Length; index++)
             {
-                var line = $"{timestamp} [{level}] [{_instanceId}] [run={_runId}] {MaskSensitiveData(rawLine)}";
+                var rawLine = lines[index];
+                var line = index == 0
+                    ? $"{timestamp} [{level}] [{_instanceId}] [run={_runId}] {MaskSensitiveData(rawLine)}"
+                    : MaskSensitiveData(rawLine);
                 foreach (var writer in _writers) writer.WriteLine(line);
             }
         }

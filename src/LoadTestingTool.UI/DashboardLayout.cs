@@ -411,6 +411,10 @@ public sealed partial class MainWindow
         _environmentFilter.SelectionChanged += (_, _) => RefreshAssertionList();
         _environmentFilter.ItemsSource = new[] { "All environments" }; _environmentFilter.SelectedIndex = 0;
         _overviewFilter.TextChanged += (_, _) => RefreshDashboardDetails(true);
+        _overviewStepFilter.TextChanged += (_, _) => { if (!_overviewStepFilterRefreshing) RefreshDashboardDetails(true); };
+        _overviewStepStatus.SelectionChanged += (_, _) => { if (!_overviewStepFilterRefreshing) RefreshDashboardDetails(true); };
+        _overviewStepEnvironment.SelectionChanged += (_, _) => { if (!_overviewStepFilterRefreshing) RefreshDashboardDetails(true); };
+        _overviewStepTestcase.SelectionChanged += (_, _) => { if (!_overviewStepFilterRefreshing) RefreshDashboardDetails(true); };
         _assertionSearch.TextChanged += (_, _) => RefreshAssertionList();
         var assertionActions = new WrapPanel { Children = { _assertionSearch, DashboardStyle.Action("Open Assertion Workbench", OpenAssertionWorkbench, "primary"), DashboardStyle.Action("Copy assertions", () => _ = CopyAssertionsAsync()), DashboardStyle.Action("Select failed", () => { if (_selectedInstance is not null) foreach (var a in _selectedInstance.Assertions.Where(a => a.Result == "FAIL")) a.Selected = true; RefreshAssertionList(); }),
             DashboardStyle.Action("Clear", () => { if (_selectedInstance is not null) foreach (var a in _selectedInstance.Assertions) a.Selected = false; RefreshAssertionList(); }),
@@ -1020,6 +1024,64 @@ public sealed partial class MainWindow
     private static int FindHeader(IXLWorksheet sheet, string name)
         => sheet.FirstRowUsed()?.CellsUsed().FirstOrDefault(c => c.GetString().Trim().Equals(name, StringComparison.OrdinalIgnoreCase))?.Address.ColumnNumber ?? throw new InvalidDataException($"Worksheet '{sheet.Name}' is missing '{name}'.");
 
+    private void RefreshOverviewStepFilters(InstanceInfo item)
+    {
+        _overviewStepFilterRefreshing = true;
+        try
+        {
+        static void Preserve(ComboBox combo, IEnumerable<string> values)
+        {
+            var previous = combo.SelectedItem?.ToString();
+            var options = values.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+            combo.ItemsSource = options;
+            combo.SelectedItem = options.FirstOrDefault(x => x.Equals(previous, StringComparison.OrdinalIgnoreCase)) ?? options.FirstOrDefault();
+        }
+        Preserve(_overviewStepEnvironment, new[] { "All environments" }.Concat(item.Requests.Select(x => string.IsNullOrWhiteSpace(x.Environment) ? "default" : x.Environment)));
+        Preserve(_overviewStepTestcase, new[] { "All testcases" }.Concat(item.Requests.Select(x => x.Testcase)));
+        }
+        finally { _overviewStepFilterRefreshing = false; }
+    }
+
+    private bool MatchesOverviewStep(DashboardRequest request)
+    {
+        var status = _overviewStepStatus.SelectedItem?.ToString() ?? "All statuses";
+        var actualStatus = IsUnexpectedRequest(request) ? "Unexpected error" : request.Result.Equals("PASS", StringComparison.OrdinalIgnoreCase) ? "Passed" : request.Result.Equals("SKIPPED", StringComparison.OrdinalIgnoreCase) ? "Skipped" : "Failed";
+        if (!status.Equals("All statuses", StringComparison.OrdinalIgnoreCase) && !actualStatus.Equals(status, StringComparison.OrdinalIgnoreCase)) return false;
+        var environment = _overviewStepEnvironment.SelectedItem?.ToString();
+        if (!string.IsNullOrWhiteSpace(environment) && !environment.Equals("All environments", StringComparison.OrdinalIgnoreCase) && !environment.Equals(string.IsNullOrWhiteSpace(request.Environment) ? "default" : request.Environment, StringComparison.OrdinalIgnoreCase)) return false;
+        var testcase = _overviewStepTestcase.SelectedItem?.ToString();
+        if (!string.IsNullOrWhiteSpace(testcase) && !testcase.Equals("All testcases", StringComparison.OrdinalIgnoreCase) && !testcase.Equals(request.Testcase, StringComparison.OrdinalIgnoreCase)) return false;
+        return MatchesTerms($"{request.StepType} {request.StepName} {request.Testcase} {request.DataId} {request.Environment} {request.Result} {request.FailureCategory} {request.Error}", _overviewStepFilter.Text);
+    }
+
+    private void LaunchStepDetails(DashboardRequest request)
+    {
+        if (_selectedInstance is null) return;
+        var item = _selectedInstance;
+        var log = FindInternalLogs(item)
+            .Where(path => FindTestcaseLabel(path, item).Equals(request.Testcase, StringComparison.OrdinalIgnoreCase))
+            .Where(path => FindEnvironmentLabel(path, item).Equals(string.IsNullOrWhiteSpace(request.Environment) ? "default" : request.Environment, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
+        if (log is null)
+        {
+            _details.Text = $"No internal log was found for {request.Testcase} / {request.DataId} / {request.StepName} / {request.Environment}.";
+            UiLog($"Step details ignored. reason=internal-log-not-found; testcase={request.Testcase}; dataId={request.DataId}; step={request.StepName}; environment={request.Environment}");
+            return;
+        }
+        try
+        {
+            var processPath = Environment.ProcessPath ?? throw new InvalidOperationException("The dashboard process path is unavailable.");
+            var start = new ProcessStartInfo { FileName = processPath, UseShellExecute = false, CreateNoWindow = true };
+            var entryAssembly = System.Reflection.Assembly.GetEntryAssembly()?.Location;
+            if (!string.IsNullOrWhiteSpace(entryAssembly) && (Path.GetFileNameWithoutExtension(processPath).Equals("dotnet", StringComparison.OrdinalIgnoreCase) || Path.GetFileNameWithoutExtension(processPath).Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase))) start.ArgumentList.Add(entryAssembly);
+            start.ArgumentList.Add("--step-details");
+            foreach (var value in new[] { log, request.Testcase, request.DataId, request.StepName, string.IsNullOrWhiteSpace(request.Environment) ? "default" : request.Environment, request.StepType }) start.ArgumentList.Add(value);
+            var process = Process.Start(start) ?? throw new InvalidOperationException("The step details process could not be started.");
+            UiLog($"Step details process started. processId={process.Id}; testcase={request.Testcase}; dataId={request.DataId}; step={request.StepName}; environment={request.Environment}; log={log}");
+        }
+        catch (Exception ex) { _details.Text = $"Could not open step details: {ex.Message}"; UiLog($"Step details process failed: {ex}"); }
+    }
+
     private void RefreshDashboardDetails(bool force = false)
     {
         var item = _selectedInstance;
@@ -1028,8 +1090,16 @@ public sealed partial class MainWindow
         _detailSignature = signature;
         _selectedTitle.Text = item?.Name ?? "Selected instance";
         ToolTip.SetTip(_selectedTitle, item?.Name);
+        static void Detach(Control control)
+        {
+            if (control.Parent is Panel panel) panel.Children.Remove(control);
+        }
+        Detach(_overviewFilter);
+        Detach(_overviewStepStatus);
+        Detach(_overviewStepEnvironment);
+        Detach(_overviewStepTestcase);
+        Detach(_overviewStepFilter);
         _overviewPanel.Children.Clear();
-        if (_overviewFilter.Parent is Panel previousParent) previousParent.Children.Remove(_overviewFilter);
         _overviewPanel.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _overviewFilter, DashboardStyle.Action("Copy overview", () => _ = CopyOverviewAsync()) } });
         if (item is null)
         {
@@ -1039,6 +1109,7 @@ public sealed partial class MainWindow
             _artifactPanel.Children.Clear(); return;
         }
         RefreshRunSummary(item);
+        RefreshOverviewStepFilters(item);
         void AddOverview(Control control, string searchable) { if (MatchesTerms(searchable, _overviewFilter.Text)) _overviewPanel.Children.Add(control); }
         AddOverview(DashboardStyle.Badge(item.Status), item.Status);
         AddOverview(KeyValue("Environment", string.IsNullOrWhiteSpace(item.EnvironmentSelection) ? "All global environments" : item.EnvironmentSelection), item.EnvironmentSelection);
@@ -1094,15 +1165,21 @@ public sealed partial class MainWindow
             if (!string.IsNullOrWhiteSpace(row.Details)) { var details = DashboardStyle.Text(row.Details, 11, false, row.Status == "Passed" ? DashboardStyle.Muted : DashboardStyle.Red); details.TextWrapping = TextWrapping.Wrap; line.Children.Add(details); }
             _overviewPanel.Children.Add(DashboardStyle.Card(line, new Thickness(10)));
         }
-        _overviewPanel.Children.Add(DashboardStyle.Text("Step execution timeline  /  all completed steps", 13, true));
+        _overviewPanel.Children.Add(DashboardStyle.Text("Step execution timeline", 13, true));
+        var stepFilterBar = new WrapPanel { Orientation = Orientation.Horizontal, ItemWidth = double.NaN, ItemHeight = double.NaN, Children =
+        {
+            _overviewStepStatus, _overviewStepEnvironment, _overviewStepTestcase, _overviewStepFilter
+        }};
+        foreach (var control in stepFilterBar.Children) control.Margin = new Thickness(0, 0, 8, 6);
+        _overviewPanel.Children.Add(stepFilterBar);
+        _overviewPanel.Children.Add(DashboardStyle.Text("Filters apply to completed steps only. Use & between terms to require all terms; matching text remains visible in the details viewer.", 10, false, DashboardStyle.Muted));
         foreach (var request in item.Requests)
         {
-            var searchable = $"{request.StepType} {request.StepName} {request.Testcase} {request.DataId} {request.Environment} {request.Result} {request.Error}";
-            if (!MatchesTerms(searchable, _overviewFilter.Text)) continue;
+            if (!MatchesOverviewStep(request)) continue;
             var top = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
             top.Children.Add(DashboardStyle.Text($"{request.StepType}  ·  {request.StepName}", 11, true));
             var time = DashboardStyle.Text($"{request.DurationMs} ms", 10, false, DashboardStyle.Muted); Grid.SetColumn(time, 1); top.Children.Add(time);
-            var line = new StackPanel { Spacing = 3, Children = { top, DashboardStyle.Text($"{request.Testcase} / {request.DataId} / {request.Environment}", 10, false, DashboardStyle.Muted), DashboardStyle.Badge(IsUnexpectedRequest(request) ? "Unexpected error" : request.Result == "PASS" ? "Passed" : "Failed") } };
+            var line = new StackPanel { Spacing = 3, Children = { top, DashboardStyle.Text($"{request.Testcase} / {request.DataId} / {request.Environment}", 10, false, DashboardStyle.Muted), DashboardStyle.Badge(IsUnexpectedRequest(request) ? "Unexpected error" : request.Result == "PASS" ? "Passed" : request.Result == "SKIPPED" ? "Skipped" : "Failed"), DashboardStyle.Action("View details", () => LaunchStepDetails(request), "primary") } };
             if (!string.IsNullOrWhiteSpace(request.FailureCategory) && request.FailureCategory != "None") { var error = DashboardStyle.Text($"{request.FailureCategory}: {request.Error}", 10, false, DashboardStyle.Red); error.TextWrapping = TextWrapping.Wrap; line.Children.Add(error); }
             _overviewPanel.Children.Add(DashboardStyle.Card(line, new Thickness(8)));
         }

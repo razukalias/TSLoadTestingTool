@@ -129,6 +129,11 @@ public sealed partial class MainWindow : Window
     private readonly ComboBox _environmentFilter = new() { Width = 150, Margin = new Thickness(8, 6, 6, 0) };
     private readonly ComboBox _internalLogTestcase = new() { Width = 220 };
     private readonly ComboBox _internalLogEnvironment = new() { Width = 220 };
+    private readonly ComboBox _overviewStepStatus = new() { Width = 145, ItemsSource = new[] { "All statuses", "Passed", "Failed", "Unexpected error", "Skipped" }, SelectedIndex = 0 };
+    private readonly ComboBox _overviewStepEnvironment = new() { Width = 170 };
+    private readonly ComboBox _overviewStepTestcase = new() { Width = 190 };
+    private readonly TextBox _overviewStepFilter = new() { Width = 280, Watermark = "Filter steps: term1 & term2…" };
+    private bool _overviewStepFilterRefreshing;
     private readonly CheckBox _enableInternalLog = new() { Content = "Enable internal log", IsChecked = true, Margin = new Thickness(12, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _readyValue = new();
     private readonly TextBlock _runningValue = new();
