@@ -210,16 +210,23 @@ internal sealed class InstanceRow : Border
             refreshing = true;
             try
             {
+            static void SetOptions(ComboBox combo, IEnumerable<string> values)
+            {
+                var previous = combo.SelectedItem?.ToString();
+                var options = values.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                combo.ItemsSource = options;
+                combo.SelectedItem = options.FirstOrDefault(option => option.Equals(previous, StringComparison.OrdinalIgnoreCase)) ?? options.FirstOrDefault();
+            }
             var artifacts = ArtifactCatalog.Logs(item);
             var testcases = artifacts.Select(x => x.Testcase).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
-            testcase.ItemsSource = testcases; testcase.SelectedIndex = testcases.Count == 0 ? -1 : 0;
+            SetOptions(testcase, testcases);
             var selectedTestcase = testcase.SelectedItem?.ToString();
             var scoped = artifacts.Where(x => string.Equals(x.Testcase, selectedTestcase, StringComparison.OrdinalIgnoreCase)).ToList();
             var environments = scoped.Select(x => x.Environment).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
-            environment.ItemsSource = environments; environment.SelectedIndex = environments.Count == 0 ? -1 : 0;
+            SetOptions(environment, environments);
             var selectedEnvironment = environment.SelectedItem?.ToString();
             var results = scoped.Where(x => string.Equals(x.Environment, selectedEnvironment, StringComparison.OrdinalIgnoreCase)).Select(x => x.Result).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
-            result.ItemsSource = new[] { "All" }.Concat(results).Distinct(StringComparer.OrdinalIgnoreCase).ToList(); result.SelectedIndex = 0;
+            SetOptions(result, new[] { "All" }.Concat(results));
             }
             finally { refreshing = false; }
         }
