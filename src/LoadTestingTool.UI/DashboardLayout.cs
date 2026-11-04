@@ -68,6 +68,15 @@ internal sealed record ExecutedLogArtifact(string Path, string Testcase, string 
 
 internal static class ArtifactCatalog
 {
+    private static bool SameRunId(string left, string right)
+    {
+        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right)) return false;
+        if (left.Equals(right, StringComparison.OrdinalIgnoreCase)) return true;
+        var leftShort = left.Length <= 8 ? left : left[^8..];
+        var rightShort = right.Length <= 8 ? right : right[^8..];
+        return leftShort.Equals(rightShort, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string LatestRunId(InstanceInfo item)
     {
         if (!string.IsNullOrWhiteSpace(item.CurrentRunId)) return item.CurrentRunId;
@@ -89,7 +98,7 @@ internal static class ArtifactCatalog
                 using var workbook = new XLWorkbook(path);
                 var summary = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("RunSummary", StringComparison.OrdinalIgnoreCase));
                 var workbookRunId = summary?.RowsUsed().Skip(1).FirstOrDefault()?.Cell(1).GetString();
-                if (!string.Equals(workbookRunId, targetRunId, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!SameRunId(workbookRunId, targetRunId)) continue;
                 var name = Path.GetFileNameWithoutExtension(path); var rowMarker = name.IndexOf("_Row", StringComparison.OrdinalIgnoreCase);
                 var testcase = rowMarker > 0 ? name[..rowMarker] : name;
                 var rowEnd = rowMarker >= 0 ? name.IndexOf('_', rowMarker + 4) : -1;
@@ -98,6 +107,11 @@ internal static class ArtifactCatalog
                 var result = parts.LastOrDefault(x => x.Equals("passed", StringComparison.OrdinalIgnoreCase) || x.Equals("failed", StringComparison.OrdinalIgnoreCase) || x.Equals("cancelled", StringComparison.OrdinalIgnoreCase)) ?? "unknown";
                 var resultIndex = Array.FindIndex(parts, x => x.Equals(result, StringComparison.OrdinalIgnoreCase));
                 var environment = resultIndex > 0 ? parts[resultIndex - 1] : "default";
+                if (resultIndex >= 0 && resultIndex + 1 < parts.Length &&
+                    parts[resultIndex - 1].Equals("History", StringComparison.OrdinalIgnoreCase))
+                    environment = parts[resultIndex + 1];
+                if (environment.Equals("History", StringComparison.OrdinalIgnoreCase) ||
+                    environment.Equals("_aggregate", StringComparison.OrdinalIgnoreCase)) environment = "default";
                 output.Add(new ExecutedHistoryArtifact(path, testcase, environment, DashboardStyle.Status(result), row));
             }
             catch { }
@@ -146,7 +160,7 @@ internal sealed class InstanceRow : Border
     private readonly TextBlock _environment = DashboardStyle.Text("");
     private readonly Border _badgeHost = new();
     private Button _runButton = null!;
-    public InstanceRow(InstanceInfo item, Action<InstanceInfo> select, Action<InstanceInfo> configure, Action<InstanceInfo> addStep, Action<InstanceInfo> editStep, Action<InstanceInfo> trySpreadsheet, Action<InstanceInfo> openWorkbook, Action<InstanceInfo> run, Action<InstanceInfo> stop, Action<InstanceInfo, string, string, string, string> openSelectedLog, Action<InstanceInfo> openLatestLog, Action<InstanceInfo> openAllLogs, Action<InstanceInfo, string, string, string, string, bool> openSelectedHistory, Action<InstanceInfo, bool> openLatestHistory, Action<string> log)
+    public InstanceRow(InstanceInfo item, Action<InstanceInfo> select, Action<InstanceInfo> configure, Action<InstanceInfo> trySpreadsheet, Action<InstanceInfo> openWorkbook, Action<InstanceInfo> run, Action<InstanceInfo> stop, Action<InstanceInfo, string, string, string, string> openSelectedLog, Action<InstanceInfo> openLatestLog, Action<InstanceInfo> openAllLogs, Action<InstanceInfo, string, string, string, string, bool> openSelectedHistory, Action<InstanceInfo, bool> openLatestHistory, Action<string> log)
     {
         _item = item;
         Padding = new Thickness(8, 12);
@@ -164,7 +178,7 @@ internal sealed class InstanceRow : Border
         ToolTip.SetTip(runButton, "Run all enabled workbook steps using workbook defaults. Use Configure first for a custom selection.");
         var logButton = BuildInternalLogButton(item, openSelectedLog, openLatestLog, openAllLogs);
         var historyButton = BuildHistoryButton(item, openSelectedHistory, openLatestHistory);
-        foreach (var button in new[] { runButton, DashboardStyle.Action("Stop", () => stop(item)), DashboardStyle.Action("Configure", () => configure(item)), DashboardStyle.Action("Add step", () => addStep(item)), DashboardStyle.Action("Edit step", () => editStep(item)), DashboardStyle.Action("✎  Edit dataset", () => trySpreadsheet(item)), DashboardStyle.Action("Open workbook", () => openWorkbook(item)), logButton, historyButton }) { button.Margin = new Thickness(0, 0, 4, 4); button.Padding = new Thickness(7, 5); actions.Children.Add(button); }
+        foreach (var button in new[] { runButton, DashboardStyle.Action("Stop", () => stop(item)), DashboardStyle.Action("Configure", () => configure(item)), DashboardStyle.Action("✎  Edit dataset", () => trySpreadsheet(item)), DashboardStyle.Action("Open workbook", () => openWorkbook(item)), logButton, historyButton }) { button.Margin = new Thickness(0, 0, 4, 4); button.Padding = new Thickness(7, 5); actions.Children.Add(button); }
         var cells = new Control[] { _check, name, _testcases, _mode, _order, _environment, _badgeHost, actions };
         for (var i = 0; i < cells.Length; i++) { Grid.SetColumn(cells[i], i); cells[i].Margin = new Thickness(0, 0, 6, 0); grid.Children.Add(cells[i]); }
         Child = grid;
@@ -176,7 +190,7 @@ internal sealed class InstanceRow : Border
         _check.IsChecked = _item.Selected;
         _testcases.Text = _item.TestcaseSelection == "0" ? "All" : _item.TestcaseSelection;
         _mode.Text = _item.ExecutionMode == "loop" ? "Loop" : "Threaded";
-        _order.Text = _item.RunScenariosInParallel ? "Parallel" : "Sequential";
+        _order.Text = _item.RunEnvironmentsParallel ? "Parallel" : "Sequential";
         _environment.Text = string.IsNullOrWhiteSpace(_item.EnvironmentSelection) ? "All" : _item.EnvironmentSelection;
         ToolTip.SetTip(_environment, string.Join(", ", _item.EnvironmentOptions));
         _badgeHost.Child = DashboardStyle.Badge(_item.Status);
@@ -267,19 +281,27 @@ internal sealed class InstanceRow : Border
             try
             {
             var artifacts = ArtifactCatalog.History(item);
+            static void SetOptions(ComboBox combo, IEnumerable<string> values)
+            {
+                var previous = combo.SelectedItem?.ToString();
+                var options = values.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                combo.ItemsSource = options;
+                combo.SelectedItem = options.FirstOrDefault(value => value.Equals(previous, StringComparison.OrdinalIgnoreCase))
+                    ?? options.FirstOrDefault();
+            }
             var testcases = artifacts.Select(x => x.Testcase).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
-            testcase.ItemsSource = testcases; testcase.SelectedIndex = testcases.Count == 0 ? -1 : 0;
+            SetOptions(testcase, testcases);
             var selectedTestcase = testcase.SelectedItem?.ToString();
             var scoped = artifacts.Where(x => string.Equals(x.Testcase, selectedTestcase, StringComparison.OrdinalIgnoreCase)).ToList();
             var environments = scoped.Select(x => x.Environment).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
-            environment.ItemsSource = environments; environment.SelectedIndex = environments.Count == 0 ? -1 : 0;
+            SetOptions(environment, environments);
             var selectedEnvironment = environment.SelectedItem?.ToString();
             scoped = scoped.Where(x => string.Equals(x.Environment, selectedEnvironment, StringComparison.OrdinalIgnoreCase)).ToList();
             var results = scoped.Select(x => x.Result).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
-            result.ItemsSource = new[] { "All" }.Concat(results).Distinct(StringComparer.OrdinalIgnoreCase).ToList(); result.SelectedIndex = 0;
+            SetOptions(result, new[] { "All" }.Concat(results));
             var rows = scoped.Select(x => x.Row).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
             var aggregateRows = ArtifactCatalog.AggregateHistory(item) is null ? Array.Empty<string>() : new[] { "All rows" };
-            row.ItemsSource = aggregateRows.Concat(rows).ToList(); row.SelectedIndex = row.ItemsSource is System.Collections.IList list && list.Count > 0 ? 0 : -1;
+            SetOptions(row, aggregateRows.Concat(rows));
             }
             finally { refreshing = false; }
         }
@@ -329,6 +351,15 @@ public sealed partial class MainWindow
     private Control _historyPage = null!;
     private string _detailSignature = "";
     private double _logFontSize = 11;
+    private const int DashboardPageSize = 200;
+    private int _overviewPage = 1;
+    private int _assertionPage = 1;
+    private readonly TextBlock _overviewPageLabel = DashboardStyle.Text("", 11, false, DashboardStyle.Muted);
+    private readonly TextBlock _assertionPageLabel = DashboardStyle.Text("", 11, false, DashboardStyle.Muted);
+    private Button _overviewPreviousButton = null!;
+    private Button _overviewNextButton = null!;
+    private Button _assertionPreviousButton = null!;
+    private Button _assertionNextButton = null!;
 
     private void BuildLayout()
     {
@@ -359,7 +390,8 @@ public sealed partial class MainWindow
         _stopButton = DashboardStyle.Action("Stop selected", () => StopSelected(false));
         _forceButton = DashboardStyle.Action("Force stop", () => StopSelected(true), "danger");
         _validateButton = DashboardStyle.Action("✓ Validate all", OpenGlobalValidation, "primary");
-        var commands = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Children = { _validateButton, _chooseButton, _runButton, _stopButton, _forceButton } };
+        var environmentButton = DashboardStyle.Action("🌐 Manage environments", OpenEnvironmentManager, "primary");
+        var commands = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Children = { environmentButton, _validateButton, _chooseButton, _runButton, _stopButton, _forceButton } };
         var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(18, 16) };
         header.Children.Add(heading); Grid.SetColumn(commands, 1); header.Children.Add(commands);
 
@@ -411,7 +443,17 @@ public sealed partial class MainWindow
         _environmentFilter.SelectionChanged += (_, _) => RefreshAssertionList();
         _environmentFilter.ItemsSource = new[] { "All environments" }; _environmentFilter.SelectedIndex = 0;
         _overviewFilter.TextChanged += (_, _) => RefreshDashboardDetails(true);
-        _overviewStepFilter.TextChanged += (_, _) => { if (!_overviewStepFilterRefreshing) RefreshDashboardDetails(true); };
+        _overviewStepFilter.TextChanged += (_, _) =>
+        {
+            if (_overviewStepFilterRefreshing) return;
+            var caret = _overviewStepFilter.CaretIndex;
+            RefreshDashboardDetails(true);
+            Dispatcher.UIThread.Post(() =>
+            {
+                _overviewStepFilter.Focus();
+                _overviewStepFilter.CaretIndex = Math.Min(caret, _overviewStepFilter.Text?.Length ?? 0);
+            });
+        };
         _overviewStepStatus.SelectionChanged += (_, _) => { if (!_overviewStepFilterRefreshing) RefreshDashboardDetails(true); };
         _overviewStepEnvironment.SelectionChanged += (_, _) => { if (!_overviewStepFilterRefreshing) RefreshDashboardDetails(true); };
         _overviewStepTestcase.SelectionChanged += (_, _) => { if (!_overviewStepFilterRefreshing) RefreshDashboardDetails(true); };
@@ -423,6 +465,8 @@ public sealed partial class MainWindow
         var filters = new StackPanel { Spacing = 10, Children = { _failedOnly, _environmentFilter, assertionActions } };
         DockPanel.SetDock(filters, Dock.Top); assertionPanel.Children.Add(filters);
         assertionPanel.Children.Add(new ScrollViewer { Content = _assertionItems, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
+        var assertionPaging = CreatePaginationBar(false);
+        DockPanel.SetDock(assertionPaging, Dock.Bottom); assertionPanel.Children.Add(assertionPaging);
         _detailTabs.ItemsSource = new[]
         {
             new TabItem { Header = "Overview", Content = Scroll(_overviewPanel) },
@@ -511,7 +555,6 @@ public sealed partial class MainWindow
         panel.Children.Add(KeyValue("Documentation", Path.GetFullPath(_config.DocumentationFile)));
         panel.Children.Add(DashboardStyle.Text("Files and folders open with your system default applications. Set file associations in your OS settings.", 12, false, DashboardStyle.Muted));
         panel.Children.Add(_enableInternalLog);
-        panel.Children.Add(DashboardStyle.Action("Manage global environments", OpenEnvironmentManager, "primary"));
         panel.Children.Add(DashboardStyle.Action("Open UI log", () => OpenFile(Path.GetFullPath(_config.UiLogFile), "UI log")));
         panel.Children.Add(DashboardStyle.Action("Open user manual", () => OpenFile(Path.GetFullPath(_config.DocumentationFile), "user manual")));
         panel.Children.Add(DashboardStyle.Text("The dashboard reads and writes the central appsettings.json beside the application installation.", 12, false, DashboardStyle.Muted));
@@ -552,28 +595,63 @@ public sealed partial class MainWindow
 
     private void OpenEnvironmentManager()
     {
-        var manager = new EnvironmentManagerWindow(_config.Environments, SaveGlobalEnvironments);
+        var manager = new EnvironmentManagerWindow(_config.Environments, _config.RunEnvironmentsParallel, SaveGlobalEnvironmentSettings, ApplyEnvironmentsToAllInstances);
         manager.Closed += (_, _) => RefreshInstances();
         manager.Show(this);
     }
 
-    private void SaveGlobalEnvironments(IReadOnlyList<string> environments)
+    private void SaveGlobalEnvironmentSettings(IReadOnlyList<string> environments, bool runEnvironmentsParallel)
     {
         var root = File.Exists(_config.SettingsFile) ? JsonNode.Parse(File.ReadAllText(_config.SettingsFile)) as JsonObject : new JsonObject();
         root ??= new JsonObject();
         var environmentArray = new JsonArray();
         foreach (var environment in environments) environmentArray.Add(environment);
         root["Environments"] = environmentArray;
+        root["RunEnvironmentsParallel"] = runEnvironmentsParallel;
         if (root["Instances"] is JsonObject instances)
             foreach (var pair in instances)
-                if (pair.Value is JsonObject instance && instance["EnvironmentSelection"] is JsonValue selectedValue)
+                if (pair.Value is JsonObject instance)
                 {
-                    var selected = selectedValue.ToString().Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                        .Where(value => environments.Contains(value, StringComparer.OrdinalIgnoreCase));
-                    instance["EnvironmentSelection"] = string.Join(',', selected);
+                    instance.Remove("RunEnvironmentsParallel");
+                    if (instance["EnvironmentSelection"] is JsonValue selectedValue)
+                    {
+                        var selected = selectedValue.ToString().Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                            .Where(value => environments.Contains(value, StringComparer.OrdinalIgnoreCase));
+                        instance["EnvironmentSelection"] = string.Join(',', selected);
+                    }
                 }
         File.WriteAllText(_config.SettingsFile, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
         _config.Environments = environments.ToList();
+        _config.RunEnvironmentsParallel = runEnvironmentsParallel;
+        foreach (var item in _instances) item.RunEnvironmentsParallel = runEnvironmentsParallel;
+        RefreshRows();
+    }
+
+    private void ApplyEnvironmentsToAllInstances(IReadOnlyList<string> environments)
+    {
+        var root = File.Exists(_config.SettingsFile) ? JsonNode.Parse(File.ReadAllText(_config.SettingsFile)) as JsonObject : new JsonObject();
+        root ??= new JsonObject();
+        var instances = root["Instances"] as JsonObject ?? new JsonObject();
+        var selection = string.Join(',', environments);
+        foreach (var pair in instances)
+        {
+            if (pair.Value is not JsonObject instance) continue;
+            instance["EnvironmentSelection"] = selection;
+            instance["EnvironmentSelectionJson"] = JsonSerializer.Serialize(environments);
+        }
+        root["Instances"] = instances;
+        File.WriteAllText(_config.SettingsFile, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
+        foreach (var item in _instances)
+        {
+            item.EnvironmentSelection = selection;
+            item.EnvironmentSelectionJson = JsonSerializer.Serialize(environments);
+            item.HasAppliedSelection = true;
+            if (_config.Instances.TryGetValue(item.Name, out var central)) central.EnvironmentSelection = selection;
+        }
+        _details.Text = $"Applied environments to {_instances.Count} instance(s): {selection}.";
+        UiLog($"Applied global environment selection to all instances. environments={selection}; instances={_instances.Count}");
+        RefreshRows();
+        RefreshDashboardDetails(force: true);
     }
     private static Control KeyValue(string label, string value)
     {
@@ -581,6 +659,54 @@ public sealed partial class MainWindow
         grid.Children.Add(DashboardStyle.Text(label, 12, false, DashboardStyle.Muted));
         var text = DashboardStyle.Text(value, 12); text.TextWrapping = TextWrapping.Wrap; ToolTip.SetTip(text, value);
         Grid.SetColumn(text, 1); grid.Children.Add(text); return grid;
+    }
+
+    private Control CreatePaginationBar(bool overview)
+    {
+        var label = overview ? _overviewPageLabel : _assertionPageLabel;
+        var previous = DashboardStyle.Action("Previous", () =>
+        {
+            if (overview) _overviewPage = Math.Max(1, _overviewPage - 1);
+            else _assertionPage = Math.Max(1, _assertionPage - 1);
+            if (overview) RefreshDashboardDetails(true); else RefreshAssertionList();
+        });
+        var next = DashboardStyle.Action("Next", () =>
+        {
+            if (overview) _overviewPage++;
+            else _assertionPage++;
+            if (overview) RefreshDashboardDetails(true); else RefreshAssertionList();
+        });
+        if (overview) { _overviewPreviousButton = previous; _overviewNextButton = next; }
+        else { _assertionPreviousButton = previous; _assertionNextButton = next; }
+        return new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Margin = new Thickness(0, 6, 0, 4),
+            Children = { previous, label, next }
+        };
+    }
+
+    private static string FormatRunDuration(InstanceInfo item)
+    {
+        if (item.StartedAt is not { } started) return "Not started";
+        var ended = item.CompletedAt ?? DateTimeOffset.Now;
+        var duration = ended - started;
+        if (duration < TimeSpan.Zero) duration = TimeSpan.Zero;
+        return duration.TotalHours >= 1
+            ? $"{(int)duration.TotalHours:00}:{duration.Minutes:00}:{duration.Seconds:00}"
+            : $"{duration.Minutes:00}:{duration.Seconds:00}";
+    }
+
+    private static void UpdatePagination(TextBlock label, Button previous, Button next, int page, int totalItems, int pageSize)
+    {
+        var totalPages = Math.Max(1, (int)Math.Ceiling(totalItems / (double)pageSize));
+        var currentPage = Math.Clamp(page, 1, totalPages);
+        var first = totalItems == 0 ? 0 : ((currentPage - 1) * pageSize) + 1;
+        var last = totalItems == 0 ? 0 : Math.Min(currentPage * pageSize, totalItems);
+        label.Text = $"Page {currentPage} of {totalPages}  ·  Showing {first}–{last} of {totalItems}";
+        previous.IsEnabled = currentPage > 1;
+        next.IsEnabled = currentPage < totalPages;
     }
     private void BuildConfiguration()
     {
@@ -601,8 +727,8 @@ public sealed partial class MainWindow
         var mode = new ComboBox { ItemsSource = new[] { "Threaded", "Sequential loop" }, SelectedIndex = item.ExecutionMode == "loop" ? 1 : 0, HorizontalAlignment = HorizontalAlignment.Stretch };
         mode.SelectionChanged += (_, _) => item.ExecutionMode = mode.SelectedIndex == 1 ? "loop" : "threaded";
         _configurationPanel.Children.Add(Field("Execution mode", mode));
-        var order = new ComboBox { ItemsSource = new[] { "Sequential testcases", "Parallel testcases" }, SelectedIndex = item.RunScenariosInParallel ? 1 : 0, HorizontalAlignment = HorizontalAlignment.Stretch };
-        order.SelectionChanged += (_, _) => item.RunScenariosInParallel = order.SelectedIndex == 1;
+        var order = new ComboBox { ItemsSource = new[] { "Sequential environments", "Parallel environments" }, SelectedIndex = item.RunEnvironmentsParallel ? 1 : 0, HorizontalAlignment = HorizontalAlignment.Stretch };
+        order.SelectionChanged += (_, _) => item.RunEnvironmentsParallel = order.SelectedIndex == 1;
         _configurationPanel.Children.Add(Field("Testcase order", order));
         _configurationPanel.Children.Add(DashboardStyle.Text("Global execution settings for this instance (stored in central appsettings.json; not in the workbook config sheet).", 12, false, DashboardStyle.Muted));
         var threads = new TextBox { Text = item.Threads.ToString(), Watermark = "Threads", Width = 150 };
@@ -616,7 +742,7 @@ public sealed partial class MainWindow
         var generateResults = new CheckBox { Content = "Generate technical Results artifacts", IsChecked = item.GenerateResults };
         _configurationPanel.Children.Add(generateResults);
         _configurationPanel.Children.Add(DashboardStyle.Text("When disabled, the Excel History files and live UI events remain available, but persistent Results run folders and metrics.json are not generated.", 11, false, DashboardStyle.Muted));
-        _configurationPanel.Children.Add(DashboardStyle.Action("Save execution settings", () => SaveInstanceExecutionSettings(item, threads.Text, iterations.Text, threadInterval.Text, iterationInterval.Text, generateResults.IsChecked == true, item.ExecutionMode, item.RunScenariosInParallel), "primary"));
+        _configurationPanel.Children.Add(DashboardStyle.Action("Save execution settings", () => SaveInstanceExecutionSettings(item, threads.Text, iterations.Text, threadInterval.Text, iterationInterval.Text, generateResults.IsChecked == true, item.ExecutionMode, item.RunEnvironmentsParallel), "primary"));
         _configurationPanel.Children.Add(KeyValue("Data IDs", string.IsNullOrWhiteSpace(item.DataIdSelection) ? "All data rows" : item.DataIdSelection));
         _configurationPanel.Children.Add(DashboardStyle.Text("Workbook actions are available directly on the instance row: Add step, Edit step, Edit dataset, and Open workbook. The legacy editor is available in Handcraft.", 12, false, DashboardStyle.Muted));
     }
@@ -754,7 +880,9 @@ public sealed partial class MainWindow
     private void ApplyRunSelection(InstanceInfo item, RunSelectionResult result)
     {
         item.TestcaseSelection = result.Testcases; item.StepSelectionJson = result.StepsJson; item.EnvironmentSelection = result.Environments;
-        item.EnvironmentSelectionJson = result.EnvironmentsJson; item.DataIdSelection = result.DataIds; item.ExecutionMode = result.ExecutionMode; item.RunScenariosInParallel = result.ScenariosParallel; item.Threads = result.Threads; item.Iterations = result.Iterations; item.ThreadIntervalMs = result.ThreadIntervalMs; item.IterationIntervalMs = result.IterationIntervalMs; item.HasAppliedSelection = true; item.Selected = true;
+        item.EnvironmentSelectionJson = result.EnvironmentsJson; item.DataIdSelection = result.DataIds; item.ExecutionMode = result.ExecutionMode; item.RunEnvironmentsParallel = result.ScenariosParallel; item.Threads = result.Threads; item.Iterations = result.Iterations; item.ThreadIntervalMs = result.ThreadIntervalMs; item.IterationIntervalMs = result.IterationIntervalMs; item.HasAppliedSelection = true; item.Selected = true;
+        _config.RunEnvironmentsParallel = result.ScenariosParallel;
+        foreach (var other in _instances) other.RunEnvironmentsParallel = result.ScenariosParallel;
         SaveInstanceExecutionSettings(item, result.Threads.ToString(), result.Iterations.ToString(), result.ThreadIntervalMs.ToString(), result.IterationIntervalMs.ToString());
         try
         {
@@ -767,13 +895,27 @@ public sealed partial class MainWindow
             instance["EnvironmentSelection"] = result.Environments;
             instance["DataIdSelection"] = result.DataIds;
             instance["ExecutionMode"] = result.ExecutionMode;
-            instance["RunScenariosInParallel"] = result.ScenariosParallel;
             instance["Threads"] = result.Threads;
             instance["Iterations"] = result.Iterations;
             instance["ThreadIntervalMs"] = result.ThreadIntervalMs;
             instance["IterationIntervalMs"] = result.IterationIntervalMs;
             instances[item.Name] = instance; root["Instances"] = instances;
+            root["RunEnvironmentsParallel"] = result.ScenariosParallel;
+            foreach (var pair in instances)
+                if (pair.Value is JsonObject configuredInstance) configuredInstance.Remove("RunEnvironmentsParallel");
             File.WriteAllText(_config.SettingsFile, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
+            if (_config.Instances.TryGetValue(item.Name, out var central))
+            {
+                central.TestcaseSelection = result.Testcases;
+                central.StepSelection = result.StepsJson;
+                central.EnvironmentSelection = result.Environments;
+                central.DataIdSelection = result.DataIds;
+                central.ExecutionMode = result.ExecutionMode;
+                central.Threads = result.Threads;
+                central.Iterations = result.Iterations;
+                central.ThreadIntervalMs = result.ThreadIntervalMs;
+                central.IterationIntervalMs = result.IterationIntervalMs;
+            }
             _details.Text = $"Selection saved for {item.Name}. Testcases: {result.Testcases}; Data IDs: {(string.IsNullOrWhiteSpace(result.DataIds) ? "all rows" : result.DataIds)}";
         }
         catch (Exception ex) { _details.Text = $"Selection applied, but could not save it: {ex.Message}"; UiLog($"Could not save selection profile for {item.Name}: {ex}"); }
@@ -962,7 +1104,7 @@ public sealed partial class MainWindow
 
         _runSummaryPanel.Children.Add(new Border { Height = 1, Background = DashboardStyle.Line, Margin = new Thickness(0, 4) });
         _runSummaryPanel.Children.Add(DashboardStyle.Text("Execution parameters", 13, true));
-        _runSummaryPanel.Children.Add(KeyValue("Mode / order", $"{(item.ExecutionMode == "loop" ? "Loop" : "Threaded")} / {(item.RunScenariosInParallel ? "Parallel" : "Sequential")}"));
+        _runSummaryPanel.Children.Add(KeyValue("Mode / order", $"{(item.ExecutionMode == "loop" ? "Loop" : "Threaded")} / {(item.RunEnvironmentsParallel ? "Parallel" : "Sequential")}"));
         _runSummaryPanel.Children.Add(KeyValue("Threads / iterations", $"{Math.Max(1, item.Threads)} / {Math.Max(1, item.Iterations)}"));
         _runSummaryPanel.Children.Add(KeyValue("Environments", summary.EnvironmentNames.Count == 0 ? "None" : string.Join(", ", summary.EnvironmentNames)));
         _runSummaryPanel.Children.Add(KeyValue("Data IDs", string.IsNullOrWhiteSpace(item.DataIdSelection) ? "All workbook rows" : item.DataIdSelection));
@@ -1085,7 +1227,7 @@ public sealed partial class MainWindow
     private void RefreshDashboardDetails(bool force = false)
     {
         var item = _selectedInstance;
-        var signature = item is null ? "empty" : $"{item.Name}|{item.Status}|{item.Requests.Count}|{item.Assertions.Count}|{item.LastEvent}|{item.P95Ms}|{item.TestcaseSelection}|{item.EnvironmentSelection}|{item.ExecutionMode}|{item.RunScenariosInParallel}|{item.StepSelectionJson}";
+        var signature = item is null ? "empty" : $"{item.Name}|{item.Status}|{item.Requests.Count}|{item.Assertions.Count}|{item.LastEvent}|{item.P95Ms}|{item.StartedAt}|{item.CompletedAt}|{item.TestcaseSelection}|{item.EnvironmentSelection}|{item.ExecutionMode}|{item.RunEnvironmentsParallel}|{item.StepSelectionJson}";
         if (!force && signature == _detailSignature) return;
         _detailSignature = signature;
         _selectedTitle.Text = item?.Name ?? "Selected instance";
@@ -1113,7 +1255,7 @@ public sealed partial class MainWindow
         void AddOverview(Control control, string searchable) { if (MatchesTerms(searchable, _overviewFilter.Text)) _overviewPanel.Children.Add(control); }
         AddOverview(DashboardStyle.Badge(item.Status), item.Status);
         AddOverview(KeyValue("Environment", string.IsNullOrWhiteSpace(item.EnvironmentSelection) ? "All global environments" : item.EnvironmentSelection), item.EnvironmentSelection);
-        AddOverview(KeyValue("Mode / order", $"{(item.ExecutionMode == "loop" ? "Loop" : "Threaded")} / {(item.RunScenariosInParallel ? "Parallel" : "Sequential")}"), $"{item.ExecutionMode} {(item.RunScenariosInParallel ? "Parallel" : "Sequential")}");
+        AddOverview(KeyValue("Mode / order", $"{(item.ExecutionMode == "loop" ? "Loop" : "Threaded")} / {(item.RunEnvironmentsParallel ? "Parallel" : "Sequential")}"), $"{item.ExecutionMode} {(item.RunEnvironmentsParallel ? "Parallel" : "Sequential")}");
         AddOverview(KeyValue("Started", item.StartedAt?.ToString("HH:mm:ss") ?? "Not started"), item.StartedAt?.ToString() ?? "Not started");
         AddOverview(KeyValue("Requests", (item.CompletedRequests ?? item.Requests.Count).ToString()), $"{item.CompletedRequests} {item.Requests.Count}");
         var average = item.AverageMs ?? (item.Requests.Count == 0 ? (double?)null : item.Requests.Average(r => r.DurationMs));
@@ -1121,51 +1263,7 @@ public sealed partial class MainWindow
         AddOverview(KeyValue("p95 latency", item.P95Ms is null ? "Available on completion" : $"{item.P95Ms} ms"), item.P95Ms?.ToString() ?? "Available");
         AddOverview(KeyValue("Throughput", item.RequestsPerSecond is null ? "Available on completion" : $"{item.RequestsPerSecond:F2} requests / sec"), item.RequestsPerSecond?.ToString() ?? "Available");
         AddOverview(KeyValue("Assertions", $"{item.Assertions.Count(a => a.Result == "PASS")} passed / {item.Assertions.Count(a => a.Result == "FAIL")} failed"), $"{item.Assertions.Count} pass fail");
-        var rowSummaries = BuildDashboardRowSummaries(item.Requests);
-        var testcaseSummaries = rowSummaries.GroupBy(x => x.Testcase, StringComparer.OrdinalIgnoreCase).ToList();
-        var passedRows = rowSummaries.Count(x => x.Status == "Passed");
-        var failedRows = rowSummaries.Count(x => x.Status == "Failed");
-        var unexpectedRows = rowSummaries.Count(x => x.Status == "Unexpected error");
-        var incompleteRows = rowSummaries.Count(x => x.Status == "Incomplete" || x.Status == "Cancelled");
-        var passedCases = testcaseSummaries.Count(x => x.All(row => row.Status == "Passed"));
-        var failedCases = testcaseSummaries.Count(x => x.Any(row => row.Status == "Failed"));
-        var unexpectedCases = testcaseSummaries.Count(x => x.Any(row => row.Status == "Unexpected error"));
-        _overviewPanel.Children.Add(new Border { Height = 1, Background = DashboardStyle.Line });
-        _overviewPanel.Children.Add(DashboardStyle.Text("Execution summary", 14, true));
-        var summaryCards = new WrapPanel { Orientation = Orientation.Horizontal, ItemWidth = 158, ItemHeight = 76 };
-        void SummaryCard(string label, int value, IBrush color)
-        {
-            var card = DashboardStyle.Card(new StackPanel { Spacing = 4, Children = { DashboardStyle.Text(label, 11, false, DashboardStyle.Muted), DashboardStyle.Text(value.ToString(), 22, true, color) } }, new Thickness(10));
-            card.Margin = new Thickness(0, 0, 8, 8); summaryCards.Children.Add(card);
-        }
-        SummaryCard("Testcases observed", testcaseSummaries.Count, DashboardStyle.Blue);
-        SummaryCard("Testcases passed", passedCases, DashboardStyle.Green);
-        SummaryCard("Testcases failed", failedCases, DashboardStyle.Red);
-        SummaryCard("Testcases unexpected", unexpectedCases, DashboardStyle.Brush("#FFB36B"));
-        SummaryCard("Rows observed", rowSummaries.Count, DashboardStyle.Blue);
-        SummaryCard("Rows passed", passedRows, DashboardStyle.Green);
-        SummaryCard("Rows failed", failedRows, DashboardStyle.Red);
-        SummaryCard("Rows unexpected", unexpectedRows, DashboardStyle.Brush("#FFB36B"));
-        SummaryCard("Rows incomplete", incompleteRows, DashboardStyle.Brush("#F6C76B"));
-        _overviewPanel.Children.Add(summaryCards);
-        _overviewPanel.Children.Add(DashboardStyle.Text($"Observed {rowSummaries.Count} unique testcase/data rows and {item.Requests.Count} completed step executions. A row is passed only when all observed steps passed.", 11, false, DashboardStyle.Muted));
-        _overviewPanel.Children.Add(new Border { Height = 1, Background = DashboardStyle.Line });
-        _overviewPanel.Children.Add(DashboardStyle.Text($"Executed rows  /  {rowSummaries.Count} total", 14, true));
-        if (rowSummaries.Count == 0) _overviewPanel.Children.Add(DashboardStyle.Text("No completed rows yet. Run this instance to see results.", 12, false, DashboardStyle.Muted));
-        foreach (var row in rowSummaries)
-        {
-            var searchable = $"{row.Testcase} {row.DataId} {row.Environment} {row.Status} {row.Details}";
-            if (!MatchesTerms(searchable, _overviewFilter.Text)) continue;
-            var heading = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
-            var name = DashboardStyle.Text($"{row.Testcase}  /  Row {row.DataId}", 12, true); name.TextWrapping = TextWrapping.Wrap;
-            heading.Children.Add(name);
-            var badge = DashboardStyle.Badge(row.Status); Grid.SetColumn(badge, 1); heading.Children.Add(badge);
-            var metadata = DashboardStyle.Text($"Environment: {row.Environment}  ·  Steps: {row.Steps}  ·  Passed: {row.Passed}  ·  Failed: {row.Failed}  ·  Unexpected: {row.Unexpected}  ·  Skipped: {row.Skipped}", 10, false, DashboardStyle.Muted); metadata.TextWrapping = TextWrapping.Wrap;
-            var line = new StackPanel { Spacing = 5, Children = { heading, metadata } };
-            if (!string.IsNullOrWhiteSpace(row.Details)) { var details = DashboardStyle.Text(row.Details, 11, false, row.Status == "Passed" ? DashboardStyle.Muted : DashboardStyle.Red); details.TextWrapping = TextWrapping.Wrap; line.Children.Add(details); }
-            _overviewPanel.Children.Add(DashboardStyle.Card(line, new Thickness(10)));
-        }
-        _overviewPanel.Children.Add(DashboardStyle.Text("Step execution timeline", 13, true));
+        _overviewPanel.Children.Add(DashboardStyle.Text($"Step execution timeline  ·  Total duration: {FormatRunDuration(item)}", 13, true));
         var stepFilterBar = new WrapPanel { Orientation = Orientation.Horizontal, ItemWidth = double.NaN, ItemHeight = double.NaN, Children =
         {
             _overviewStepStatus, _overviewStepEnvironment, _overviewStepTestcase, _overviewStepFilter
@@ -1173,16 +1271,39 @@ public sealed partial class MainWindow
         foreach (var control in stepFilterBar.Children) control.Margin = new Thickness(0, 0, 8, 6);
         _overviewPanel.Children.Add(stepFilterBar);
         _overviewPanel.Children.Add(DashboardStyle.Text("Filters apply to completed steps only. Use & between terms to require all terms; matching text remains visible in the details viewer.", 10, false, DashboardStyle.Muted));
+        var stepPositions = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var stepTotals = item.Requests
+            .GroupBy(request => $"{request.Testcase}\u001F{request.DataId}\u001F{request.Environment}", StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+        var filteredRequests = item.Requests.Where(MatchesOverviewStep).ToList();
+        var overviewTotalPages = Math.Max(1, (int)Math.Ceiling(filteredRequests.Count / (double)DashboardPageSize));
+        _overviewPage = Math.Clamp(_overviewPage, 1, overviewTotalPages);
+        var pageRequests = filteredRequests.Skip((_overviewPage - 1) * DashboardPageSize).Take(DashboardPageSize);
         foreach (var request in item.Requests)
         {
-            if (!MatchesOverviewStep(request)) continue;
-            var top = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
-            top.Children.Add(DashboardStyle.Text($"{request.StepType}  ·  {request.StepName}", 11, true));
-            var time = DashboardStyle.Text($"{request.DurationMs} ms", 10, false, DashboardStyle.Muted); Grid.SetColumn(time, 1); top.Children.Add(time);
-            var line = new StackPanel { Spacing = 3, Children = { top, DashboardStyle.Text($"{request.Testcase} / {request.DataId} / {request.Environment}", 10, false, DashboardStyle.Muted), DashboardStyle.Badge(IsUnexpectedRequest(request) ? "Unexpected error" : request.Result == "PASS" ? "Passed" : request.Result == "SKIPPED" ? "Skipped" : "Failed"), DashboardStyle.Action("View details", () => LaunchStepDetails(request), "primary") } };
+            var rowKey = $"{request.Testcase}\u001F{request.DataId}\u001F{request.Environment}";
+            stepPositions[rowKey] = stepPositions.GetValueOrDefault(rowKey) + 1;
+        }
+        var overviewPaging = CreatePaginationBar(true);
+        UpdatePagination(_overviewPageLabel, _overviewPreviousButton, _overviewNextButton, _overviewPage, filteredRequests.Count, DashboardPageSize);
+        foreach (var request in pageRequests)
+        {
+            var rowKey = $"{request.Testcase}\u001F{request.DataId}\u001F{request.Environment}";
+            var top = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            var stepTitle = DashboardStyle.Text($"{request.StepType}  ·  {request.StepName}", 11, true);
+            stepTitle.TextWrapping = TextWrapping.Wrap;
+            top.Children.Add(stepTitle);
+            var statusText = IsUnexpectedRequest(request) ? "Unexpected error" : request.Result == "PASS" ? "Passed" : request.Result == "SKIPPED" ? "Skipped" : "Failed";
+            top.Children.Add(DashboardStyle.Badge(statusText));
+            top.Children.Add(DashboardStyle.Action("View details", () => LaunchStepDetails(request), "primary"));
+            var position = stepPositions[rowKey];
+            var context = DashboardStyle.Text($"{request.Testcase} / Row {request.DataId} · {request.Environment} · Step {position}/{stepTotals.GetValueOrDefault(rowKey, position)} · {request.DurationMs} ms", 10, false, DashboardStyle.Muted);
+            context.TextWrapping = TextWrapping.Wrap;
+            var line = new StackPanel { Spacing = 3, Children = { top, context } };
             if (!string.IsNullOrWhiteSpace(request.FailureCategory) && request.FailureCategory != "None") { var error = DashboardStyle.Text($"{request.FailureCategory}: {request.Error}", 10, false, DashboardStyle.Red); error.TextWrapping = TextWrapping.Wrap; line.Children.Add(error); }
             _overviewPanel.Children.Add(DashboardStyle.Card(line, new Thickness(8)));
         }
+        _overviewPanel.Children.Add(overviewPaging);
         if (item.Requests.Count > 0)
         {
             _overviewPanel.Children.Add(DashboardStyle.Text("Latency trend  /  last 30 requests", 13, true));

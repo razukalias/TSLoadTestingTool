@@ -40,7 +40,7 @@ public sealed class InstanceInfo
     public bool SaveResponseBodyToHistory { get; set; } = true;
     public bool MaskSensitiveData { get; set; } = true;
     public Dictionary<string, bool> HistorySheets { get; } = HistorySheetDefaults();
-    public bool RunScenariosInParallel { get; set; }
+    public bool RunEnvironmentsParallel { get; set; }
     public string EnvironmentSelection { get; set; } = "";
     public string EnvironmentSelectionJson { get; set; } = "";
     public bool HasAppliedSelection { get; set; }
@@ -161,7 +161,7 @@ public sealed partial class MainWindow : Window
     private InstanceRow GetOrCreateRow(InstanceInfo item)
     {
         if (_rows.TryGetValue(item.FolderPath, out var existing)) return existing;
-        var row = new InstanceRow(item, selected => { UiLog($"UI action: instance row clicked. instance={selected.Name}"); _instanceList.SelectedItem = selected; ShowDetails(selected); }, selected => OpenInstanceConfiguration(selected), selected => OpenStepWizardForInstance(selected), selected => EditStepForInstance(selected), selected => OpenSpreadsheetForInstance(selected), selected => OpenWorkbookForInstance(selected), RunSingleInstance, StopSingleInstance, OpenSelectedInternalLogForInstance, OpenLatestInternalLogForInstance, OpenAllInternalLogsForInstance, OpenSelectedHistoryForInstance, OpenLatestHistoryForInstance, UiLog);
+        var row = new InstanceRow(item, selected => { UiLog($"UI action: instance row clicked. instance={selected.Name}"); _instanceList.SelectedItem = selected; ShowDetails(selected); }, selected => OpenInstanceConfiguration(selected), selected => OpenSpreadsheetForInstance(selected), selected => OpenWorkbookForInstance(selected), RunSingleInstance, StopSingleInstance, OpenSelectedInternalLogForInstance, OpenLatestInternalLogForInstance, OpenAllInternalLogsForInstance, OpenSelectedHistoryForInstance, OpenLatestHistoryForInstance, UiLog);
         row.SetEnvironmentOptions(item.EnvironmentOptions);
         _rows[item.FolderPath] = row;
         return row;
@@ -190,9 +190,14 @@ public sealed partial class MainWindow : Window
             .Where(a => !_failedOnly.IsChecked.GetValueOrDefault() || a.Result == "FAIL")
             .Where(a => MatchesTerms($"{a.Environment} {a.Testcase} {a.DataId} {a.StepName} {a.ResponsePath} {a.AssertionVerb} {a.ExpectedValue} {a.ActualValue} {a.Result}", _assertionSearch.Text))
             .ToList() ?? [];
+        var totalPages = Math.Max(1, (int)Math.Ceiling(values.Count / (double)DashboardPageSize));
+        _assertionPage = Math.Clamp(_assertionPage, 1, totalPages);
+        var pageValues = values.Skip((_assertionPage - 1) * DashboardPageSize).Take(DashboardPageSize);
         _assertionItems.Children.Clear();
-        foreach (var assertion in values) _assertionItems.Children.Add(CreateAssertionRow(assertion));
-        UiLog($"Assertion list refreshed. instance={_selectedInstance?.Name ?? "<none>"}; environment={selectedEnvironment ?? "<none>"}; failedOnly={_failedOnly.IsChecked == true}; visible={values.Count}; total={_selectedInstance?.Assertions.Count ?? 0}");
+        foreach (var assertion in pageValues) _assertionItems.Children.Add(CreateAssertionRow(assertion));
+        if (_assertionPreviousButton is not null)
+            UpdatePagination(_assertionPageLabel, _assertionPreviousButton, _assertionNextButton, _assertionPage, values.Count, DashboardPageSize);
+        UiLog($"Assertion list refreshed. instance={_selectedInstance?.Name ?? "<none>"}; environment={selectedEnvironment ?? "<none>"}; failedOnly={_failedOnly.IsChecked == true}; page={_assertionPage}; pageSize={DashboardPageSize}; visible={values.Count}; total={_selectedInstance?.Assertions.Count ?? 0}");
     }
     private static bool MatchesTerms(string value, string? filter) => (filter ?? string.Empty).Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).All(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
 
@@ -428,7 +433,7 @@ public sealed partial class MainWindow : Window
                 item.ThreadIntervalMs = Math.Max(0, centralInstance.ThreadIntervalMs ?? _config.ThreadIntervalMs);
                 item.IterationIntervalMs = Math.Max(0, centralInstance.IterationIntervalMs ?? _config.IterationIntervalMs);
                 item.ExecutionMode = string.IsNullOrWhiteSpace(centralInstance.ExecutionMode) ? "threaded" : centralInstance.ExecutionMode;
-                item.RunScenariosInParallel = centralInstance.RunScenariosInParallel ?? false;
+                item.RunEnvironmentsParallel = _config.RunEnvironmentsParallel;
                 item.GenerateResults = centralInstance.GenerateResults ?? _config.GenerateResults;
                 item.GenerateAggregateHistory = centralInstance.GenerateAggregateHistory ?? false;
                 item.GenerateRowHistory = centralInstance.GenerateRowHistory ?? true;
@@ -536,21 +541,30 @@ public sealed partial class MainWindow : Window
             instance["IterationIntervalMs"] = iterationInterval;
             if (generateResults.HasValue) instance["GenerateResults"] = generateResults.Value;
             if (!string.IsNullOrWhiteSpace(executionMode)) instance["ExecutionMode"] = executionMode;
-            if (scenariosParallel.HasValue) instance["RunScenariosInParallel"] = scenariosParallel.Value;
             instances[item.Name] = instance;
             root["Instances"] = instances;
+            if (scenariosParallel.HasValue)
+            {
+                root["RunEnvironmentsParallel"] = scenariosParallel.Value;
+                foreach (var pair in instances)
+                    if (pair.Value is JsonObject configuredInstance) configuredInstance.Remove("RunEnvironmentsParallel");
+            }
             File.WriteAllText(_config.SettingsFile, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
             if (_config.Instances.TryGetValue(item.Name, out var central))
             {
                 central.Threads = threads; central.Iterations = iterations; central.ThreadIntervalMs = threadInterval; central.IterationIntervalMs = iterationInterval;
                 if (generateResults.HasValue) central.GenerateResults = generateResults.Value;
                 if (!string.IsNullOrWhiteSpace(executionMode)) central.ExecutionMode = executionMode;
-                if (scenariosParallel.HasValue) central.RunScenariosInParallel = scenariosParallel.Value;
             }
             item.Threads = threads; item.Iterations = iterations; item.ThreadIntervalMs = threadInterval; item.IterationIntervalMs = iterationInterval;
             if (generateResults.HasValue) item.GenerateResults = generateResults.Value;
             if (!string.IsNullOrWhiteSpace(executionMode)) item.ExecutionMode = executionMode;
-            if (scenariosParallel.HasValue) item.RunScenariosInParallel = scenariosParallel.Value;
+            if (scenariosParallel.HasValue)
+            {
+                _config.RunEnvironmentsParallel = scenariosParallel.Value;
+                foreach (var other in _instances) other.RunEnvironmentsParallel = scenariosParallel.Value;
+                item.RunEnvironmentsParallel = scenariosParallel.Value;
+            }
             UiLog($"Saved global execution settings. instance={item.Name}; threads={threads}; iterations={iterations}; threadIntervalMs={threadInterval}; iterationIntervalMs={iterationInterval}");
             _details.Text = $"Saved for {item.Name}: {threads} thread(s), {iterations} iteration(s), thread interval {threadInterval} ms, iteration interval {iterationInterval} ms.";
             RefreshDashboardDetails(force: true);
@@ -934,6 +948,7 @@ public sealed partial class MainWindow : Window
             {
                 item.CurrentRunFolder = FindRunFolder(item, item.CurrentRunId) ?? item.CurrentRunFolder;
                 item.Status = item.Process.ExitCode == 0 ? "Passed" : item.Process.ExitCode == 3 ? "Cancelled" : "Failed";
+                item.CompletedAt ??= DateTimeOffset.Now;
                 UiLog($"Runner process exited. instance={item.Name}; runId={item.CurrentRunId}; processId={item.Process.Id}; exitCode={item.Process.ExitCode}; observedAt={DateTimeOffset.Now:O}");
             }
         }
@@ -981,6 +996,7 @@ public sealed partial class MainWindow : Window
         if (type == "run-completed")
         {
             item.Status = DashboardStyle.Status(e.GetProperty("result").GetString() ?? "Completed");
+            item.CompletedAt = DateTimeOffset.Now;
             var p95 = e.TryGetProperty("p95DurationMs", out var p95Property) ? p95Property.GetInt64() : 0;
             var rps = e.TryGetProperty("requestsPerSecond", out var rpsProperty) ? rpsProperty.GetDouble() : 0;
             if (e.TryGetProperty("historyFile", out var history) && !string.IsNullOrWhiteSpace(history.GetString()))
@@ -1449,6 +1465,8 @@ public sealed partial class MainWindow : Window
                     if (int.TryParse(central["Iterations"]?.ToString(), out var iterations)) config.Iterations = Math.Max(1, iterations);
                     if (int.TryParse(central["ThreadIntervalMs"]?.ToString(), out var threadInterval)) config.ThreadIntervalMs = Math.Max(0, threadInterval);
                     if (int.TryParse(central["IterationIntervalMs"]?.ToString(), out var iterationInterval)) config.IterationIntervalMs = Math.Max(0, iterationInterval);
+                    if (bool.TryParse(central["RunEnvironmentsParallel"]?.ToString(), out var environmentsParallel)) config.RunEnvironmentsParallel = environmentsParallel;
+                    else if (bool.TryParse(central["RunScenariosInParallel"]?.ToString(), out var legacyParallel)) config.RunEnvironmentsParallel = legacyParallel;
                     if (bool.TryParse(central["GenerateResults"]?.ToString(), out var generateResults)) config.GenerateResults = generateResults;
                     var environments = central["Environments"]?.Deserialize<List<string>>();
                     if (environments is not null) config.Environments = environments.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();

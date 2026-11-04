@@ -34,7 +34,8 @@ internal static class Program
             config.ResultsFolder = GetCommandLineValue(args, "--results") ?? config.ResultsFolder;
             if (bool.TryParse(GetCommandLineValue(args, "--generate-results"), out var generateResults)) config.GenerateResults = generateResults;
             if (bool.TryParse(GetCommandLineValue(args, "--internal-log"), out var internalLogging)) config.InternalLoggingEnabled = internalLogging;
-            if (bool.TryParse(GetCommandLineValue(args, "--scenarios-parallel"), out var scenariosParallel)) config.RunScenariosInParallel = scenariosParallel;
+            var parallelValue = GetCommandLineValue(args, "--environments-parallel") ?? GetCommandLineValue(args, "--scenarios-parallel");
+            if (bool.TryParse(parallelValue, out var environmentsParallel)) config.RunEnvironmentsParallel = environmentsParallel;
             config.InstanceId = GetCommandLineValue(args, "--instance-id") ?? config.InstanceId;
             config.RunId = GetCommandLineValue(args, "--run-id") ?? config.RunId;
             var uiLaunchId = GetCommandLineValue(args, "--ui-launch-id") ?? "not-provided";
@@ -78,7 +79,7 @@ internal static class Program
             if (string.IsNullOrWhiteSpace(expression) && config.PromptForTestcaseSelection) { Console.Write("Testcase selection (0=all): "); expression = Console.ReadLine(); }
             var indexes = new TestcaseSelectionParser().Parse(expression, workbook.Testcases.Select(t => t.TestcaseIndex));
             Console.WriteLine($"Selected testcase indexes: {string.Join(", ", indexes)}");
-            Console.WriteLine($"Testcase execution order: {(config.RunScenariosInParallel ? "parallel" : "sequential")}");
+            Console.WriteLine($"Testcase execution order: {(config.RunEnvironmentsParallel ? "parallel" : "sequential")}");
             var selection = new RuntimeSelection { Input = string.IsNullOrWhiteSpace(expression) ? "0" : expression!, Indexes = indexes, Source = GetCommandLineValue(args, "--testcases") is not null ? "command-line" : "appsettings.json" };
             var overall = new RunResult { RunId = runId, Selection = selection, StartedAt = DateTimeOffset.Now };
             var work = new RunSelectionPlanner().Build(workbook, indexes, stepSelection, config.EnvironmentSelection, GetCommandLineValue(args, "--environments-json"), config.Environments);
@@ -86,7 +87,7 @@ internal static class Program
             var filters = ParseDataIdSelection(dataIdSelection);
             try
             {
-                if (config.RunScenariosInParallel) await Task.WhenAll(work.Select(x => RunTestcaseAsync(x.Testcase, x.Environment, workbook, overall, http, config, runId, selection, filters, uiLaunchId, uiLaunchAt, cancellation.Token)));
+                if (config.RunEnvironmentsParallel) await Task.WhenAll(work.Select(x => RunTestcaseAsync(x.Testcase, x.Environment, workbook, overall, http, config, runId, selection, filters, uiLaunchId, uiLaunchAt, cancellation.Token)));
                 else foreach (var item in work)
                 {
                     cancellation.Token.ThrowIfCancellationRequested();
@@ -285,6 +286,9 @@ internal static class Program
         var baseDirectory = Path.GetDirectoryName(path)!;
         var root = new ConfigurationBuilder().SetBasePath(baseDirectory).AddJsonFile(Path.GetFileName(path), optional: false, reloadOnChange: false).Build();
         var config = new AppConfig(); root.Bind(config);
+        // Migrate older central settings that used RunScenariosInParallel.
+        if (root["RunEnvironmentsParallel"] is null && bool.TryParse(root["RunScenariosInParallel"], out var legacyParallel))
+            config.RunEnvironmentsParallel = legacyParallel;
         if (string.IsNullOrWhiteSpace(instanceKey)) return config;
         if (!config.Instances.TryGetValue(instanceKey, out var instance)) throw new InvalidDataException($"Instance '{instanceKey}' was not found in central settings '{path}'.");
         var instancesRoot = ResolveCentralPath(baseDirectory, config.InstancesRoot, "Instances");
@@ -318,7 +322,6 @@ internal static class Program
         if (instance.Iterations.HasValue) config.Iterations = instance.Iterations.Value;
         if (instance.ThreadIntervalMs.HasValue) config.ThreadIntervalMs = instance.ThreadIntervalMs.Value;
         if (instance.IterationIntervalMs.HasValue) config.IterationIntervalMs = instance.IterationIntervalMs.Value;
-        if (instance.RunScenariosInParallel.HasValue) config.RunScenariosInParallel = instance.RunScenariosInParallel.Value;
         if (instance.InternalLoggingEnabled.HasValue) config.InternalLoggingEnabled = instance.InternalLoggingEnabled.Value;
         if (instance.SaveRequestBodyToHistory.HasValue) config.SaveRequestBodyToHistory = instance.SaveRequestBodyToHistory.Value;
         if (instance.SaveResponseBodyToHistory.HasValue) config.SaveResponseBodyToHistory = instance.SaveResponseBodyToHistory.Value;

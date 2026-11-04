@@ -20,7 +20,7 @@ public sealed class AppConfig
     public int Iterations { get; set; } = 1;
     public int ThreadIntervalMs { get; set; }
     public int IterationIntervalMs { get; set; }
-    public bool RunScenariosInParallel { get; set; }
+    public bool RunEnvironmentsParallel { get; set; }
     public string ExecutionMode { get; set; } = "threaded";
     public string TestcaseSelection { get; set; } = "0";
     public string StepSelection { get; set; } = "";
@@ -61,7 +61,7 @@ public sealed class CentralInstanceConfig
     public int? Iterations { get; set; }
     public int? ThreadIntervalMs { get; set; }
     public int? IterationIntervalMs { get; set; }
-    public bool? RunScenariosInParallel { get; set; }
+    public bool? RunEnvironmentsParallel { get; set; }
     public bool? InternalLoggingEnabled { get; set; }
     public bool? SaveRequestBodyToHistory { get; set; }
     public bool? SaveResponseBodyToHistory { get; set; }

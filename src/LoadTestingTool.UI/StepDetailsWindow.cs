@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -129,11 +130,10 @@ public sealed class StepDetailsWindow : Window
         if (_tabs.SelectedItem is not TabItem tab) return;
         var name = tab.Header?.ToString() ?? "Overview";
         var value = _sections.GetValueOrDefault(name, "No data recorded.");
-        var box = new TextBox
+        var box = new SelectableTextBlock
         {
-            Text = value,
-            IsReadOnly = true,
-            AcceptsReturn = true,
+            SelectionBrush = DashboardStyle.Brush("#F6A623"),
+            SelectionForegroundBrush = Brushes.Black,
             TextWrapping = TextWrapping.NoWrap,
             FontFamily = "Consolas",
             FontSize = _fontSize,
@@ -141,9 +141,9 @@ public sealed class StepDetailsWindow : Window
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch,
             MinHeight = 420,
-            BorderThickness = new Thickness(0),
             Background = Brushes.Transparent
         };
+        foreach (var inline in BuildHighlightedInlines(value, _search.Text)) box.Inlines.Add(inline);
         ToolTip.SetTip(box, "Text is selectable. Drag with the mouse or press Ctrl+A / Ctrl+C.");
         tab.Content = new ScrollViewer { HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = box };
         var count = CountMatches(value, _search.Text);
@@ -241,5 +241,44 @@ public sealed class StepDetailsWindow : Window
             while ((index = value.IndexOf(term, index, StringComparison.OrdinalIgnoreCase)) >= 0) { count++; index += term.Length; }
         }
         return count;
+    }
+
+    private static IEnumerable<Inline> BuildHighlightedInlines(string value, string? filter)
+    {
+        var terms = (filter ?? string.Empty)
+            .Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(term => term.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (terms.Count == 0) return [new Run { Text = value }];
+
+        var highlighted = new bool[value.Length];
+        foreach (var term in terms)
+        {
+            var start = 0;
+            while ((start = value.IndexOf(term, start, StringComparison.OrdinalIgnoreCase)) >= 0)
+            {
+                for (var i = start; i < Math.Min(value.Length, start + term.Length); i++) highlighted[i] = true;
+                start += Math.Max(1, term.Length);
+            }
+        }
+
+        var result = new List<Inline>();
+        var index = 0;
+        while (index < value.Length)
+        {
+            var marked = highlighted[index];
+            var end = index + 1;
+            while (end < value.Length && highlighted[end] == marked) end++;
+            var run = new Run { Text = value[index..end] };
+            if (marked)
+            {
+                run.Background = DashboardStyle.Brush("#F6A623");
+                run.Foreground = Brushes.Black;
+            }
+            result.Add(run);
+            index = end;
+        }
+        return result;
     }
 }

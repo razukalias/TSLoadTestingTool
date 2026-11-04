@@ -17,6 +17,7 @@ public sealed class UiConfig
     public int Iterations { get; set; } = 1;
     public int ThreadIntervalMs { get; set; }
     public int IterationIntervalMs { get; set; }
+    public bool RunEnvironmentsParallel { get; set; }
     public bool GenerateResults { get; set; } = true;
     public List<string> Environments { get; set; } = [];
     public Dictionary<string, UiInstanceDefinition> Instances { get; set; } = new(StringComparer.OrdinalIgnoreCase);
@@ -33,7 +34,7 @@ public sealed class UiInstanceDefinition
     public int? ThreadIntervalMs { get; set; }
     public int? IterationIntervalMs { get; set; }
     public string? ExecutionMode { get; set; }
-    public bool? RunScenariosInParallel { get; set; }
+    public bool? RunEnvironmentsParallel { get; set; }
     public bool? GenerateResults { get; set; }
     public bool? GenerateAggregateHistory { get; set; }
     public bool? GenerateRowHistory { get; set; }
