@@ -27,12 +27,11 @@ public sealed class InstanceInfo
     public string StepSelectionJson { get; set; } = "";
     public IReadOnlyList<TestcaseOption> TestcaseOptions { get; set; } = [];
     public string SelectionReadError { get; set; } = "";
-    public string ExecutionMode { get; set; } = "threaded";
-    public int Threads { get; set; } = 1;
+    public string RowsExecutionMode { get; set; } = "parallel";
+    public int MaxParallelRows { get; set; } = 100;
     public int Iterations { get; set; } = 1;
-    public int ThreadIntervalMs { get; set; }
+    public int ParallelRowStartIntervalMs { get; set; }
     public int IterationIntervalMs { get; set; }
-    public int MaxConcurrentRows { get; set; } = 100;
     public bool SpoolResultsToDisk { get; set; } = true;
     public bool GenerateResults { get; set; } = true;
     public bool GenerateAggregateHistory { get; set; }
@@ -430,13 +429,12 @@ public sealed partial class MainWindow : Window
             item.WorkbookPath = workbook;
             if (_config.Instances.TryGetValue(candidate.Name, out var centralInstance))
             {
-                item.Threads = Math.Max(1, centralInstance.Threads ?? _config.Threads);
+                item.MaxParallelRows = Math.Clamp(centralInstance.MaxParallelRows ?? centralInstance.MaxConcurrentRows ?? _config.MaxParallelRows, 1, 100);
                 item.Iterations = Math.Max(1, centralInstance.Iterations ?? _config.Iterations);
-                item.ThreadIntervalMs = Math.Max(0, centralInstance.ThreadIntervalMs ?? _config.ThreadIntervalMs);
+                item.ParallelRowStartIntervalMs = Math.Max(0, centralInstance.ParallelRowStartIntervalMs ?? centralInstance.ThreadIntervalMs ?? _config.ParallelRowStartIntervalMs);
                 item.IterationIntervalMs = Math.Max(0, centralInstance.IterationIntervalMs ?? _config.IterationIntervalMs);
-                item.MaxConcurrentRows = Math.Clamp(centralInstance.MaxConcurrentRows ?? _config.MaxConcurrentRows, 1, 100);
                 item.SpoolResultsToDisk = centralInstance.SpoolResultsToDisk ?? _config.SpoolResultsToDisk;
-                item.ExecutionMode = string.IsNullOrWhiteSpace(centralInstance.ExecutionMode) ? "threaded" : centralInstance.ExecutionMode;
+                item.RowsExecutionMode = NormalizeRowsExecutionMode(centralInstance.RowsExecutionMode ?? centralInstance.ExecutionMode);
                 item.RunEnvironmentsParallel = _config.RunEnvironmentsParallel;
                 item.GenerateResults = centralInstance.GenerateResults ?? _config.GenerateResults;
                 item.GenerateAggregateHistory = centralInstance.GenerateAggregateHistory ?? false;
@@ -523,14 +521,14 @@ public sealed partial class MainWindow : Window
         catch (Exception ex) { UiLog($"Could not register instance centrally: {ex}"); _details.Text = $"Instance created, but central registration failed: {ex.Message}"; }
     }
 
-    private void SaveInstanceExecutionSettings(InstanceInfo item, string? threadsText, string? iterationsText, string? threadIntervalText, string? iterationIntervalText, bool? generateResults = null, string? executionMode = null, bool? scenariosParallel = null)
+    private void SaveInstanceExecutionSettings(InstanceInfo item, string? maxParallelRowsText, string? iterationsText, string? threadIntervalText, string? iterationIntervalText, bool? generateResults = null, string? executionMode = null, bool? scenariosParallel = null)
     {
-        if (!int.TryParse(threadsText, out var threads) || threads < 1 ||
+        if (!int.TryParse(maxParallelRowsText, out var maxParallelRows) || maxParallelRows < 1 ||
             !int.TryParse(iterationsText, out var iterations) || iterations < 1 ||
             !int.TryParse(threadIntervalText, out var threadInterval) || threadInterval < 0 ||
             !int.TryParse(iterationIntervalText, out var iterationInterval) || iterationInterval < 0)
         {
-            _details.Text = "Execution settings are invalid. Threads and iterations must be at least 1; intervals must be 0 or greater.";
+            _details.Text = "Execution settings are invalid. MaxParallelRows and iterations must be at least 1; intervals must be 0 or greater.";
             return;
         }
         try
@@ -539,12 +537,12 @@ public sealed partial class MainWindow : Window
             root ??= new JsonObject();
             var instances = root["Instances"] as JsonObject ?? new JsonObject();
             var instance = instances[item.Name] as JsonObject ?? new JsonObject();
-            instance["Threads"] = threads;
+            instance["MaxParallelRows"] = maxParallelRows;
             instance["Iterations"] = iterations;
-            instance["ThreadIntervalMs"] = threadInterval;
+            instance["ParallelRowStartIntervalMs"] = threadInterval;
             instance["IterationIntervalMs"] = iterationInterval;
             if (generateResults.HasValue) instance["GenerateResults"] = generateResults.Value;
-            if (!string.IsNullOrWhiteSpace(executionMode)) instance["ExecutionMode"] = executionMode;
+            if (!string.IsNullOrWhiteSpace(executionMode)) instance["RowsExecutionMode"] = executionMode;
             instances[item.Name] = instance;
             root["Instances"] = instances;
             if (scenariosParallel.HasValue)
@@ -556,21 +554,21 @@ public sealed partial class MainWindow : Window
             File.WriteAllText(_config.SettingsFile, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
             if (_config.Instances.TryGetValue(item.Name, out var central))
             {
-                central.Threads = threads; central.Iterations = iterations; central.ThreadIntervalMs = threadInterval; central.IterationIntervalMs = iterationInterval;
+                central.MaxParallelRows = maxParallelRows; central.Iterations = iterations; central.ParallelRowStartIntervalMs = threadInterval; central.IterationIntervalMs = iterationInterval;
                 if (generateResults.HasValue) central.GenerateResults = generateResults.Value;
-                if (!string.IsNullOrWhiteSpace(executionMode)) central.ExecutionMode = executionMode;
+                if (!string.IsNullOrWhiteSpace(executionMode)) central.RowsExecutionMode = executionMode;
             }
-            item.Threads = threads; item.Iterations = iterations; item.ThreadIntervalMs = threadInterval; item.IterationIntervalMs = iterationInterval;
+            item.MaxParallelRows = maxParallelRows; item.Iterations = iterations; item.ParallelRowStartIntervalMs = threadInterval; item.IterationIntervalMs = iterationInterval;
             if (generateResults.HasValue) item.GenerateResults = generateResults.Value;
-            if (!string.IsNullOrWhiteSpace(executionMode)) item.ExecutionMode = executionMode;
+            if (!string.IsNullOrWhiteSpace(executionMode)) item.RowsExecutionMode = executionMode;
             if (scenariosParallel.HasValue)
             {
                 _config.RunEnvironmentsParallel = scenariosParallel.Value;
                 foreach (var other in _instances) other.RunEnvironmentsParallel = scenariosParallel.Value;
                 item.RunEnvironmentsParallel = scenariosParallel.Value;
             }
-            UiLog($"Saved global execution settings. instance={item.Name}; threads={threads}; iterations={iterations}; threadIntervalMs={threadInterval}; iterationIntervalMs={iterationInterval}");
-            _details.Text = $"Saved for {item.Name}: {threads} thread(s), {iterations} iteration(s), thread interval {threadInterval} ms, iteration interval {iterationInterval} ms.";
+            UiLog($"Saved global execution settings. instance={item.Name}; maxParallelRows={maxParallelRows}; iterations={iterations}; threadIntervalMs={threadInterval}; iterationIntervalMs={iterationInterval}");
+            _details.Text = $"Saved for {item.Name}: {maxParallelRows} thread(s), {iterations} iteration(s), parallel-row start interval {threadInterval} ms, iteration interval {iterationInterval} ms.";
             RefreshDashboardDetails(force: true);
         }
         catch (Exception ex)
@@ -593,15 +591,15 @@ public sealed partial class MainWindow : Window
             root ??= new JsonObject();
             var instances = root["Instances"] as JsonObject ?? new JsonObject();
             var instance = instances[item.Name] as JsonObject ?? new JsonObject();
-            instance["MaxConcurrentRows"] = maxConcurrentRows;
+            instance["MaxParallelRows"] = maxConcurrentRows;
             instance["SpoolResultsToDisk"] = spoolResultsToDisk;
             instances[item.Name] = instance; root["Instances"] = instances;
             File.WriteAllText(_config.SettingsFile, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
-            item.MaxConcurrentRows = maxConcurrentRows;
+            item.MaxParallelRows = maxConcurrentRows;
             item.SpoolResultsToDisk = spoolResultsToDisk;
             if (_config.Instances.TryGetValue(item.Name, out var central))
             {
-                central.MaxConcurrentRows = maxConcurrentRows;
+                central.MaxParallelRows = maxConcurrentRows;
                 central.SpoolResultsToDisk = spoolResultsToDisk;
             }
             _details.Text = $"Saved row execution settings for {item.Name}: max {maxConcurrentRows} concurrent row(s); disk spool {(spoolResultsToDisk ? "enabled" : "disabled")}.";
@@ -901,7 +899,7 @@ public sealed partial class MainWindow : Window
                 item.Requests.Clear(); item.EventMessages.Clear(); item.CompletedRequests = null; item.AverageMs = null;
                 item.P95Ms = null; item.RequestsPerSecond = null; item.StartedAt = DateTimeOffset.Now; item.CompletedAt = null;
                 item.EventMessages.Add($"{DateTime.Now:HH:mm:ss}  RUN started / testcases {selection}");
-                UiLog($"Run state initialized. instance={item.Name}; runId={item.CurrentRunId}; testcases={selection}; mode={item.ExecutionMode}; environments={environments}; dataIds={item.DataIdSelection}; internalLog={_enableInternalLog.IsChecked == true}");
+                UiLog($"Run state initialized. instance={item.Name}; runId={item.CurrentRunId}; testcases={selection}; mode={item.RowsExecutionMode}; environments={environments}; dataIds={item.DataIdSelection}; internalLog={_enableInternalLog.IsChecked == true}");
             }
             catch (Exception ex)
             {
@@ -1456,6 +1454,11 @@ public sealed partial class MainWindow : Window
         return string.IsNullOrWhiteSpace(cleaned) ? "default" : cleaned;
     }
 
+    private static string NormalizeRowsExecutionMode(string? value)
+        => value?.Equals("sequential", StringComparison.OrdinalIgnoreCase) == true || value?.Equals("loop", StringComparison.OrdinalIgnoreCase) == true
+            ? "sequential"
+            : "parallel";
+
     private static string? FindLatestInternalLog(InstanceInfo item)
     {
         return FindInternalLogs(item)
@@ -1500,12 +1503,12 @@ public sealed partial class MainWindow : Window
                         config.InstancesRoot = ResolveConfiguredPath(instancesRoot.ToString(), Path.GetDirectoryName(config.SettingsFile)!);
                     if (central["WorkbookName"] is JsonValue workbookName && !string.IsNullOrWhiteSpace(workbookName.ToString()))
                         config.WorkbookName = Path.GetFileName(workbookName.ToString());
-                    if (int.TryParse(central["Threads"]?.ToString(), out var threads)) config.Threads = Math.Max(1, threads);
+                    if (int.TryParse(central["MaxParallelRows"]?.ToString() ?? central["MaxConcurrentRows"]?.ToString(), out var maxParallelRows)) config.MaxParallelRows = Math.Clamp(maxParallelRows, 1, 100);
                     if (int.TryParse(central["Iterations"]?.ToString(), out var iterations)) config.Iterations = Math.Max(1, iterations);
-                    if (int.TryParse(central["ThreadIntervalMs"]?.ToString(), out var threadInterval)) config.ThreadIntervalMs = Math.Max(0, threadInterval);
+                    if (int.TryParse(central["ParallelRowStartIntervalMs"]?.ToString() ?? central["ThreadIntervalMs"]?.ToString(), out var threadInterval)) config.ParallelRowStartIntervalMs = Math.Max(0, threadInterval);
                     if (int.TryParse(central["IterationIntervalMs"]?.ToString(), out var iterationInterval)) config.IterationIntervalMs = Math.Max(0, iterationInterval);
-                    if (int.TryParse(central["MaxConcurrentRows"]?.ToString(), out var maxConcurrentRows)) config.MaxConcurrentRows = Math.Clamp(maxConcurrentRows, 1, 100);
                     if (bool.TryParse(central["SpoolResultsToDisk"]?.ToString(), out var spoolResultsToDisk)) config.SpoolResultsToDisk = spoolResultsToDisk;
+                    config.RowsExecutionMode = NormalizeRowsExecutionMode(central["RowsExecutionMode"]?.ToString() ?? central["ExecutionMode"]?.ToString());
                     if (bool.TryParse(central["RunEnvironmentsParallel"]?.ToString(), out var environmentsParallel)) config.RunEnvironmentsParallel = environmentsParallel;
                     else if (bool.TryParse(central["RunScenariosInParallel"]?.ToString(), out var legacyParallel)) config.RunEnvironmentsParallel = legacyParallel;
                     if (bool.TryParse(central["GenerateResults"]?.ToString(), out var generateResults)) config.GenerateResults = generateResults;

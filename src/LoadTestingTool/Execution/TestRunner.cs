@@ -29,7 +29,7 @@ public sealed class TestRunner
         _pipeline = new ExecutionPipeline(new StepExecutorRegistry([new GraphQlStepExecutor(_client), new GraphQlStepExecutor(_client, flattenCaseQl: true), new FileStepExecutor(), new SqlStepExecutor(_features), new CSharpScriptStepExecutor()]));
     }
 
-    public async Task RunAsync(TestcaseDefinition testcase, WorkbookModel workbook, RunResult run, CancellationToken cancellationToken, string environment = "", string executionMode = "threaded", IReadOnlySet<string>? selectedDataIds = null, int threads = 1, int iterations = 1, int threadIntervalMs = 0, int iterationIntervalMs = 0, int maxConcurrentRows = 100, Action<TestcaseResult>? rowCompleted = null)
+    public async Task RunAsync(TestcaseDefinition testcase, WorkbookModel workbook, RunResult run, CancellationToken cancellationToken, string environment = "", string executionMode = "parallel", IReadOnlySet<string>? selectedDataIds = null, int threads = 1, int iterations = 1, int threadIntervalMs = 0, int iterationIntervalMs = 0, int maxConcurrentRows = 100, Action<TestcaseResult>? rowCompleted = null)
     {
         var dataRows = workbook.RequestData.Values.Where(r => r.TestcaseIndex == testcase.TestcaseIndex && (selectedDataIds is null || selectedDataIds.Contains(r.DataId))).OrderBy(r => r.DataId, StringComparer.OrdinalIgnoreCase).ToList();
         _logger.Section($"TESTCASE {testcase.TestcaseIndex}: {testcase.Testcase} - START");
@@ -39,12 +39,13 @@ public sealed class TestRunner
         var iterationCount = Math.Max(1, iterations);
         var workerInterval = Math.Max(0, threadIntervalMs);
         var iterationInterval = Math.Max(0, iterationIntervalMs);
-        _logger.Info($"Execution mode: {(sequential ? "sequential loop" : "threaded rows")}; maxConcurrentRows={workerCount}; configuredThreads={Math.Max(1, threads)}; iterations={iterationCount}; threadIntervalMs={workerInterval}; iterationIntervalMs={iterationInterval}");
+        _logger.Info($"Execution mode: {(sequential ? "sequential" : "parallel rows")}; maxConcurrentRows={workerCount}; configuredThreads={Math.Max(1, threads)}; iterations={iterationCount}; threadIntervalMs={workerInterval}; iterationIntervalMs={iterationInterval}");
         var nextWorker = 0;
-        await Parallel.ForEachAsync(dataRows, new ParallelOptions { MaxDegreeOfParallelism = workerCount, CancellationToken = cancellationToken }, async (data, token) =>
+        var executionUnits = dataRows.SelectMany(data => Enumerable.Range(1, iterationCount).Select(iteration => (data, iteration))).ToList();
+        await Parallel.ForEachAsync(executionUnits, new ParallelOptions { MaxDegreeOfParallelism = workerCount, CancellationToken = cancellationToken }, async (unit, token) =>
         {
-            for (var iteration = 1; iteration <= iterationCount; iteration++)
-            {
+                var data = unit.data;
+                var iteration = unit.iteration;
                 var threadId = (Interlocked.Increment(ref nextWorker) - 1) % workerCount + 1;
                 if (threadId > 1 && workerInterval > 0) await Task.Delay((threadId - 1) * workerInterval, token);
                 _logger.Section($"DATA ROW {data.DataId} | thread={threadId} | iteration={iteration}");
@@ -99,8 +100,7 @@ public sealed class TestRunner
                 testcaseResult.EndedAt = DateTimeOffset.Now;
                 lock (run.Testcases) run.Testcases.Add(testcaseResult);
                 rowCompleted?.Invoke(testcaseResult);
-                if (iteration < iterationCount && iterationInterval > 0) await Task.Delay(iterationInterval, token);
-            }
+                if (sequential && iteration < iterationCount && iterationInterval > 0) await Task.Delay(iterationInterval, token);
         });
         _logger.Section($"TESTCASE {testcase.TestcaseIndex}: {testcase.Testcase} - END");
     }

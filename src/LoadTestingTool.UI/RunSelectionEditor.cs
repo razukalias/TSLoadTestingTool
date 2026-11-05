@@ -20,9 +20,9 @@ internal sealed class RunSelectionEditor : UserControl
     private readonly StackPanel _dataItems = new() { Spacing = 10 };
     private readonly TextBlock _summary = new() { TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock _error = new() { TextWrapping = TextWrapping.Wrap, Foreground = DashboardStyle.Red };
-    private readonly ComboBox _executionMode = new() { ItemsSource = new[] { "threaded", "loop" }, Width = 150 };
+    private readonly ComboBox _executionMode = new() { ItemsSource = new[] { "parallel", "sequential" }, Width = 150 };
     private readonly ComboBox _scenarioOrder = new() { ItemsSource = new[] { "Sequential environments", "Parallel environments" }, Width = 180 };
-    private readonly TextBox _threads = new() { Width = 120 };
+    private readonly TextBox _maxParallelRows = new() { Width = 120 };
     private readonly TextBox _iterations = new() { Width = 120 };
     private readonly TextBox _threadIntervalMs = new() { Width = 150 };
     private readonly TextBox _iterationIntervalMs = new() { Width = 170 };
@@ -33,11 +33,11 @@ internal sealed class RunSelectionEditor : UserControl
     {
         _item = item;
         _draft = new RunSelectionDraft(item.TestcaseOptions, item.EnvironmentOptions, item.TestcaseSelection, item.StepSelectionJson, item.EnvironmentSelection, item.EnvironmentSelectionJson);
-        _executionMode.SelectedItem = item.ExecutionMode.Equals("loop", StringComparison.OrdinalIgnoreCase) ? "loop" : "threaded";
+        _executionMode.SelectedItem = item.RowsExecutionMode.Equals("sequential", StringComparison.OrdinalIgnoreCase) ? "sequential" : "parallel";
         _scenarioOrder.SelectedIndex = item.RunEnvironmentsParallel ? 1 : 0;
-        _threads.Text = item.Threads.ToString();
+        _maxParallelRows.Text = item.MaxParallelRows.ToString();
         _iterations.Text = item.Iterations.ToString();
-        _threadIntervalMs.Text = item.ThreadIntervalMs.ToString();
+        _threadIntervalMs.Text = item.ParallelRowStartIntervalMs.ToString();
         _iterationIntervalMs.Text = item.IterationIntervalMs.ToString();
         _dataOptions = item.DataIdOptions;
         _currentDataSelection = item.DataIdSelection;
@@ -56,8 +56,8 @@ internal sealed class RunSelectionEditor : UserControl
         Grid.SetColumn(data, 3); columns.Children.Add(data);
 
         var runOptions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Children = { Field("Execution mode", _executionMode), Field("Environment execution order", _scenarioOrder) } };
-        var executionOptions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Children = { Field("Threads", _threads), Field("Iterations", _iterations), Field("Thread interval (ms)", _threadIntervalMs), Field("Iteration interval (ms)", _iterationIntervalMs) } };
-        var status = new StackPanel { Spacing = 6, Margin = new Thickness(0, 12), Children = { runOptions, executionOptions, _summary, _error, DashboardStyle.Text("Threads and iterations apply to the complete instance run and are saved in central appsettings.json, not in the workbook config sheet.", 11, false, DashboardStyle.Muted), DashboardStyle.Text("Dependencies are not auto-selected. Include setup/dependency steps when your chosen step needs them.", 11, false, DashboardStyle.Muted) } };
+        var executionOptions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Children = { Field("MaxParallelRows", _maxParallelRows), Field("Iterations", _iterations), Field("Parallel-row start interval (ms)", _threadIntervalMs), Field("Iteration interval (ms)", _iterationIntervalMs) } };
+        var status = new StackPanel { Spacing = 6, Margin = new Thickness(0, 12), Children = { runOptions, executionOptions, _summary, _error, DashboardStyle.Text("MaxParallelRows and iterations apply to the complete instance run and are saved in central appsettings.json, not in the workbook config sheet.", 11, false, DashboardStyle.Muted), DashboardStyle.Text("Dependencies are not auto-selected. Include setup/dependency steps when your chosen step needs them.", 11, false, DashboardStyle.Muted) } };
         var layout = new Grid { RowDefinitions = new RowDefinitions("*,Auto") };
         var scroll = new ScrollViewer { Content = columns, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled };
         layout.Children.Add(scroll);
@@ -70,23 +70,23 @@ internal sealed class RunSelectionEditor : UserControl
     {
         result = null;
         if (!_draft.TryBuild(out var selection, out error)) return false;
-        if (!int.TryParse(_threads.Text, out var threads) || threads < 1 ||
+        if (!int.TryParse(_maxParallelRows.Text, out var maxParallelRows) || maxParallelRows < 1 ||
             !int.TryParse(_iterations.Text, out var iterations) || iterations < 1 ||
             !int.TryParse(_threadIntervalMs.Text, out var threadInterval) || threadInterval < 0 ||
             !int.TryParse(_iterationIntervalMs.Text, out var iterationInterval) || iterationInterval < 0)
         {
-            error = "Threads and iterations must be at least 1; intervals must be 0 or greater.";
+            error = "MaxParallelRows and iterations must be at least 1; intervals must be 0 or greater.";
             _error.Text = error;
             return false;
         }
         result = selection! with
         {
             DataIds = SerializeDataIds(),
-            ExecutionMode = _executionMode.SelectedItem?.ToString() ?? "threaded",
+            RowsExecutionMode = _executionMode.SelectedItem?.ToString() ?? "parallel",
             ScenariosParallel = _scenarioOrder.SelectedIndex == 1,
-            Threads = threads,
+            MaxParallelRows = maxParallelRows,
             Iterations = iterations,
-            ThreadIntervalMs = threadInterval,
+            ParallelRowStartIntervalMs = threadInterval,
             IterationIntervalMs = iterationInterval
         };
         return true;

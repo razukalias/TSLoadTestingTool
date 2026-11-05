@@ -189,7 +189,7 @@ internal sealed class InstanceRow : Border
     {
         _check.IsChecked = _item.Selected;
         _testcases.Text = _item.TestcaseSelection == "0" ? "All" : _item.TestcaseSelection;
-        _mode.Text = _item.ExecutionMode == "loop" ? "Loop" : "Threaded";
+        _mode.Text = _item.RowsExecutionMode == "sequential" ? "Sequential" : "Parallel";
         _order.Text = _item.RunEnvironmentsParallel ? "Parallel" : "Sequential";
         _environment.Text = string.IsNullOrWhiteSpace(_item.EnvironmentSelection) ? "All" : _item.EnvironmentSelection;
         ToolTip.SetTip(_environment, string.Join(", ", _item.EnvironmentOptions));
@@ -728,32 +728,31 @@ public sealed partial class MainWindow
         _configurationPanel.Children.Add(KeyValue("Testcases", string.Join(", ", item.TestcaseOptions.Where(c => draft.Cases.Contains(c.Index)).Select(c => $"{c.Index}: {c.Name}"))));
         _configurationPanel.Children.Add(KeyValue("Test steps", string.IsNullOrWhiteSpace(item.StepSelectionJson) ? "All enabled steps" : string.Join(", ", item.TestcaseOptions.Where(c => draft.Cases.Contains(c.Index)).SelectMany(c => c.Steps.Where(s => draft.Steps[c.Index].Contains(s.Name)).Select(s => $"{c.Index}: {s.Name}")))));
         _configurationPanel.Children.Add(KeyValue("Environments", string.IsNullOrWhiteSpace(item.EnvironmentSelection) ? "All global environments" : item.EnvironmentSelection));
-        var mode = new ComboBox { ItemsSource = new[] { "Threaded", "Sequential loop" }, SelectedIndex = item.ExecutionMode == "loop" ? 1 : 0, HorizontalAlignment = HorizontalAlignment.Stretch };
-        mode.SelectionChanged += (_, _) => item.ExecutionMode = mode.SelectedIndex == 1 ? "loop" : "threaded";
-        _configurationPanel.Children.Add(Field("Execution mode", mode));
+        var mode = new ComboBox { ItemsSource = new[] { "Parallel", "Sequential" }, SelectedIndex = item.RowsExecutionMode == "sequential" ? 1 : 0, HorizontalAlignment = HorizontalAlignment.Stretch };
+        mode.SelectionChanged += (_, _) => item.RowsExecutionMode = mode.SelectedIndex == 1 ? "sequential" : "parallel";
+        _configurationPanel.Children.Add(Field("RowsExecutionMode", mode));
         var order = new ComboBox { ItemsSource = new[] { "Sequential environments", "Parallel environments" }, SelectedIndex = item.RunEnvironmentsParallel ? 1 : 0, HorizontalAlignment = HorizontalAlignment.Stretch };
         order.SelectionChanged += (_, _) => item.RunEnvironmentsParallel = order.SelectedIndex == 1;
         _configurationPanel.Children.Add(Field("Testcase order", order));
         _configurationPanel.Children.Add(DashboardStyle.Text("Global execution settings for this instance (stored in central appsettings.json; not in the workbook config sheet).", 12, false, DashboardStyle.Muted));
-        var threads = new TextBox { Text = item.Threads.ToString(), Watermark = "Threads", Width = 150 };
+        var maxParallelRows = new TextBox { Text = item.MaxParallelRows.ToString(), Watermark = "MaxParallelRows", Width = 150 };
         var iterations = new TextBox { Text = item.Iterations.ToString(), Watermark = "Iterations", Width = 150 };
-        var threadInterval = new TextBox { Text = item.ThreadIntervalMs.ToString(), Watermark = "Thread interval (ms)", Width = 180 };
+        var threadInterval = new TextBox { Text = item.ParallelRowStartIntervalMs.ToString(), Watermark = "Parallel-row start interval (ms)", Width = 180 };
         var iterationInterval = new TextBox { Text = item.IterationIntervalMs.ToString(), Watermark = "Iteration interval (ms)", Width = 190 };
         var executionGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*,*") };
-        var executionFields = new[] { Field("Threads", threads), Field("Iterations", iterations), Field("Thread interval (ms)", threadInterval), Field("Iteration interval (ms)", iterationInterval) };
+        var executionFields = new[] { Field("MaxParallelRows", maxParallelRows), Field("Iterations", iterations), Field("Parallel-row start interval (ms)", threadInterval), Field("Iteration interval (ms)", iterationInterval) };
         for (var i = 0; i < executionFields.Length; i++) { Grid.SetColumn(executionFields[i], i); executionGrid.Children.Add(executionFields[i]); }
         _configurationPanel.Children.Add(executionGrid);
-        var maxConcurrentRows = new TextBox { Text = item.MaxConcurrentRows.ToString(), Watermark = "Max concurrent rows (1–100)", Width = 220 };
         var spoolResults = new CheckBox { Content = "Spool completed rows to disk (NDJSON)", IsChecked = item.SpoolResultsToDisk };
         _configurationPanel.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Children =
         {
-            Field("Max concurrent rows", maxConcurrentRows), spoolResults,
-            DashboardStyle.Action("Save row execution", () => SaveBoundedRowSettings(item, maxConcurrentRows.Text, spoolResults.IsChecked == true), "primary")
+            spoolResults,
+            DashboardStyle.Action("Save row storage", () => SaveBoundedRowSettings(item, item.MaxParallelRows.ToString(), spoolResults.IsChecked == true), "primary")
         }});
         var generateResults = new CheckBox { Content = "Generate technical Results artifacts", IsChecked = item.GenerateResults };
         _configurationPanel.Children.Add(generateResults);
         _configurationPanel.Children.Add(DashboardStyle.Text("When disabled, the Excel History files and live UI events remain available, but persistent Results run folders and metrics.json are not generated.", 11, false, DashboardStyle.Muted));
-        _configurationPanel.Children.Add(DashboardStyle.Action("Save execution settings", () => SaveInstanceExecutionSettings(item, threads.Text, iterations.Text, threadInterval.Text, iterationInterval.Text, generateResults.IsChecked == true, item.ExecutionMode, item.RunEnvironmentsParallel), "primary"));
+        _configurationPanel.Children.Add(DashboardStyle.Action("Save execution settings", () => SaveInstanceExecutionSettings(item, maxParallelRows.Text, iterations.Text, threadInterval.Text, iterationInterval.Text, generateResults.IsChecked == true, item.RowsExecutionMode, item.RunEnvironmentsParallel), "primary"));
         _configurationPanel.Children.Add(KeyValue("Data IDs", string.IsNullOrWhiteSpace(item.DataIdSelection) ? "All data rows" : item.DataIdSelection));
         _configurationPanel.Children.Add(DashboardStyle.Text("Workbook actions are available directly on the instance row: Add step, Edit step, Edit dataset, and Open workbook. The legacy editor is available in Handcraft.", 12, false, DashboardStyle.Muted));
     }
@@ -891,10 +890,10 @@ public sealed partial class MainWindow
     private void ApplyRunSelection(InstanceInfo item, RunSelectionResult result)
     {
         item.TestcaseSelection = result.Testcases; item.StepSelectionJson = result.StepsJson; item.EnvironmentSelection = result.Environments;
-        item.EnvironmentSelectionJson = result.EnvironmentsJson; item.DataIdSelection = result.DataIds; item.ExecutionMode = result.ExecutionMode; item.RunEnvironmentsParallel = result.ScenariosParallel; item.Threads = result.Threads; item.Iterations = result.Iterations; item.ThreadIntervalMs = result.ThreadIntervalMs; item.IterationIntervalMs = result.IterationIntervalMs; item.HasAppliedSelection = true; item.Selected = true;
+        item.EnvironmentSelectionJson = result.EnvironmentsJson; item.DataIdSelection = result.DataIds; item.RowsExecutionMode = result.RowsExecutionMode; item.RunEnvironmentsParallel = result.ScenariosParallel; item.MaxParallelRows = result.MaxParallelRows; item.Iterations = result.Iterations; item.ParallelRowStartIntervalMs = result.ParallelRowStartIntervalMs; item.IterationIntervalMs = result.IterationIntervalMs; item.HasAppliedSelection = true; item.Selected = true;
         _config.RunEnvironmentsParallel = result.ScenariosParallel;
         foreach (var other in _instances) other.RunEnvironmentsParallel = result.ScenariosParallel;
-        SaveInstanceExecutionSettings(item, result.Threads.ToString(), result.Iterations.ToString(), result.ThreadIntervalMs.ToString(), result.IterationIntervalMs.ToString());
+        SaveInstanceExecutionSettings(item, result.MaxParallelRows.ToString(), result.Iterations.ToString(), result.ParallelRowStartIntervalMs.ToString(), result.IterationIntervalMs.ToString());
         try
         {
             var root = File.Exists(_config.SettingsFile) ? JsonNode.Parse(File.ReadAllText(_config.SettingsFile)) as JsonObject : new JsonObject();
@@ -905,10 +904,10 @@ public sealed partial class MainWindow
             instance["StepSelection"] = result.StepsJson;
             instance["EnvironmentSelection"] = result.Environments;
             instance["DataIdSelection"] = result.DataIds;
-            instance["ExecutionMode"] = result.ExecutionMode;
-            instance["Threads"] = result.Threads;
+            instance["RowsExecutionMode"] = result.RowsExecutionMode;
+            instance["MaxParallelRows"] = result.MaxParallelRows;
             instance["Iterations"] = result.Iterations;
-            instance["ThreadIntervalMs"] = result.ThreadIntervalMs;
+            instance["ParallelRowStartIntervalMs"] = result.ParallelRowStartIntervalMs;
             instance["IterationIntervalMs"] = result.IterationIntervalMs;
             instances[item.Name] = instance; root["Instances"] = instances;
             root["RunEnvironmentsParallel"] = result.ScenariosParallel;
@@ -921,10 +920,10 @@ public sealed partial class MainWindow
                 central.StepSelection = result.StepsJson;
                 central.EnvironmentSelection = result.Environments;
                 central.DataIdSelection = result.DataIds;
-                central.ExecutionMode = result.ExecutionMode;
-                central.Threads = result.Threads;
+                central.RowsExecutionMode = result.RowsExecutionMode;
+                central.MaxParallelRows = result.MaxParallelRows;
                 central.Iterations = result.Iterations;
-                central.ThreadIntervalMs = result.ThreadIntervalMs;
+                central.ParallelRowStartIntervalMs = result.ParallelRowStartIntervalMs;
                 central.IterationIntervalMs = result.IterationIntervalMs;
             }
             _details.Text = $"Selection saved for {item.Name}. Testcases: {result.Testcases}; Data IDs: {(string.IsNullOrWhiteSpace(result.DataIds) ? "all rows" : result.DataIds)}";
@@ -989,7 +988,7 @@ public sealed partial class MainWindow
             Metric("Rows selected", summary.RowsSelected, DashboardStyle.Blue)));
         _runSummaryPanel.Children.Add(MetricRow(
             Metric("Environments", summary.Environments, DashboardStyle.Blue),
-            Metric("Max concurrent rows", summary.Threads, DashboardStyle.Blue),
+            Metric("Max concurrent rows", summary.MaxParallelRows, DashboardStyle.Blue),
             Metric("Iterations", summary.Iterations, DashboardStyle.Blue)));
         _runSummaryPanel.Children.Add(MetricRow(
             Metric("Step executions planned", summary.PlannedSteps, DashboardStyle.Green),
@@ -1115,8 +1114,8 @@ public sealed partial class MainWindow
 
         _runSummaryPanel.Children.Add(new Border { Height = 1, Background = DashboardStyle.Line, Margin = new Thickness(0, 4) });
         _runSummaryPanel.Children.Add(DashboardStyle.Text("Execution parameters", 13, true));
-        _runSummaryPanel.Children.Add(KeyValue("Mode / order", $"{(item.ExecutionMode == "loop" ? "Loop" : "Threaded")} / {(item.RunEnvironmentsParallel ? "Parallel" : "Sequential")}"));
-        _runSummaryPanel.Children.Add(KeyValue("Max concurrent rows / iterations", $"{Math.Clamp(item.MaxConcurrentRows, 1, 100)} / {Math.Max(1, item.Iterations)}"));
+        _runSummaryPanel.Children.Add(KeyValue("Mode / order", $"{(item.RowsExecutionMode == "sequential" ? "Loop" : "Parallel")} / {(item.RunEnvironmentsParallel ? "Parallel" : "Sequential")}"));
+        _runSummaryPanel.Children.Add(KeyValue("Max concurrent rows / iterations", $"{Math.Clamp(item.MaxParallelRows, 1, 100)} / {Math.Max(1, item.Iterations)}"));
         _runSummaryPanel.Children.Add(KeyValue("Environments", summary.EnvironmentNames.Count == 0 ? "None" : string.Join(", ", summary.EnvironmentNames)));
         _runSummaryPanel.Children.Add(KeyValue("Data IDs", string.IsNullOrWhiteSpace(item.DataIdSelection) ? "All workbook rows" : item.DataIdSelection));
         _runSummaryPanel.Children.Add(KeyValue("Assertions", $"{summary.RowsWithAssertions:N0} row(s) with assertions / {summary.RowsWithoutAssertions:N0} without assertions"));
@@ -1171,7 +1170,7 @@ public sealed partial class MainWindow
         }
         var plannedBase = rows.Sum(x => x.ExecutableSteps); var skippedBase = rows.Sum(x => x.SkippedSteps);
         var multiplier = Math.Max(1, environments.Count) * Math.Max(1, item.Iterations);
-        return new RunPlanSummary(selectedCases.Count, selectedCases.Sum(index => selectedSteps.GetValueOrDefault(index, []).Count), rows.Count, rows.Count(x => x.SkippedSteps > 0), rows.Count(x => x.ExecutableSteps == 0), skippedBase * multiplier, plannedBase * multiplier, environments.Count, Math.Clamp(item.MaxConcurrentRows, 1, 100), Math.Max(1, item.Iterations), rowsWithAssertions, rows.Count - rowsWithAssertions, environments, rows);
+        return new RunPlanSummary(selectedCases.Count, selectedCases.Sum(index => selectedSteps.GetValueOrDefault(index, []).Count), rows.Count, rows.Count(x => x.SkippedSteps > 0), rows.Count(x => x.ExecutableSteps == 0), skippedBase * multiplier, plannedBase * multiplier, environments.Count, Math.Clamp(item.MaxParallelRows, 1, 100), Math.Max(1, item.Iterations), rowsWithAssertions, rows.Count - rowsWithAssertions, environments, rows);
     }
 
     private static int FindHeader(IXLWorksheet sheet, string name)
@@ -1238,7 +1237,7 @@ public sealed partial class MainWindow
     private void RefreshDashboardDetails(bool force = false)
     {
         var item = _selectedInstance;
-        var signature = item is null ? "empty" : $"{item.Name}|{item.Status}|{item.Requests.Count}|{item.Assertions.Count}|{item.LastEvent}|{item.P95Ms}|{item.StartedAt}|{item.CompletedAt}|{item.TestcaseSelection}|{item.EnvironmentSelection}|{item.ExecutionMode}|{item.RunEnvironmentsParallel}|{item.StepSelectionJson}";
+        var signature = item is null ? "empty" : $"{item.Name}|{item.Status}|{item.Requests.Count}|{item.Assertions.Count}|{item.LastEvent}|{item.P95Ms}|{item.StartedAt}|{item.CompletedAt}|{item.TestcaseSelection}|{item.EnvironmentSelection}|{item.RowsExecutionMode}|{item.RunEnvironmentsParallel}|{item.StepSelectionJson}";
         if (!force && signature == _detailSignature) return;
         _detailSignature = signature;
         _selectedTitle.Text = item?.Name ?? "Selected instance";
@@ -1266,7 +1265,7 @@ public sealed partial class MainWindow
         void AddOverview(Control control, string searchable) { if (MatchesTerms(searchable, _overviewFilter.Text)) _overviewPanel.Children.Add(control); }
         AddOverview(DashboardStyle.Badge(item.Status), item.Status);
         AddOverview(KeyValue("Environment", string.IsNullOrWhiteSpace(item.EnvironmentSelection) ? "All global environments" : item.EnvironmentSelection), item.EnvironmentSelection);
-        AddOverview(KeyValue("Mode / order", $"{(item.ExecutionMode == "loop" ? "Loop" : "Threaded")} / {(item.RunEnvironmentsParallel ? "Parallel" : "Sequential")}"), $"{item.ExecutionMode} {(item.RunEnvironmentsParallel ? "Parallel" : "Sequential")}");
+        AddOverview(KeyValue("Mode / order", $"{(item.RowsExecutionMode == "sequential" ? "Loop" : "Parallel")} / {(item.RunEnvironmentsParallel ? "Parallel" : "Sequential")}"), $"{item.RowsExecutionMode} {(item.RunEnvironmentsParallel ? "Parallel" : "Sequential")}");
         AddOverview(KeyValue("Started", item.StartedAt?.ToString("HH:mm:ss") ?? "Not started"), item.StartedAt?.ToString() ?? "Not started");
         AddOverview(KeyValue("Requests", (item.CompletedRequests ?? item.Requests.Count).ToString()), $"{item.CompletedRequests} {item.Requests.Count}");
         var average = item.AverageMs ?? (item.Requests.Count == 0 ? (double?)null : item.Requests.Average(r => r.DurationMs));
@@ -1578,7 +1577,7 @@ public sealed partial class MainWindow
 public sealed record DashboardRequest(string StepName, string StepType, string Testcase, string DataId, string Environment, string Result, long DurationMs, string FailureCategory, string Error);
 internal sealed record DashboardRowSummary(string Testcase, string DataId, string Environment, int Steps, int Passed, int Failed, int Unexpected, int Skipped, string Status, string Details);
 internal sealed record RunPlanRow(string Testcase, int SkippedSteps, int ExecutableSteps, bool HasAssertions);
-internal sealed record RunPlanSummary(int Testcases, int SelectedSteps, int RowsSelected, int RowsWithDontrun, int RowsFullySkipped, long SkippedSteps, long PlannedSteps, int Environments, int Threads, int Iterations, int RowsWithAssertions, int RowsWithoutAssertions, IReadOnlyList<string> EnvironmentNames, IReadOnlyList<RunPlanRow> Rows)
+internal sealed record RunPlanSummary(int Testcases, int SelectedSteps, int RowsSelected, int RowsWithDontrun, int RowsFullySkipped, long SkippedSteps, long PlannedSteps, int Environments, int MaxParallelRows, int Iterations, int RowsWithAssertions, int RowsWithoutAssertions, IReadOnlyList<string> EnvironmentNames, IReadOnlyList<RunPlanRow> Rows)
 {
     public long PlannedExecutions => PlannedSteps;
 };

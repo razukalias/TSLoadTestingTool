@@ -18,12 +18,12 @@ public sealed class AppConfig
     public int RequestTimeoutSeconds { get; set; } = 300;
     public int Threads { get; set; } = 1;
     public int Iterations { get; set; } = 1;
-    public int ThreadIntervalMs { get; set; }
+    public int ParallelRowStartIntervalMs { get; set; }
     public int IterationIntervalMs { get; set; }
-    public int MaxConcurrentRows { get; set; } = 100;
+    public int MaxParallelRows { get; set; } = 100;
     public bool SpoolResultsToDisk { get; set; } = true;
     public bool RunEnvironmentsParallel { get; set; }
-    public string ExecutionMode { get; set; } = "threaded";
+    public string RowsExecutionMode { get; set; } = "parallel";
     public string TestcaseSelection { get; set; } = "0";
     public string StepSelection { get; set; } = "";
     public string EnvironmentSelection { get; set; } = "";
@@ -58,11 +58,15 @@ public sealed class CentralInstanceConfig
     public string? EnvironmentSelection { get; set; }
     public string? DataIdSelection { get; set; }
     public string? RunId { get; set; }
+    public string? RowsExecutionMode { get; set; }
+    // Legacy aliases accepted during migration from older appsettings files.
     public string? ExecutionMode { get; set; }
     public int? Threads { get; set; }
     public int? Iterations { get; set; }
+    public int? ParallelRowStartIntervalMs { get; set; }
     public int? ThreadIntervalMs { get; set; }
     public int? IterationIntervalMs { get; set; }
+    public int? MaxParallelRows { get; set; }
     public int? MaxConcurrentRows { get; set; }
     public bool? SpoolResultsToDisk { get; set; }
     public bool? RunEnvironmentsParallel { get; set; }

@@ -232,10 +232,10 @@ internal static class GlobalValidationService
 
     private static void ValidateExecutionSettings(List<ValidationIssue> issues, string instance, InstanceInfo item)
     {
-        if (item.Threads < 1) issues.Add(Issue("ERROR", $"{instance} / execution", "Threads must be at least 1.", "Save a valid Threads value in the instance Execution settings."));
+        if (item.MaxParallelRows < 1) issues.Add(Issue("ERROR", $"{instance} / execution", "MaxParallelRows must be at least 1.", "Save a valid MaxParallelRows value in the instance Execution settings."));
         if (item.Iterations < 1) issues.Add(Issue("ERROR", $"{instance} / execution", "Iterations must be at least 1.", "Save a valid Iterations value in the instance Execution settings."));
-        if (item.ThreadIntervalMs < 0 || item.IterationIntervalMs < 0) issues.Add(Issue("ERROR", $"{instance} / execution", "Execution intervals cannot be negative.", "Use zero or a positive interval value."));
-        if (!item.ExecutionMode.Equals("threaded", StringComparison.OrdinalIgnoreCase) && !item.ExecutionMode.Equals("loop", StringComparison.OrdinalIgnoreCase)) issues.Add(Issue("ERROR", $"{instance} / execution", $"Unsupported execution mode '{item.ExecutionMode}'.", "Use threaded or loop."));
+        if (item.ParallelRowStartIntervalMs < 0 || item.IterationIntervalMs < 0) issues.Add(Issue("ERROR", $"{instance} / execution", "Execution intervals cannot be negative.", "Use zero or a positive interval value."));
+        if (!item.RowsExecutionMode.Equals("parallel", StringComparison.OrdinalIgnoreCase) && !item.RowsExecutionMode.Equals("sequential", StringComparison.OrdinalIgnoreCase)) issues.Add(Issue("ERROR", $"{instance} / execution", $"Unsupported RowsExecutionMode '{item.RowsExecutionMode}'.", "Use parallel or sequential."));
     }
 
     private static bool CanReadFile(string path, out string error)

@@ -41,10 +41,10 @@ internal static class Program
             var uiLaunchId = GetCommandLineValue(args, "--ui-launch-id") ?? "not-provided";
             var uiLaunchAt = GetCommandLineValue(args, "--ui-launch-at") ?? "not-provided";
             config.EnvironmentSelection = GetCommandLineValue(args, "--environments") ?? config.EnvironmentSelection;
-            config.ExecutionMode = GetCommandLineValue(args, "--execution-mode") ?? config.ExecutionMode;
+            config.RowsExecutionMode = GetCommandLineValue(args, "--rows-execution-mode") ?? GetCommandLineValue(args, "--execution-mode") ?? config.RowsExecutionMode;
             var dataIdSelection = GetCommandLineValue(args, "--dataids") ?? config.DataIdSelection;
             var stepSelection = GetCommandLineValue(args, "--steps") ?? config.StepSelection;
-            if (!config.ExecutionMode.Equals("threaded", StringComparison.OrdinalIgnoreCase) && !config.ExecutionMode.Equals("loop", StringComparison.OrdinalIgnoreCase) && !config.ExecutionMode.Equals("sequential", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("execution-mode must be 'threaded', 'loop', or 'sequential'.");
+            if (!config.RowsExecutionMode.Equals("parallel", StringComparison.OrdinalIgnoreCase) && !config.RowsExecutionMode.Equals("sequential", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("rows-execution-mode must be 'parallel' or 'sequential'.");
             var runId = string.IsNullOrWhiteSpace(config.RunId) ? $"{DateTime.Now:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}"[..25] : config.RunId;
             loadedRunId = runId;
             if (config.GenerateResults) Directory.CreateDirectory(config.ResultsFolder);
@@ -204,7 +204,7 @@ internal static class Program
         filters.TryGetValue(testcase.TestcaseIndex, out var selectedDataIds);
         try
         {
-                await runner.RunAsync(testcase, workbook, local, cancellationToken, environment, config.ExecutionMode, selectedDataIds, config.Threads, config.Iterations, config.ThreadIntervalMs, config.IterationIntervalMs, config.MaxConcurrentRows, spool is null ? null : new Action<TestcaseResult>(spool.Append));
+                await runner.RunAsync(testcase, workbook, local, cancellationToken, environment, config.RowsExecutionMode, selectedDataIds, config.Threads, config.Iterations, config.ParallelRowStartIntervalMs, config.IterationIntervalMs, config.MaxParallelRows, spool is null ? null : new Action<TestcaseResult>(spool.Append));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -290,6 +290,9 @@ internal static class Program
         var baseDirectory = Path.GetDirectoryName(path)!;
         var root = new ConfigurationBuilder().SetBasePath(baseDirectory).AddJsonFile(Path.GetFileName(path), optional: false, reloadOnChange: false).Build();
         var config = new AppConfig(); root.Bind(config);
+        if (root["MaxParallelRows"] is null && int.TryParse(root["MaxConcurrentRows"], out var legacyMaxRows)) config.MaxParallelRows = Math.Clamp(legacyMaxRows, 1, 100);
+        if (root["ParallelRowStartIntervalMs"] is null && int.TryParse(root["ThreadIntervalMs"], out var legacyStartInterval)) config.ParallelRowStartIntervalMs = Math.Max(0, legacyStartInterval);
+        config.RowsExecutionMode = NormalizeRowsExecutionMode(root["RowsExecutionMode"]?.ToString() ?? root["ExecutionMode"]?.ToString() ?? config.RowsExecutionMode);
         // Migrate older central settings that used RunScenariosInParallel.
         if (root["RunEnvironmentsParallel"] is null && bool.TryParse(root["RunScenariosInParallel"], out var legacyParallel))
             config.RunEnvironmentsParallel = legacyParallel;
@@ -321,12 +324,12 @@ internal static class Program
         if (!string.IsNullOrWhiteSpace(instance.EnvironmentSelection)) config.EnvironmentSelection = instance.EnvironmentSelection;
         if (!string.IsNullOrWhiteSpace(instance.DataIdSelection)) config.DataIdSelection = instance.DataIdSelection;
         if (!string.IsNullOrWhiteSpace(instance.RunId)) config.RunId = instance.RunId;
-        if (!string.IsNullOrWhiteSpace(instance.ExecutionMode)) config.ExecutionMode = instance.ExecutionMode;
+        config.RowsExecutionMode = NormalizeRowsExecutionMode(instance.RowsExecutionMode ?? instance.ExecutionMode ?? config.RowsExecutionMode);
         if (instance.Threads.HasValue) config.Threads = instance.Threads.Value;
         if (instance.Iterations.HasValue) config.Iterations = instance.Iterations.Value;
-        if (instance.ThreadIntervalMs.HasValue) config.ThreadIntervalMs = instance.ThreadIntervalMs.Value;
+        if (instance.ParallelRowStartIntervalMs.HasValue || instance.ThreadIntervalMs.HasValue) config.ParallelRowStartIntervalMs = Math.Max(0, instance.ParallelRowStartIntervalMs ?? instance.ThreadIntervalMs ?? 0);
         if (instance.IterationIntervalMs.HasValue) config.IterationIntervalMs = instance.IterationIntervalMs.Value;
-        if (instance.MaxConcurrentRows.HasValue) config.MaxConcurrentRows = Math.Clamp(instance.MaxConcurrentRows.Value, 1, 100);
+        if (instance.MaxParallelRows.HasValue || instance.MaxConcurrentRows.HasValue) config.MaxParallelRows = Math.Clamp(instance.MaxParallelRows ?? instance.MaxConcurrentRows ?? 100, 1, 100);
         if (instance.SpoolResultsToDisk.HasValue) config.SpoolResultsToDisk = instance.SpoolResultsToDisk.Value;
         if (instance.InternalLoggingEnabled.HasValue) config.InternalLoggingEnabled = instance.InternalLoggingEnabled.Value;
         if (instance.SaveRequestBodyToHistory.HasValue) config.SaveRequestBodyToHistory = instance.SaveRequestBodyToHistory.Value;
@@ -335,6 +338,11 @@ internal static class Program
         if (instance.HistorySheets is not null) config.HistorySheets = instance.HistorySheets;
         return config;
     }
+    private static string NormalizeRowsExecutionMode(string? value)
+        => value?.Equals("sequential", StringComparison.OrdinalIgnoreCase) == true || value?.Equals("loop", StringComparison.OrdinalIgnoreCase) == true
+            ? "sequential"
+            : "parallel";
+
     private static string ResolveCentralPath(string baseDirectory, string? value, string fallback)
     {
         var selected = string.IsNullOrWhiteSpace(value) ? fallback : value;

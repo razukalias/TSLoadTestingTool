@@ -184,7 +184,7 @@ public sealed class InstanceConfigurationWindow : Window
         _item.GenerateAggregateHistory = _aggregateHistory.IsChecked == true;
         _item.GenerateRowHistory = _rowHistory.IsChecked == true;
         foreach (var pair in _historySheets) _item.HistorySheets[pair.Key] = pair.Value.IsChecked == true;
-        _saveExecution(_item, selection!.Threads.ToString(), selection.Iterations.ToString(), selection.ThreadIntervalMs.ToString(), selection.IterationIntervalMs.ToString(), _item.GenerateResults, selection.ExecutionMode, selection.ScenariosParallel);
+        _saveExecution(_item, selection!.MaxParallelRows.ToString(), selection.Iterations.ToString(), selection.ParallelRowStartIntervalMs.ToString(), selection.IterationIntervalMs.ToString(), _item.GenerateResults, selection.RowsExecutionMode, selection.ScenariosParallel);
         _saveReporting(_item, true);
         Close();
     }

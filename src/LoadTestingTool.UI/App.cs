@@ -15,9 +15,10 @@ public sealed class UiConfig
     public string UiLogFile { get; set; } = "Logs/ui-internal.log";
     public int Threads { get; set; } = 1;
     public int Iterations { get; set; } = 1;
-    public int ThreadIntervalMs { get; set; }
+    public int ParallelRowStartIntervalMs { get; set; }
     public int IterationIntervalMs { get; set; }
-    public int MaxConcurrentRows { get; set; } = 100;
+    public int MaxParallelRows { get; set; } = 100;
+    public string RowsExecutionMode { get; set; } = "parallel";
     public bool SpoolResultsToDisk { get; set; } = true;
     public bool RunEnvironmentsParallel { get; set; }
     public bool GenerateResults { get; set; } = true;
@@ -27,16 +28,18 @@ public sealed class UiConfig
 
 public sealed class UiInstanceDefinition
 {
-    // Legacy migration fields. New instances derive paths from the key and UiConfig.
     public string Folder { get; set; } = string.Empty;
     public string Workbook { get; set; } = string.Empty;
     public bool Enabled { get; set; } = true;
     public int? Threads { get; set; }
     public int? Iterations { get; set; }
+    public int? ParallelRowStartIntervalMs { get; set; }
     public int? ThreadIntervalMs { get; set; }
     public int? IterationIntervalMs { get; set; }
+    public int? MaxParallelRows { get; set; }
     public int? MaxConcurrentRows { get; set; }
     public bool? SpoolResultsToDisk { get; set; }
+    public string? RowsExecutionMode { get; set; }
     public string? ExecutionMode { get; set; }
     public bool? RunEnvironmentsParallel { get; set; }
     public bool? GenerateResults { get; set; }
