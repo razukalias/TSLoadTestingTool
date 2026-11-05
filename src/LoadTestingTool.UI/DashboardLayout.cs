@@ -354,10 +354,7 @@ public sealed partial class MainWindow
     private const int DashboardPageSize = 200;
     private int _overviewPage = 1;
     private int _assertionPage = 1;
-    private readonly TextBlock _overviewPageLabel = DashboardStyle.Text("", 11, false, DashboardStyle.Muted);
     private readonly TextBlock _assertionPageLabel = DashboardStyle.Text("", 11, false, DashboardStyle.Muted);
-    private Button _overviewPreviousButton = null!;
-    private Button _overviewNextButton = null!;
     private Button _assertionPreviousButton = null!;
     private Button _assertionNextButton = null!;
 
@@ -661,9 +658,11 @@ public sealed partial class MainWindow
         Grid.SetColumn(text, 1); grid.Children.Add(text); return grid;
     }
 
-    private Control CreatePaginationBar(bool overview)
+    private Control CreatePaginationBar(bool overview, int totalItems = 0)
     {
-        var label = overview ? _overviewPageLabel : _assertionPageLabel;
+        // Overview is rebuilt on every refresh. Always create fresh controls for it;
+        // Avalonia controls cannot be attached to a second visual parent.
+        var label = overview ? DashboardStyle.Text("", 11, false, DashboardStyle.Muted) : _assertionPageLabel;
         var previous = DashboardStyle.Action("Previous", () =>
         {
             if (overview) _overviewPage = Math.Max(1, _overviewPage - 1);
@@ -676,8 +675,13 @@ public sealed partial class MainWindow
             else _assertionPage++;
             if (overview) RefreshDashboardDetails(true); else RefreshAssertionList();
         });
-        if (overview) { _overviewPreviousButton = previous; _overviewNextButton = next; }
-        else { _assertionPreviousButton = previous; _assertionNextButton = next; }
+        if (!overview) { _assertionPreviousButton = previous; _assertionNextButton = next; }
+        if (overview)
+        {
+            var totalPages = Math.Max(1, (int)Math.Ceiling(totalItems / (double)DashboardPageSize));
+            _overviewPage = Math.Clamp(_overviewPage, 1, totalPages);
+            UpdatePagination(label, previous, next, _overviewPage, totalItems, DashboardPageSize);
+        }
         return new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -1284,8 +1288,7 @@ public sealed partial class MainWindow
             var rowKey = $"{request.Testcase}\u001F{request.DataId}\u001F{request.Environment}";
             stepPositions[rowKey] = stepPositions.GetValueOrDefault(rowKey) + 1;
         }
-        var overviewPaging = CreatePaginationBar(true);
-        UpdatePagination(_overviewPageLabel, _overviewPreviousButton, _overviewNextButton, _overviewPage, filteredRequests.Count, DashboardPageSize);
+        var overviewPaging = CreatePaginationBar(true, filteredRequests.Count);
         foreach (var request in pageRequests)
         {
             var rowKey = $"{request.Testcase}\u001F{request.DataId}\u001F{request.Environment}";
