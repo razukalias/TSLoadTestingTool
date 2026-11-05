@@ -13,8 +13,11 @@ internal sealed class TemplateEditorWindow : Window
     private readonly TextBox _path;
     private readonly ComboBox _format;
     private readonly TextBox _content;
+    private readonly TextBox _search = new() { Watermark = "Highlight terms: term1 & term2…", Width = 360 };
+    private readonly TextBlock _matchCount = DashboardStyle.Text("", 11, false, DashboardStyle.Muted);
     private readonly TextBlock _status = DashboardStyle.Text("", 11, false, DashboardStyle.Muted);
     private readonly Action<string> _saved;
+    private double _fontSize = 12;
 
     public TemplateEditorWindow(string templatesFolder, string sourcePath, string stepType, Action<string> saved)
     {
@@ -25,9 +28,10 @@ internal sealed class TemplateEditorWindow : Window
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         _path = new TextBox { Text = sourcePath, Watermark = "relative path inside Templates", MinWidth = 320 };
         _format = new ComboBox { ItemsSource = new[] { "JSON", "XML", "SQL", "GraphQL", "C# script", "Plain text" }, SelectedIndex = FormatIndex(sourcePath, stepType), Width = 150 };
-        _content = new TextBox { AcceptsReturn = true, TextWrapping = Avalonia.Media.TextWrapping.NoWrap, FontFamily = new Avalonia.Media.FontFamily("Consolas"), MinHeight = 360 };
+        _content = new TextBox { AcceptsReturn = true, TextWrapping = Avalonia.Media.TextWrapping.NoWrap, FontFamily = new Avalonia.Media.FontFamily("Consolas"), FontSize = _fontSize, MinHeight = 360, HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Stretch };
         ScrollViewer.SetHorizontalScrollBarVisibility(_content, Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
         ScrollViewer.SetVerticalScrollBarVisibility(_content, Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
+        _search.TextChanged += (_, _) => UpdateMatchCount();
         LoadFile();
         var validate = DashboardStyle.Action("Validate", Validate, "primary");
         var save = DashboardStyle.Action("Save template", Save, "primary");
@@ -35,11 +39,19 @@ internal sealed class TemplateEditorWindow : Window
         var help = DashboardStyle.Action("Help", () => ContextHelpWindow.Show(this, "Template editor help", "Template files are stored under the instance Templates folder. Use relative paths such as requests/create-user.json or sql/find-user.sql.\n\nTemplates use underscore variables only, for example _userId_, _token_, or _requestId_. The editor does not suggest or generate <guid>, <randomnumber>, or <From_...> syntax.\n\nJSON and XML are syntax-checked. SQL and GraphQL receive basic required-content checks. C# script templates must contain content and require trusted scripts at runtime."));
         var meta = new Grid { ColumnDefinitions = new ColumnDefinitions("90,*,Auto") };
         meta.Children.Add(DashboardStyle.Text("File", 12, false, DashboardStyle.Muted)); Grid.SetColumn(_path, 1); meta.Children.Add(_path); Grid.SetColumn(_format, 2); meta.Children.Add(_format);
-        Content = new Border { Padding = new Thickness(18), Background = DashboardStyle.Panel, Child = new DockPanel { LastChildFill = true, Children =
-        {
-            new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { help, validate, save, close } },
-            new StackPanel { Spacing = 8, Children = { DashboardStyle.Text($"Edit {stepType} template", 19, true), DashboardStyle.Text("Only _underscore_ variables are supported in template content.", 12, false, DashboardStyle.Muted), meta, _content, _status } }
-        } } };
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { help, validate, save, close } };
+        var textTools = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _search, DashboardStyle.Action("Find next", FindNext), DashboardStyle.Action("−", () => ChangeFontSize(-1)), DashboardStyle.Action("+", () => ChangeFontSize(1)), DashboardStyle.Text("Text size", 11, false, DashboardStyle.Muted), _matchCount } };
+        var editorScroll = new ScrollViewer { HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto, VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto, Content = _content };
+        var body = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,Auto,*,Auto") };
+        body.Children.Add(DashboardStyle.Text($"Edit {stepType} template", 19, true));
+        Grid.SetRow(textTools, 1); body.Children.Add(textTools);
+        Grid.SetRow(meta, 2); body.Children.Add(meta);
+        Grid.SetRow(editorScroll, 3); body.Children.Add(editorScroll);
+        Grid.SetRow(_status, 4); body.Children.Add(_status);
+        var shell = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(actions, Dock.Top); shell.Children.Add(actions); shell.Children.Add(body);
+        Content = new Border { Padding = new Thickness(18), Background = DashboardStyle.Panel, Child = shell };
+        UpdateMatchCount();
     }
 
     private void LoadFile()
@@ -71,6 +83,43 @@ internal sealed class TemplateEditorWindow : Window
             _saved(relative); _status.Text = $"Saved {relative}"; _status.Foreground = DashboardStyle.Green;
         }
         catch (Exception ex) { _status.Text = ex.Message; _status.Foreground = DashboardStyle.Red; }
+    }
+
+    private void ChangeFontSize(double delta)
+    {
+        _fontSize = Math.Clamp(_fontSize + delta, 8, 28);
+        _content.FontSize = _fontSize;
+    }
+
+    private void FindNext()
+    {
+        var text = _content.Text ?? string.Empty;
+        var terms = (_search.Text ?? string.Empty).Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (terms.Count == 0) { _matchCount.Text = "Enter one or more terms."; return; }
+        var start = Math.Clamp(_content.SelectionEnd, 0, text.Length);
+        var matches = terms.Select(term => (Index: text.IndexOf(term, start, StringComparison.OrdinalIgnoreCase), Term: term)).Where(x => x.Index >= 0).OrderBy(x => x.Index).ToList();
+        if (matches.Count == 0) matches = terms.Select(term => (Index: text.IndexOf(term, 0, StringComparison.OrdinalIgnoreCase), Term: term)).Where(x => x.Index >= 0).OrderBy(x => x.Index).ToList();
+        if (matches.Count == 0) { _matchCount.Text = "No matches"; return; }
+        var match = matches[0];
+        _content.SelectionStart = match.Index;
+        _content.SelectionEnd = match.Index + match.Term.Length;
+        _content.Focus();
+        UpdateMatchCount();
+    }
+
+    private void UpdateMatchCount()
+    {
+        var text = _content?.Text ?? string.Empty;
+        var terms = (_search?.Text ?? string.Empty).Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase);
+        var count = terms.Sum(term => CountOccurrences(text, term));
+        _matchCount.Text = count == 0 ? (string.IsNullOrWhiteSpace(_search?.Text) ? "" : "No matches") : $"{count:N0} matching occurrence(s)";
+    }
+
+    private static int CountOccurrences(string value, string term)
+    {
+        var count = 0; var index = 0;
+        while ((index = value.IndexOf(term, index, StringComparison.OrdinalIgnoreCase)) >= 0) { count++; index += Math.Max(1, term.Length); }
+        return count;
     }
 
     private string ResolvePath(string source)
