@@ -730,7 +730,7 @@ public sealed partial class MainWindow
         _configurationPanel.Children.Add(KeyValue("Environments", string.IsNullOrWhiteSpace(item.EnvironmentSelection) ? "All global environments" : item.EnvironmentSelection));
         var mode = new ComboBox { ItemsSource = new[] { "Parallel", "Sequential" }, SelectedIndex = item.RowsExecutionMode == "sequential" ? 1 : 0, HorizontalAlignment = HorizontalAlignment.Stretch };
         mode.SelectionChanged += (_, _) => item.RowsExecutionMode = mode.SelectedIndex == 1 ? "sequential" : "parallel";
-        _configurationPanel.Children.Add(Field("RowsExecutionMode", mode));
+        _configurationPanel.Children.Add(Field("Row execution mode", mode));
         var order = new ComboBox { ItemsSource = new[] { "Sequential environments", "Parallel environments" }, SelectedIndex = item.RunEnvironmentsParallel ? 1 : 0, HorizontalAlignment = HorizontalAlignment.Stretch };
         order.SelectionChanged += (_, _) => item.RunEnvironmentsParallel = order.SelectedIndex == 1;
         _configurationPanel.Children.Add(Field("Testcase order", order));

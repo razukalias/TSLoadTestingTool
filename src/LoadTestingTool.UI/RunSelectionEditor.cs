@@ -55,7 +55,7 @@ internal sealed class RunSelectionEditor : UserControl
         Grid.SetColumn(environments, 2); columns.Children.Add(environments);
         Grid.SetColumn(data, 3); columns.Children.Add(data);
 
-        var runOptions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Children = { Field("Execution mode", _executionMode), Field("Environment execution order", _scenarioOrder) } };
+        var runOptions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Children = { Field("Row execution mode", _executionMode), Field("Environments and testcases execution mode", _scenarioOrder) } };
         var executionOptions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Children = { Field("MaxParallelRows", _maxParallelRows), Field("Iterations", _iterations), Field("Parallel-row start interval (ms)", _threadIntervalMs), Field("Iteration interval (ms)", _iterationIntervalMs) } };
         var status = new StackPanel { Spacing = 6, Margin = new Thickness(0, 12), Children = { runOptions, executionOptions, _summary, _error, DashboardStyle.Text("MaxParallelRows and iterations apply to the complete instance run and are saved in central appsettings.json, not in the workbook config sheet.", 11, false, DashboardStyle.Muted), DashboardStyle.Text("Dependencies are not auto-selected. Include setup/dependency steps when your chosen step needs them.", 11, false, DashboardStyle.Muted) } };
         var layout = new Grid { RowDefinitions = new RowDefinitions("*,Auto") };
