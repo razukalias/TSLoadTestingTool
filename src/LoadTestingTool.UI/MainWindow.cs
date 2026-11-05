@@ -32,6 +32,8 @@ public sealed class InstanceInfo
     public int Iterations { get; set; } = 1;
     public int ThreadIntervalMs { get; set; }
     public int IterationIntervalMs { get; set; }
+    public int MaxConcurrentRows { get; set; } = 100;
+    public bool SpoolResultsToDisk { get; set; } = true;
     public bool GenerateResults { get; set; } = true;
     public bool GenerateAggregateHistory { get; set; }
     public bool GenerateRowHistory { get; set; } = true;
@@ -432,6 +434,8 @@ public sealed partial class MainWindow : Window
                 item.Iterations = Math.Max(1, centralInstance.Iterations ?? _config.Iterations);
                 item.ThreadIntervalMs = Math.Max(0, centralInstance.ThreadIntervalMs ?? _config.ThreadIntervalMs);
                 item.IterationIntervalMs = Math.Max(0, centralInstance.IterationIntervalMs ?? _config.IterationIntervalMs);
+                item.MaxConcurrentRows = Math.Clamp(centralInstance.MaxConcurrentRows ?? _config.MaxConcurrentRows, 1, 100);
+                item.SpoolResultsToDisk = centralInstance.SpoolResultsToDisk ?? _config.SpoolResultsToDisk;
                 item.ExecutionMode = string.IsNullOrWhiteSpace(centralInstance.ExecutionMode) ? "threaded" : centralInstance.ExecutionMode;
                 item.RunEnvironmentsParallel = _config.RunEnvironmentsParallel;
                 item.GenerateResults = centralInstance.GenerateResults ?? _config.GenerateResults;
@@ -573,6 +577,41 @@ public sealed partial class MainWindow : Window
         {
             UiLog($"Could not save execution settings for {item.Name}: {ex}");
             _details.Text = $"Could not save execution settings: {ex.Message}";
+        }
+    }
+
+    private void SaveBoundedRowSettings(InstanceInfo item, string? maxConcurrentRowsText, bool spoolResultsToDisk)
+    {
+        if (!int.TryParse(maxConcurrentRowsText, out var maxConcurrentRows) || maxConcurrentRows < 1 || maxConcurrentRows > 100)
+        {
+            _details.Text = "Max concurrent rows must be between 1 and 100.";
+            return;
+        }
+        try
+        {
+            var root = File.Exists(_config.SettingsFile) ? JsonNode.Parse(File.ReadAllText(_config.SettingsFile)) as JsonObject : new JsonObject();
+            root ??= new JsonObject();
+            var instances = root["Instances"] as JsonObject ?? new JsonObject();
+            var instance = instances[item.Name] as JsonObject ?? new JsonObject();
+            instance["MaxConcurrentRows"] = maxConcurrentRows;
+            instance["SpoolResultsToDisk"] = spoolResultsToDisk;
+            instances[item.Name] = instance; root["Instances"] = instances;
+            File.WriteAllText(_config.SettingsFile, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
+            item.MaxConcurrentRows = maxConcurrentRows;
+            item.SpoolResultsToDisk = spoolResultsToDisk;
+            if (_config.Instances.TryGetValue(item.Name, out var central))
+            {
+                central.MaxConcurrentRows = maxConcurrentRows;
+                central.SpoolResultsToDisk = spoolResultsToDisk;
+            }
+            _details.Text = $"Saved row execution settings for {item.Name}: max {maxConcurrentRows} concurrent row(s); disk spool {(spoolResultsToDisk ? "enabled" : "disabled")}.";
+            UiLog($"Saved bounded row settings. instance={item.Name}; maxConcurrentRows={maxConcurrentRows}; spoolResultsToDisk={spoolResultsToDisk}");
+            RefreshDashboardDetails(force: true);
+        }
+        catch (Exception ex)
+        {
+            _details.Text = $"Could not save row execution settings: {ex.Message}";
+            UiLog($"Could not save bounded row settings for {item.Name}: {ex}");
         }
     }
 
@@ -1465,6 +1504,8 @@ public sealed partial class MainWindow : Window
                     if (int.TryParse(central["Iterations"]?.ToString(), out var iterations)) config.Iterations = Math.Max(1, iterations);
                     if (int.TryParse(central["ThreadIntervalMs"]?.ToString(), out var threadInterval)) config.ThreadIntervalMs = Math.Max(0, threadInterval);
                     if (int.TryParse(central["IterationIntervalMs"]?.ToString(), out var iterationInterval)) config.IterationIntervalMs = Math.Max(0, iterationInterval);
+                    if (int.TryParse(central["MaxConcurrentRows"]?.ToString(), out var maxConcurrentRows)) config.MaxConcurrentRows = Math.Clamp(maxConcurrentRows, 1, 100);
+                    if (bool.TryParse(central["SpoolResultsToDisk"]?.ToString(), out var spoolResultsToDisk)) config.SpoolResultsToDisk = spoolResultsToDisk;
                     if (bool.TryParse(central["RunEnvironmentsParallel"]?.ToString(), out var environmentsParallel)) config.RunEnvironmentsParallel = environmentsParallel;
                     else if (bool.TryParse(central["RunScenariosInParallel"]?.ToString(), out var legacyParallel)) config.RunEnvironmentsParallel = legacyParallel;
                     if (bool.TryParse(central["GenerateResults"]?.ToString(), out var generateResults)) config.GenerateResults = generateResults;

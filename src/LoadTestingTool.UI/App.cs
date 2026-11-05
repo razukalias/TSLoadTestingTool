@@ -17,6 +17,8 @@ public sealed class UiConfig
     public int Iterations { get; set; } = 1;
     public int ThreadIntervalMs { get; set; }
     public int IterationIntervalMs { get; set; }
+    public int MaxConcurrentRows { get; set; } = 100;
+    public bool SpoolResultsToDisk { get; set; } = true;
     public bool RunEnvironmentsParallel { get; set; }
     public bool GenerateResults { get; set; } = true;
     public List<string> Environments { get; set; } = [];
@@ -33,6 +35,8 @@ public sealed class UiInstanceDefinition
     public int? Iterations { get; set; }
     public int? ThreadIntervalMs { get; set; }
     public int? IterationIntervalMs { get; set; }
+    public int? MaxConcurrentRows { get; set; }
+    public bool? SpoolResultsToDisk { get; set; }
     public string? ExecutionMode { get; set; }
     public bool? RunEnvironmentsParallel { get; set; }
     public bool? GenerateResults { get; set; }

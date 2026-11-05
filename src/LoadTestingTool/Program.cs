@@ -188,6 +188,10 @@ internal static class Program
         var eventRoot = config.GenerateResults ? config.ResultsFolder : Path.Combine(config.LogsFolder, ".runtime");
         var eventFolder = Path.Combine(eventRoot, $"Run_{InternalLogger.SafeFolderName(runId)}");
         using var events = new LiveEventWriter(eventFolder, config.InstanceId, runId, $"_{InternalLogger.SafeFolderName(testcase.Testcase)}_{Guid.NewGuid():N}");
+        var spoolRoot = Path.Combine(eventRoot, $"Run_{InternalLogger.SafeFolderName(runId)}");
+        using var spool = config.SpoolResultsToDisk
+            ? new RunResultSpool(Path.Combine(spoolRoot, $"rows_{testcaseName}_{environmentName}.ndjson"))
+            : null;
         var local = new RunResult { RunId = runId, Selection = selection, StartedAt = DateTimeOffset.Now, Environment = environment };
         logger.Info($"UI diagnostic correlation. uiLaunchId={uiLaunchId}; uiLaunchAt={uiLaunchAt}; runnerStartedAt={DateTimeOffset.Now:O}; processId={Environment.ProcessId}");
         processLogger.Info($"Testcase process started. Index={testcase.TestcaseIndex}; name={testcase.Testcase}; environment={environment}");
@@ -200,7 +204,7 @@ internal static class Program
         filters.TryGetValue(testcase.TestcaseIndex, out var selectedDataIds);
         try
         {
-            await runner.RunAsync(testcase, workbook, local, cancellationToken, environment, config.ExecutionMode, selectedDataIds, config.Threads, config.Iterations, config.ThreadIntervalMs, config.IterationIntervalMs);
+                await runner.RunAsync(testcase, workbook, local, cancellationToken, environment, config.ExecutionMode, selectedDataIds, config.Threads, config.Iterations, config.ThreadIntervalMs, config.IterationIntervalMs, config.MaxConcurrentRows, spool is null ? null : new Action<TestcaseResult>(spool.Append));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -322,6 +326,8 @@ internal static class Program
         if (instance.Iterations.HasValue) config.Iterations = instance.Iterations.Value;
         if (instance.ThreadIntervalMs.HasValue) config.ThreadIntervalMs = instance.ThreadIntervalMs.Value;
         if (instance.IterationIntervalMs.HasValue) config.IterationIntervalMs = instance.IterationIntervalMs.Value;
+        if (instance.MaxConcurrentRows.HasValue) config.MaxConcurrentRows = Math.Clamp(instance.MaxConcurrentRows.Value, 1, 100);
+        if (instance.SpoolResultsToDisk.HasValue) config.SpoolResultsToDisk = instance.SpoolResultsToDisk.Value;
         if (instance.InternalLoggingEnabled.HasValue) config.InternalLoggingEnabled = instance.InternalLoggingEnabled.Value;
         if (instance.SaveRequestBodyToHistory.HasValue) config.SaveRequestBodyToHistory = instance.SaveRequestBodyToHistory.Value;
         if (instance.SaveResponseBodyToHistory.HasValue) config.SaveResponseBodyToHistory = instance.SaveResponseBodyToHistory.Value;

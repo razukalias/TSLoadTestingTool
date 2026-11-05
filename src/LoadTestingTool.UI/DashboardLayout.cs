@@ -743,6 +743,13 @@ public sealed partial class MainWindow
         var executionFields = new[] { Field("Threads", threads), Field("Iterations", iterations), Field("Thread interval (ms)", threadInterval), Field("Iteration interval (ms)", iterationInterval) };
         for (var i = 0; i < executionFields.Length; i++) { Grid.SetColumn(executionFields[i], i); executionGrid.Children.Add(executionFields[i]); }
         _configurationPanel.Children.Add(executionGrid);
+        var maxConcurrentRows = new TextBox { Text = item.MaxConcurrentRows.ToString(), Watermark = "Max concurrent rows (1–100)", Width = 220 };
+        var spoolResults = new CheckBox { Content = "Spool completed rows to disk (NDJSON)", IsChecked = item.SpoolResultsToDisk };
+        _configurationPanel.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Children =
+        {
+            Field("Max concurrent rows", maxConcurrentRows), spoolResults,
+            DashboardStyle.Action("Save row execution", () => SaveBoundedRowSettings(item, maxConcurrentRows.Text, spoolResults.IsChecked == true), "primary")
+        }});
         var generateResults = new CheckBox { Content = "Generate technical Results artifacts", IsChecked = item.GenerateResults };
         _configurationPanel.Children.Add(generateResults);
         _configurationPanel.Children.Add(DashboardStyle.Text("When disabled, the Excel History files and live UI events remain available, but persistent Results run folders and metrics.json are not generated.", 11, false, DashboardStyle.Muted));
@@ -982,7 +989,7 @@ public sealed partial class MainWindow
             Metric("Rows selected", summary.RowsSelected, DashboardStyle.Blue)));
         _runSummaryPanel.Children.Add(MetricRow(
             Metric("Environments", summary.Environments, DashboardStyle.Blue),
-            Metric("Threads", summary.Threads, DashboardStyle.Blue),
+            Metric("Max concurrent rows", summary.Threads, DashboardStyle.Blue),
             Metric("Iterations", summary.Iterations, DashboardStyle.Blue)));
         _runSummaryPanel.Children.Add(MetricRow(
             Metric("Step executions planned", summary.PlannedSteps, DashboardStyle.Green),
@@ -1109,7 +1116,7 @@ public sealed partial class MainWindow
         _runSummaryPanel.Children.Add(new Border { Height = 1, Background = DashboardStyle.Line, Margin = new Thickness(0, 4) });
         _runSummaryPanel.Children.Add(DashboardStyle.Text("Execution parameters", 13, true));
         _runSummaryPanel.Children.Add(KeyValue("Mode / order", $"{(item.ExecutionMode == "loop" ? "Loop" : "Threaded")} / {(item.RunEnvironmentsParallel ? "Parallel" : "Sequential")}"));
-        _runSummaryPanel.Children.Add(KeyValue("Threads / iterations", $"{Math.Max(1, item.Threads)} / {Math.Max(1, item.Iterations)}"));
+        _runSummaryPanel.Children.Add(KeyValue("Max concurrent rows / iterations", $"{Math.Clamp(item.MaxConcurrentRows, 1, 100)} / {Math.Max(1, item.Iterations)}"));
         _runSummaryPanel.Children.Add(KeyValue("Environments", summary.EnvironmentNames.Count == 0 ? "None" : string.Join(", ", summary.EnvironmentNames)));
         _runSummaryPanel.Children.Add(KeyValue("Data IDs", string.IsNullOrWhiteSpace(item.DataIdSelection) ? "All workbook rows" : item.DataIdSelection));
         _runSummaryPanel.Children.Add(KeyValue("Assertions", $"{summary.RowsWithAssertions:N0} row(s) with assertions / {summary.RowsWithoutAssertions:N0} without assertions"));
@@ -1163,8 +1170,8 @@ public sealed partial class MainWindow
             rows.Add(new RunPlanRow(testcase, skipped, executable, hasAssertions));
         }
         var plannedBase = rows.Sum(x => x.ExecutableSteps); var skippedBase = rows.Sum(x => x.SkippedSteps);
-        var multiplier = Math.Max(1, environments.Count) * Math.Max(1, item.Threads) * Math.Max(1, item.Iterations);
-        return new RunPlanSummary(selectedCases.Count, selectedCases.Sum(index => selectedSteps.GetValueOrDefault(index, []).Count), rows.Count, rows.Count(x => x.SkippedSteps > 0), rows.Count(x => x.ExecutableSteps == 0), skippedBase * multiplier, plannedBase * multiplier, environments.Count, Math.Max(1, item.Threads), Math.Max(1, item.Iterations), rowsWithAssertions, rows.Count - rowsWithAssertions, environments, rows);
+        var multiplier = Math.Max(1, environments.Count) * Math.Max(1, item.Iterations);
+        return new RunPlanSummary(selectedCases.Count, selectedCases.Sum(index => selectedSteps.GetValueOrDefault(index, []).Count), rows.Count, rows.Count(x => x.SkippedSteps > 0), rows.Count(x => x.ExecutableSteps == 0), skippedBase * multiplier, plannedBase * multiplier, environments.Count, Math.Clamp(item.MaxConcurrentRows, 1, 100), Math.Max(1, item.Iterations), rowsWithAssertions, rows.Count - rowsWithAssertions, environments, rows);
     }
 
     private static int FindHeader(IXLWorksheet sheet, string name)

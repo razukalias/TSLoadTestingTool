@@ -29,23 +29,24 @@ public sealed class TestRunner
         _pipeline = new ExecutionPipeline(new StepExecutorRegistry([new GraphQlStepExecutor(_client), new GraphQlStepExecutor(_client, flattenCaseQl: true), new FileStepExecutor(), new SqlStepExecutor(_features), new CSharpScriptStepExecutor()]));
     }
 
-    public async Task RunAsync(TestcaseDefinition testcase, WorkbookModel workbook, RunResult run, CancellationToken cancellationToken, string environment = "", string executionMode = "threaded", IReadOnlySet<string>? selectedDataIds = null, int threads = 1, int iterations = 1, int threadIntervalMs = 0, int iterationIntervalMs = 0)
+    public async Task RunAsync(TestcaseDefinition testcase, WorkbookModel workbook, RunResult run, CancellationToken cancellationToken, string environment = "", string executionMode = "threaded", IReadOnlySet<string>? selectedDataIds = null, int threads = 1, int iterations = 1, int threadIntervalMs = 0, int iterationIntervalMs = 0, int maxConcurrentRows = 100, Action<TestcaseResult>? rowCompleted = null)
     {
         var dataRows = workbook.RequestData.Values.Where(r => r.TestcaseIndex == testcase.TestcaseIndex && (selectedDataIds is null || selectedDataIds.Contains(r.DataId))).OrderBy(r => r.DataId, StringComparer.OrdinalIgnoreCase).ToList();
         _logger.Section($"TESTCASE {testcase.TestcaseIndex}: {testcase.Testcase} - START");
         _logger.Info($"Testcase summary | dataRows={dataRows.Count} | steps={testcase.Steps.Count} | environment={environment}");
         var sequential = executionMode.Equals("loop", StringComparison.OrdinalIgnoreCase) || executionMode.Equals("sequential", StringComparison.OrdinalIgnoreCase);
-        var workerCount = sequential ? 1 : Math.Max(1, threads);
+        var workerCount = sequential ? 1 : Math.Clamp(maxConcurrentRows, 1, 100);
         var iterationCount = Math.Max(1, iterations);
         var workerInterval = Math.Max(0, threadIntervalMs);
         var iterationInterval = Math.Max(0, iterationIntervalMs);
-        _logger.Info($"Execution mode: {(sequential ? "sequential loop" : "threaded")}; workers={workerCount}; iterations={iterationCount}; threadIntervalMs={workerInterval}; iterationIntervalMs={iterationInterval}");
-        var tasks = Enumerable.Range(1, workerCount).Select(async threadId =>
+        _logger.Info($"Execution mode: {(sequential ? "sequential loop" : "threaded rows")}; maxConcurrentRows={workerCount}; configuredThreads={Math.Max(1, threads)}; iterations={iterationCount}; threadIntervalMs={workerInterval}; iterationIntervalMs={iterationInterval}");
+        var nextWorker = 0;
+        await Parallel.ForEachAsync(dataRows, new ParallelOptions { MaxDegreeOfParallelism = workerCount, CancellationToken = cancellationToken }, async (data, token) =>
         {
-            if (threadId > 1 && workerInterval > 0) await Task.Delay((threadId - 1) * workerInterval, cancellationToken);
-            foreach (var data in dataRows)
             for (var iteration = 1; iteration <= iterationCount; iteration++)
             {
+                var threadId = (Interlocked.Increment(ref nextWorker) - 1) % workerCount + 1;
+                if (threadId > 1 && workerInterval > 0) await Task.Delay((threadId - 1) * workerInterval, token);
                 _logger.Section($"DATA ROW {data.DataId} | thread={threadId} | iteration={iteration}");
                 var testcaseResult = new TestcaseResult { RunId = run.RunId, TestcaseIndex = testcase.TestcaseIndex, ExcelRowNumber = data.ExcelRowNumber, TestcaseRowNumber = data.TestcaseRowNumber, Testcase = testcase.Testcase, DataId = data.DataId, Thread = threadId, Iteration = iteration, Environment = environment, StartedAt = DateTimeOffset.Now };
                 var correlation = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); var correlationSources = new Dictionary<string, CorrelationRecord>(StringComparer.OrdinalIgnoreCase); var requestReferences = data.Variables.ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase); var stepOrder = 0;
@@ -59,7 +60,7 @@ public sealed class TestRunner
                         continue;
                     }
                     if (!request.Enabled) { _logger.Info($"STEP SKIPPED | reason=disabled | step={request.StepName}"); continue; }
-                    if (request.WaitMs > 0) { _logger.Info($"Waiting {request.WaitMs} ms before dataid={data.DataId}, step {request.StepName}."); await Task.Delay(request.WaitMs, cancellationToken); }
+                    if (request.WaitMs > 0) { _logger.Info($"Waiting {request.WaitMs} ms before dataid={data.DataId}, step {request.StepName}."); await Task.Delay(request.WaitMs, token); }
                     Dictionary<string, string> variables;
                     IReadOnlySet<string> redactedVariables;
                     try
@@ -77,7 +78,7 @@ public sealed class TestRunner
                             variables[pair.Key] = pair.Value;
                         }
                         foreach (var variable in variables) executionContext.Set(variable.Key, variable.Value, VariableScope.Iteration);
-                        foreach (var key in variables.Keys.ToList()) variables[key] = await ResolveDynamicValueAsync(variables[key], correlation, requestReferences, executionContext, cancellationToken);
+                        foreach (var key in variables.Keys.ToList()) variables[key] = await ResolveDynamicValueAsync(variables[key], correlation, requestReferences, executionContext, token);
                     }
                     catch (RuntimeReferenceException ex)
                     {
@@ -90,16 +91,18 @@ public sealed class TestRunner
                     foreach (var variable in variables) executionContext.Set(variable.Key, variable.Value, VariableScope.Iteration);
                     foreach (var source in correlationSources.Values) if (string.IsNullOrWhiteSpace(source.UsedByStepName) || !source.UsedByStepName.Split(',', StringSplitOptions.TrimEntries).Contains(request.StepName, StringComparer.OrdinalIgnoreCase)) source.UsedByStepName = string.IsNullOrWhiteSpace(source.UsedByStepName) ? request.StepName : $"{source.UsedByStepName},{request.StepName}";
                     var definitions = workbook.Assertions.GetValueOrDefault((request.TestcaseIndex, data.DataId, request.StepName)) ?? [];
-                    var result = await ExecuteRequestAsync(run, testcase, data.DataId, request, variables, redactedVariables, definitions, requestReferences, ++stepOrder, threadId, iteration, correlation, correlationSources, executionContext, cancellationToken, environment);
+                    var result = await ExecuteRequestAsync(run, testcase, data.DataId, request, variables, redactedVariables, definitions, requestReferences, ++stepOrder, threadId, iteration, correlation, correlationSources, executionContext, token, environment);
                     testcaseResult.Requests.Add(result);
                     if (result.FailureCategory.Equals("RuntimeReference", StringComparison.OrdinalIgnoreCase)) { _logger.Warn($"Stopping current data row after missing runtime reference. dataid={data.DataId}; step={request.StepName}; iteration={iteration}; remaining rows will continue."); break; }
                     if (result.Result == "FAIL" && request.StopOnFailure) { _logger.Warn($"Stopping testcase sequence after failed dataid={data.DataId}, step {request.StepName} because stopOnFailure=true."); break; }
                 }
-                testcaseResult.EndedAt = DateTimeOffset.Now; lock (run.Testcases) run.Testcases.Add(testcaseResult);
-                if (iteration < iterationCount && iterationInterval > 0) await Task.Delay(iterationInterval, cancellationToken);
+                testcaseResult.EndedAt = DateTimeOffset.Now;
+                lock (run.Testcases) run.Testcases.Add(testcaseResult);
+                rowCompleted?.Invoke(testcaseResult);
+                if (iteration < iterationCount && iterationInterval > 0) await Task.Delay(iterationInterval, token);
             }
         });
-        await Task.WhenAll(tasks); _logger.Section($"TESTCASE {testcase.TestcaseIndex}: {testcase.Testcase} - END");
+        _logger.Section($"TESTCASE {testcase.TestcaseIndex}: {testcase.Testcase} - END");
     }
 
     private static Dictionary<string, string> StepVariables(RequestDataRow data, string stepName)
