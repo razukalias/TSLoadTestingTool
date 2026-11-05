@@ -19,6 +19,8 @@ public sealed class StepDetailsWindow : Window
     private readonly TextBlock _matchCount = DashboardStyle.Text("", 11, false, DashboardStyle.Muted);
     private readonly TabControl _tabs = new();
     private readonly Dictionary<string, string> _sections = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SelectableTextBlock> _viewers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ScrollViewer> _scrollers = new(StringComparer.OrdinalIgnoreCase);
     private double _fontSize = 12;
 
     public StepDetailsWindow(string logPath, string testcase, string dataId, string stepName, string environment, string stepType)
@@ -130,22 +132,36 @@ public sealed class StepDetailsWindow : Window
         if (_tabs.SelectedItem is not TabItem tab) return;
         var name = tab.Header?.ToString() ?? "Overview";
         var value = _sections.GetValueOrDefault(name, "No data recorded.");
-        var box = new SelectableTextBlock
+        if (!_viewers.TryGetValue(name, out var box))
         {
-            SelectionBrush = DashboardStyle.Brush("#F6A623"),
-            SelectionForegroundBrush = Brushes.Black,
-            TextWrapping = TextWrapping.NoWrap,
-            FontFamily = "Consolas",
-            FontSize = _fontSize,
-            Padding = new Thickness(8),
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            VerticalAlignment = VerticalAlignment.Stretch,
-            MinHeight = 420,
-            Background = Brushes.Transparent
-        };
+            box = new SelectableTextBlock
+            {
+                SelectionBrush = DashboardStyle.Brush("#F6A623"),
+                SelectionForegroundBrush = Brushes.Black,
+                TextWrapping = TextWrapping.NoWrap,
+                FontFamily = "Consolas",
+                FontSize = _fontSize,
+                Padding = new Thickness(8),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                MinHeight = 420,
+                Background = Brushes.Transparent
+            };
+            _viewers[name] = box;
+            var scroll = new ScrollViewer { HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = box };
+            _scrollers[name] = scroll;
+            tab.Content = scroll;
+            ToolTip.SetTip(box, "Text is selectable. Drag with the mouse or press Ctrl+A / Ctrl+C.");
+        }
+        var selectionStart = box.SelectionStart;
+        var selectionEnd = box.SelectionEnd;
+        var scrollOffset = _scrollers.TryGetValue(name, out var existingScroll) ? existingScroll.Offset : Vector.Zero;
+        box.FontSize = _fontSize;
+        box.Inlines.Clear();
         foreach (var inline in BuildHighlightedInlines(value, _search.Text)) box.Inlines.Add(inline);
-        ToolTip.SetTip(box, "Text is selectable. Drag with the mouse or press Ctrl+A / Ctrl+C.");
-        tab.Content = new ScrollViewer { HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = box };
+        box.SelectionStart = Math.Clamp(selectionStart, 0, value.Length);
+        box.SelectionEnd = Math.Clamp(selectionEnd, 0, value.Length);
+        if (_scrollers.TryGetValue(name, out var scrollViewer)) scrollViewer.Offset = scrollOffset;
         var count = CountMatches(value, _search.Text);
         _matchCount.Text = count == 0 ? "No matches" : $"{count:N0} matching occurrence(s)";
     }
