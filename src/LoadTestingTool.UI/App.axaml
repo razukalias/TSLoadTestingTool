@@ -4,6 +4,7 @@
              x:Class="LoadTestingTool.UI.App" RequestedThemeVariant="Dark">
   <Application.Styles>
     <fluent:FluentTheme />
+    <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml" />
     <Style Selector="Window">
       <Setter Property="FontFamily" Value="Inter, Segoe UI, sans-serif" />
       <Setter Property="FontSize" Value="13" />

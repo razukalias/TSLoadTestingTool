@@ -4,6 +4,8 @@ using System.Xml.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
+using Avalonia.Media;
+using AvaloniaEdit;
 
 namespace LoadTestingTool.UI;
 
@@ -12,7 +14,7 @@ internal sealed class TemplateEditorWindow : Window
     private readonly string _templatesFolder;
     private readonly TextBox _path;
     private readonly ComboBox _format;
-    private readonly TextBox _content;
+    private readonly TextEditor _content;
     private readonly TextBox _search = new() { Watermark = "Highlight terms: term1 & term2…", Width = 360 };
     private readonly TextBlock _matchCount = DashboardStyle.Text("", 11, false, DashboardStyle.Muted);
     private readonly TextBlock _status = DashboardStyle.Text("", 11, false, DashboardStyle.Muted);
@@ -28,9 +30,7 @@ internal sealed class TemplateEditorWindow : Window
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         _path = new TextBox { Text = sourcePath, Watermark = "relative path inside Templates", MinWidth = 320 };
         _format = new ComboBox { ItemsSource = new[] { "JSON", "XML", "SQL", "GraphQL", "C# script", "Plain text" }, SelectedIndex = FormatIndex(sourcePath, stepType), Width = 150 };
-        _content = new TextBox { AcceptsReturn = true, TextWrapping = Avalonia.Media.TextWrapping.NoWrap, FontFamily = new Avalonia.Media.FontFamily("Consolas"), FontSize = _fontSize, MinHeight = 360, HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Stretch };
-        ScrollViewer.SetHorizontalScrollBarVisibility(_content, Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
-        ScrollViewer.SetVerticalScrollBarVisibility(_content, Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
+        _content = new TextEditor { IsReadOnly = false, ShowLineNumbers = true, WordWrap = false, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto, VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto, FontFamily = new FontFamily("Consolas"), FontSize = _fontSize, MinHeight = 360, HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Stretch, SearchResultsBrush = DashboardStyle.Brush("#F6A623") };
         _search.TextChanged += (_, _) => UpdateMatchCount();
         LoadFile();
         var validate = DashboardStyle.Action("Validate", Validate, "primary");
@@ -41,12 +41,11 @@ internal sealed class TemplateEditorWindow : Window
         meta.Children.Add(DashboardStyle.Text("File", 12, false, DashboardStyle.Muted)); Grid.SetColumn(_path, 1); meta.Children.Add(_path); Grid.SetColumn(_format, 2); meta.Children.Add(_format);
         var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { help, validate, save, close } };
         var textTools = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _search, DashboardStyle.Action("Find next", FindNext), DashboardStyle.Action("−", () => ChangeFontSize(-1)), DashboardStyle.Action("+", () => ChangeFontSize(1)), DashboardStyle.Text("Text size", 11, false, DashboardStyle.Muted), _matchCount } };
-        var editorScroll = new ScrollViewer { HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto, VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto, Content = _content };
         var body = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,Auto,*,Auto") };
         body.Children.Add(DashboardStyle.Text($"Edit {stepType} template", 19, true));
         Grid.SetRow(textTools, 1); body.Children.Add(textTools);
         Grid.SetRow(meta, 2); body.Children.Add(meta);
-        Grid.SetRow(editorScroll, 3); body.Children.Add(editorScroll);
+        Grid.SetRow(_content, 3); body.Children.Add(_content);
         Grid.SetRow(_status, 4); body.Children.Add(_status);
         var shell = new DockPanel { LastChildFill = true };
         DockPanel.SetDock(actions, Dock.Top); shell.Children.Add(actions); shell.Children.Add(body);
@@ -96,13 +95,13 @@ internal sealed class TemplateEditorWindow : Window
         var text = _content.Text ?? string.Empty;
         var terms = (_search.Text ?? string.Empty).Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (terms.Count == 0) { _matchCount.Text = "Enter one or more terms."; return; }
-        var start = Math.Clamp(_content.SelectionEnd, 0, text.Length);
+        var start = Math.Clamp(_content.SelectionStart + _content.SelectionLength, 0, text.Length);
         var matches = terms.Select(term => (Index: text.IndexOf(term, start, StringComparison.OrdinalIgnoreCase), Term: term)).Where(x => x.Index >= 0).OrderBy(x => x.Index).ToList();
         if (matches.Count == 0) matches = terms.Select(term => (Index: text.IndexOf(term, 0, StringComparison.OrdinalIgnoreCase), Term: term)).Where(x => x.Index >= 0).OrderBy(x => x.Index).ToList();
         if (matches.Count == 0) { _matchCount.Text = "No matches"; return; }
         var match = matches[0];
         _content.SelectionStart = match.Index;
-        _content.SelectionEnd = match.Index + match.Term.Length;
+        _content.SelectionLength = match.Term.Length;
         _content.Focus();
         UpdateMatchCount();
     }
@@ -110,7 +109,9 @@ internal sealed class TemplateEditorWindow : Window
     private void UpdateMatchCount()
     {
         var text = _content?.Text ?? string.Empty;
-        var terms = (_search?.Text ?? string.Empty).Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase);
+        var terms = (_search?.Text ?? string.Empty).Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        _content.SearchPanel.UseRegex = true;
+        _content.SearchPanel.SearchPattern = terms.Count == 0 ? string.Empty : string.Join("|", terms.Select(Regex.Escape));
         var count = terms.Sum(term => CountOccurrences(text, term));
         _matchCount.Text = count == 0 ? (string.IsNullOrWhiteSpace(_search?.Text) ? "" : "No matches") : $"{count:N0} matching occurrence(s)";
     }

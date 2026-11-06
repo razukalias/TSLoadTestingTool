@@ -4,6 +4,8 @@ using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
+using AvaloniaEdit;
+using System.Text.RegularExpressions;
 
 namespace LoadTestingTool.UI;
 
@@ -19,8 +21,7 @@ public sealed class StepDetailsWindow : Window
     private readonly TextBlock _matchCount = DashboardStyle.Text("", 11, false, DashboardStyle.Muted);
     private readonly TabControl _tabs = new();
     private readonly Dictionary<string, string> _sections = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, SelectableTextBlock> _viewers = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, ScrollViewer> _scrollers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, TextEditor> _viewers = new(StringComparer.OrdinalIgnoreCase);
     private double _fontSize = 12;
 
     public StepDetailsWindow(string logPath, string testcase, string dataId, string stepName, string environment, string stepType)
@@ -134,34 +135,31 @@ public sealed class StepDetailsWindow : Window
         var value = _sections.GetValueOrDefault(name, "No data recorded.");
         if (!_viewers.TryGetValue(name, out var box))
         {
-            box = new SelectableTextBlock
+            box = new TextEditor
             {
-                SelectionBrush = DashboardStyle.Brush("#F6A623"),
-                SelectionForegroundBrush = Brushes.Black,
-                TextWrapping = TextWrapping.NoWrap,
-                FontFamily = "Consolas",
+                IsReadOnly = true,
+                ShowLineNumbers = false,
+                WordWrap = false,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                FontFamily = new FontFamily("Consolas"),
                 FontSize = _fontSize,
                 Padding = new Thickness(8),
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Stretch,
                 MinHeight = 420,
-                Background = Brushes.Transparent
+                Background = Brushes.Transparent,
+                SearchResultsBrush = DashboardStyle.Brush("#F6A623")
             };
             _viewers[name] = box;
-            var scroll = new ScrollViewer { HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = box };
-            _scrollers[name] = scroll;
-            tab.Content = scroll;
+            box.Text = value;
+            tab.Content = box;
             ToolTip.SetTip(box, "Text is selectable. Drag with the mouse or press Ctrl+A / Ctrl+C.");
         }
-        var selectionStart = box.SelectionStart;
-        var selectionEnd = box.SelectionEnd;
-        var scrollOffset = _scrollers.TryGetValue(name, out var existingScroll) ? existingScroll.Offset : Vector.Zero;
         box.FontSize = _fontSize;
-        box.Inlines.Clear();
-        foreach (var inline in BuildHighlightedInlines(value, _search.Text)) box.Inlines.Add(inline);
-        box.SelectionStart = Math.Clamp(selectionStart, 0, value.Length);
-        box.SelectionEnd = Math.Clamp(selectionEnd, 0, value.Length);
-        if (_scrollers.TryGetValue(name, out var scrollViewer)) scrollViewer.Offset = scrollOffset;
+        var terms = (_search.Text ?? string.Empty).Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        box.SearchPanel.UseRegex = true;
+        box.SearchPanel.SearchPattern = terms.Count == 0 ? string.Empty : string.Join("|", terms.Select(Regex.Escape));
         var count = CountMatches(value, _search.Text);
         _matchCount.Text = count == 0 ? "No matches" : $"{count:N0} matching occurrence(s)";
     }
@@ -174,8 +172,16 @@ public sealed class StepDetailsWindow : Window
 
     private void HighlightCurrent()
     {
-        RefreshCurrent();
-        if (_tabs.SelectedItem is TabItem tab && tab.Content is ScrollViewer scroll) scroll.Offset = new Vector(0, Math.Min(scroll.Extent.Height, scroll.Offset.Y + 160));
+        if (_tabs.SelectedItem is not TabItem tab || tab.Content is not TextEditor editor) return;
+        var value = editor.Text ?? string.Empty;
+        var terms = (_search.Text ?? string.Empty).Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var start = Math.Clamp(editor.SelectionStart + editor.SelectionLength, 0, value.Length);
+        var matches = terms.Select(term => (Index: value.IndexOf(term, start, StringComparison.OrdinalIgnoreCase), Term: term)).Where(x => x.Index >= 0).OrderBy(x => x.Index).ToList();
+        if (matches.Count == 0) matches = terms.Select(term => (Index: value.IndexOf(term, 0, StringComparison.OrdinalIgnoreCase), Term: term)).Where(x => x.Index >= 0).OrderBy(x => x.Index).ToList();
+        if (matches.Count == 0) return;
+        editor.SelectionStart = matches[0].Index;
+        editor.SelectionLength = matches[0].Term.Length;
+        editor.Focus();
     }
 
     private async void CopyVisible(object? sender = null, Avalonia.Interactivity.RoutedEventArgs? args = null)
