@@ -552,7 +552,17 @@ public sealed partial class MainWindow
         _manualTestcase.SelectionChanged += (_, _) => RefreshActionManualPanel();
         _manualFilter.TextChanged += (_, _) => RefreshActionManualPanel();
         var filters = new WrapPanel { Orientation = Orientation.Horizontal, Children = { DashboardStyle.Text("Environment", 11, false, DashboardStyle.Muted), _manualEnvironment, DashboardStyle.Text("Testcase", 11, false, DashboardStyle.Muted), _manualTestcase, _manualFilter } };
-        return new DockPanel { Margin = new Thickness(12), Children = { filters, _manualItems } };
+        var actionScroll = new ScrollViewer
+        {
+            Content = _manualItems,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Margin = new Thickness(0, 12, 0, 0)
+        };
+        var panel = new Grid { RowDefinitions = new RowDefinitions("Auto,*"), Margin = new Thickness(12) };
+        panel.Children.Add(filters);
+        Grid.SetRow(actionScroll, 1); panel.Children.Add(actionScroll);
+        return panel;
     }
 
     private static Control BuildActionManualTabHeader(int pendingCount)
