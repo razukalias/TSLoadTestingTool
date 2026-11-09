@@ -86,12 +86,13 @@ public sealed class ActionManualInfo
     public string DataId { get; init; } = string.Empty;
     public string StepName { get; init; } = string.Empty;
     public string Environment { get; init; } = string.Empty;
-    public string ManualInfo { get; init; } = string.Empty;
-    public int TimeoutMinutes { get; init; }
-    public DateTimeOffset StartedAt { get; init; }
-    public string ControlFolder { get; init; } = string.Empty;
+    public string ManualInfo { get; set; } = string.Empty;
+    public int TimeoutMinutes { get; set; }
+    public DateTimeOffset StartedAt { get; set; }
+    public string ControlFolder { get; set; } = string.Empty;
     public string Status { get; set; } = "Pending";
     public string Comment { get; set; } = string.Empty;
+    public string Identity => $"{TestcaseIndex}|{Testcase}|{DataId}|{StepName}|{Environment}";
 }
 
 public sealed class AssertionInfo
@@ -1024,19 +1025,28 @@ public sealed partial class MainWindow : Window
         if (type == "actionmanual-pending")
         {
             var requestId = e.GetProperty("requestId").GetString() ?? "";
-            item.ManualActions.RemoveAll(x => x.RequestId.Equals(requestId, StringComparison.OrdinalIgnoreCase));
-            item.ManualActions.Add(new ActionManualInfo
+            var environment = e.TryGetProperty("environment", out var manualEnvironment) ? manualEnvironment.GetString() ?? "" : "";
+            var testcaseIndex = e.GetProperty("testcaseIndex").GetInt32();
+            var testcase = e.GetProperty("testcase").GetString() ?? "";
+            var dataId = e.GetProperty("dataId").GetString() ?? "";
+            var stepName = e.GetProperty("stepName").GetString() ?? "";
+            var existing = item.ManualActions.FirstOrDefault(x => x.TestcaseIndex == testcaseIndex && x.Testcase.Equals(testcase, StringComparison.OrdinalIgnoreCase)
+                    && x.DataId.Equals(dataId, StringComparison.OrdinalIgnoreCase) && x.StepName.Equals(stepName, StringComparison.OrdinalIgnoreCase)
+                    && x.Environment.Equals(environment, StringComparison.OrdinalIgnoreCase));
+            var action = existing ?? new ActionManualInfo
             {
-                RequestId = requestId, TestcaseIndex = e.GetProperty("testcaseIndex").GetInt32(), Testcase = e.GetProperty("testcase").GetString() ?? "",
-                DataId = e.GetProperty("dataId").GetString() ?? "", StepName = e.GetProperty("stepName").GetString() ?? "",
-                Environment = e.TryGetProperty("environment", out var manualEnvironment) ? manualEnvironment.GetString() ?? "" : "",
+                RequestId = requestId, TestcaseIndex = testcaseIndex, Testcase = testcase,
+                DataId = dataId, StepName = stepName, Environment = environment,
                 ManualInfo = e.TryGetProperty("manualInfo", out var manualInfo) ? manualInfo.GetString() ?? "" : "",
                 TimeoutMinutes = e.TryGetProperty("timeoutMinutes", out var timeoutMinutes) ? timeoutMinutes.GetInt32() : 1,
                 StartedAt = e.TryGetProperty("startedAt", out var startedAt) && startedAt.TryGetDateTimeOffset(out var parsedStartedAt) ? parsedStartedAt : DateTimeOffset.Now,
                 ControlFolder = e.TryGetProperty("controlFolder", out var controlFolder) ? controlFolder.GetString() ?? "" : ""
-            });
-            item.LastEvent = $"ACTION MANUAL PENDING: {requestId} / {item.ManualActions[^1].StepName}";
-            UiLog($"Runner event applied. type=actionmanual-pending; instance={item.Name}; requestId={requestId}; step={item.ManualActions[^1].StepName}");
+            };
+            if (existing is null) item.ManualActions.Add(action);
+            else { existing.ManualInfo = action.ManualInfo; existing.TimeoutMinutes = action.TimeoutMinutes; existing.ControlFolder = action.ControlFolder; }
+            item.ManualActions.RemoveAll(x => x != action && x.Identity.Equals(action.Identity, StringComparison.OrdinalIgnoreCase));
+            item.LastEvent = $"ACTION MANUAL PENDING: {requestId} / {action.Environment} / {action.StepName}";
+            UiLog($"Runner event applied. type=actionmanual-pending; instance={item.Name}; requestId={requestId}; environment={action.Environment}; step={action.StepName}");
             RefreshActionManualPanel();
         }
         if (type == "actionmanual-completed")

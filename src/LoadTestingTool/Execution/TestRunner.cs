@@ -110,7 +110,8 @@ public sealed class TestRunner
     private async Task<RequestResult> ExecuteActionManualAsync(RunResult run, TestcaseDefinition testcase, string dataId, RequestStep step, Dictionary<string, string> variables, int sequence, int thread, int iteration, CancellationToken cancellationToken, string environment)
     {
         var started = DateTimeOffset.Now;
-        var request = new RequestResult { RunId = run.RunId, RequestId = $"MANUAL-{Interlocked.Increment(ref _sequence):D8}", TestcaseIndex = step.TestcaseIndex, Testcase = testcase.Testcase, DataId = dataId, StepName = step.StepName, StepType = step.StepType.WireName(), Thread = thread, Iteration = iteration, SequenceOrder = sequence, StartedAt = started, EndedAt = started, Verb = step.StepType.WireName(), StepConfig = step.StepConfig, HttpStatus = 200, Environment = environment };
+        var environmentKey = string.IsNullOrWhiteSpace(environment) ? "default" : environment;
+        var request = new RequestResult { RunId = run.RunId, RequestId = $"MANUAL-{SafeManualId(environmentKey)}-{Guid.NewGuid():N}", TestcaseIndex = step.TestcaseIndex, Testcase = testcase.Testcase, DataId = dataId, StepName = step.StepName, StepType = step.StepType.WireName(), Thread = thread, Iteration = iteration, SequenceOrder = sequence, StartedAt = started, EndedAt = started, Verb = step.StepType.WireName(), StepConfig = step.StepConfig, HttpStatus = 200, Environment = environment };
         request.ManualInfo = variables.TryGetValue("manualinfo", out var info) ? Substitute(info, variables) : string.Empty;
         var timeoutMinutes = step.ManualTimeoutMinutes > 0 ? step.ManualTimeoutMinutes : Math.Max(1, step.TimeoutSeconds / 60);
         _logger.Info($"ACTION MANUAL PENDING [{request.RequestId}] testcase={testcase.TestcaseIndex}; testcaseName={testcase.Testcase}; dataid={dataId}; stepName={step.StepName}; environment={environment}; timeoutMinutes={timeoutMinutes}; manualInfo={request.ManualInfo}");
@@ -362,6 +363,9 @@ public sealed class TestRunner
         }
         _requestCompleted?.Invoke(result); return result;
     }
+    private static string SafeManualId(string value)
+        => string.Concat(value.Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '_'));
+
     private static string OptionalError(string? error) => string.IsNullOrWhiteSpace(error) ? string.Empty : $"; error={error}";
     private static string OptionalErrorLine(string? error) => string.IsNullOrWhiteSpace(error) ? string.Empty : $"\nERROR: {error}";
     private static string FormatVariables(IReadOnlyDictionary<string, string> variables, IReadOnlySet<string> redactedVariables)

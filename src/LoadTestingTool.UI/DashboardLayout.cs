@@ -470,7 +470,7 @@ public sealed partial class MainWindow
         assertionPanel.Children.Add(new ScrollViewer { Content = _assertionItems, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
         var assertionPaging = CreatePaginationBar(false);
         DockPanel.SetDock(assertionPaging, Dock.Bottom); assertionPanel.Children.Add(assertionPaging);
-        _manualTab = new TabItem { Header = "ActionManual", Content = BuildActionManualPanel() };
+        _manualTab = new TabItem { Header = BuildActionManualTabHeader(0), Content = BuildActionManualPanel() };
         _detailTabs.ItemsSource = new[]
         {
             new TabItem { Header = "Overview", Content = Scroll(_overviewPanel) },
@@ -555,6 +555,16 @@ public sealed partial class MainWindow
         return new DockPanel { Margin = new Thickness(12), Children = { filters, _manualItems } };
     }
 
+    private static Control BuildActionManualTabHeader(int pendingCount)
+    {
+        var title = DashboardStyle.Text("ActionManual", 12, true);
+        var count = DashboardStyle.Badge(pendingCount.ToString());
+        count.Background = DashboardStyle.Brush(pendingCount > 0 ? "#BFE3FF" : "#8EA5BC");
+        count.Padding = new Thickness(6, 2);
+        if (count.Child is TextBlock countText) countText.Foreground = DashboardStyle.Brush("#102033");
+        return new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { title, count } };
+    }
+
     private void RefreshActionManualPanel()
     {
         if (_manualItems is null) return;
@@ -570,7 +580,8 @@ public sealed partial class MainWindow
             .Where(x => env is null or "All environments" || (string.IsNullOrWhiteSpace(x.Environment) ? "default" : x.Environment).Equals(env, StringComparison.OrdinalIgnoreCase))
             .Where(x => tc is null or "All testcases" || x.Testcase.Equals(tc, StringComparison.OrdinalIgnoreCase))
             .Where(x => MatchesTerms($"{x.Environment} {x.Testcase} {x.DataId} {x.StepName} {x.ManualInfo}", _manualFilter.Text)).ToList();
-        _manualTab.Header = actions.Any(x => x.Status.Equals("Pending", StringComparison.OrdinalIgnoreCase)) ? $"ActionManual ({actions.Count(x => x.Status.Equals("Pending", StringComparison.OrdinalIgnoreCase))})" : "ActionManual";
+        var pendingCount = actions.Count(x => x.Status.Equals("Pending", StringComparison.OrdinalIgnoreCase));
+        _manualTab.Header = BuildActionManualTabHeader(pendingCount);
         if (visible.Count == 0) { _manualItems.Children.Add(DashboardStyle.Text(actions.Count == 0 ? "No pending manual actions." : "No actions match the current filters.", 12, false, DashboardStyle.Muted)); return; }
         foreach (var action in visible)
         {
