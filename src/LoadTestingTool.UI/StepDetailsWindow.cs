@@ -144,6 +144,7 @@ public sealed class StepDetailsWindow : Window
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 FontFamily = new FontFamily("Consolas"),
                 FontSize = _fontSize,
+                Foreground = DashboardStyle.Brush("#E3EDF9"),
                 Padding = new Thickness(8),
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Stretch,
@@ -153,15 +154,22 @@ public sealed class StepDetailsWindow : Window
             };
             _viewers[name] = box;
             box.Text = value;
+            box.AttachedToVisualTree += (_, _) => ApplySearch(box, _search.Text);
             tab.Content = box;
             ToolTip.SetTip(box, "Text is selectable. Drag with the mouse or press Ctrl+A / Ctrl+C.");
         }
         box.FontSize = _fontSize;
-        var terms = (_search.Text ?? string.Empty).Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        box.SearchPanel.UseRegex = true;
-        box.SearchPanel.SearchPattern = terms.Count == 0 ? string.Empty : string.Join("|", terms.Select(Regex.Escape));
+        ApplySearch(box, _search.Text);
         var count = CountMatches(value, _search.Text);
         _matchCount.Text = count == 0 ? "No matches" : $"{count:N0} matching occurrence(s)";
+    }
+
+    private static void ApplySearch(TextEditor editor, string? query)
+    {
+        if (editor.SearchPanel is not { } panel) return;
+        var terms = (query ?? string.Empty).Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        panel.UseRegex = true;
+        panel.SearchPattern = terms.Count == 0 ? string.Empty : string.Join("|", terms.Select(Regex.Escape));
     }
 
     private void ChangeFontSize(double delta)

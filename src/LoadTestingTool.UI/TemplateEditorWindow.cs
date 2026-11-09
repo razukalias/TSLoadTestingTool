@@ -30,7 +30,8 @@ internal sealed class TemplateEditorWindow : Window
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         _path = new TextBox { Text = sourcePath, Watermark = "relative path inside Templates", MinWidth = 320 };
         _format = new ComboBox { ItemsSource = new[] { "JSON", "XML", "SQL", "GraphQL", "C# script", "Plain text" }, SelectedIndex = FormatIndex(sourcePath, stepType), Width = 150 };
-        _content = new TextEditor { IsReadOnly = false, ShowLineNumbers = true, WordWrap = false, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto, VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto, FontFamily = new FontFamily("Consolas"), FontSize = _fontSize, MinHeight = 360, HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Stretch, SearchResultsBrush = DashboardStyle.Brush("#F6A623") };
+        _content = new TextEditor { IsReadOnly = false, ShowLineNumbers = true, WordWrap = false, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto, VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto, FontFamily = new FontFamily("Consolas"), FontSize = _fontSize, Foreground = DashboardStyle.Brush("#E3EDF9"), MinHeight = 360, HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Stretch, SearchResultsBrush = DashboardStyle.Brush("#F6A623") };
+        _content.AttachedToVisualTree += (_, _) => ApplySearch();
         _search.TextChanged += (_, _) => UpdateMatchCount();
         LoadFile();
         var validate = DashboardStyle.Action("Validate", Validate, "primary");
@@ -110,10 +111,22 @@ internal sealed class TemplateEditorWindow : Window
     {
         var text = _content?.Text ?? string.Empty;
         var terms = (_search?.Text ?? string.Empty).Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        _content.SearchPanel.UseRegex = true;
-        _content.SearchPanel.SearchPattern = terms.Count == 0 ? string.Empty : string.Join("|", terms.Select(Regex.Escape));
+        ApplySearch(terms);
         var count = terms.Sum(term => CountOccurrences(text, term));
         _matchCount.Text = count == 0 ? (string.IsNullOrWhiteSpace(_search?.Text) ? "" : "No matches") : $"{count:N0} matching occurrence(s)";
+    }
+
+    private void ApplySearch()
+    {
+        var terms = (_search.Text ?? string.Empty).Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        ApplySearch(terms);
+    }
+
+    private void ApplySearch(IReadOnlyCollection<string> terms)
+    {
+        if (_content.SearchPanel is not { } panel) return;
+        panel.UseRegex = true;
+        panel.SearchPattern = terms.Count == 0 ? string.Empty : string.Join("|", terms.Select(Regex.Escape));
     }
 
     private static int CountOccurrences(string value, string term)
