@@ -113,6 +113,8 @@ internal sealed class TemplateEditorWindow : Window
         if (_content.SearchPanel is not { } panel) return;
         panel.UseRegex = true;
         panel.SearchPattern = terms.Count == 0 ? string.Empty : string.Join("|", terms.Select(Regex.Escape));
+        panel.SetSearchResultsBrush(DashboardStyle.Brush("#F6A623"));
+        if (terms.Count > 0) panel.Open(); else panel.Close();
     }
 
     private static int CountOccurrences(string value, string term)

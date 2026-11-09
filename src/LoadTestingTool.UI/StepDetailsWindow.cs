@@ -171,6 +171,8 @@ public sealed class StepDetailsWindow : Window
         var terms = (query ?? string.Empty).Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         panel.UseRegex = true;
         panel.SearchPattern = terms.Count == 0 ? string.Empty : string.Join("|", terms.Select(Regex.Escape));
+        panel.SetSearchResultsBrush(DashboardStyle.Brush("#F6A623"));
+        if (terms.Count > 0) panel.Open(); else panel.Close();
     }
 
     private void ChangeFontSize(double delta)

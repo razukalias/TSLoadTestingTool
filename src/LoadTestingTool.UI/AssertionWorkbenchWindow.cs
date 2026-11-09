@@ -2,9 +2,12 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using ClosedXML.Excel;
+using System.Text.RegularExpressions;
 
 namespace LoadTestingTool.UI;
 
@@ -26,7 +29,11 @@ public sealed class AssertionWorkbenchWindow : Window
     private readonly TextBlock _selectionTitle = new();
     private readonly TextBlock _message = new();
     private readonly Dictionary<AssertionInfo, Draft> _drafts = new();
+    private readonly Popup _popup = new() { PlacementMode = PlacementMode.BottomEdgeAlignedLeft, IsLightDismissEnabled = false };
+    private readonly ListBox _suggestions = new() { MaxHeight = 220, MinWidth = 360 };
     private AssertionInfo? _selected;
+    private TextBox? _activeBox;
+    private bool _accepting;
 
     private sealed record Draft(string Header, string Expected);
 
@@ -40,6 +47,9 @@ public sealed class AssertionWorkbenchWindow : Window
         _failedOnly.IsCheckedChanged += (_, _) => RenderList();
         _list.SelectionChanged += (_, _) => Select(_list.SelectedItem as AssertionInfo);
         _message.Foreground = DashboardStyle.Red; _message.TextWrapping = TextWrapping.Wrap;
+        _suggestions.SelectionChanged += (_, _) => { if (!_accepting && _popup.IsOpen && _suggestions.SelectedItem is string value) AcceptSuggestion(value); };
+        _suggestions.PointerReleased += (_, _) => { if (_suggestions.SelectedItem is string value) AcceptSuggestion(value); };
+        _popup.Child = _suggestions;
         Content = BuildView(); RenderList();
     }
 
@@ -65,12 +75,19 @@ public sealed class AssertionWorkbenchWindow : Window
         detail.Children.Add(DashboardStyle.Text("Type { for assertion verbs or < for dynamic references. A cell-level verb overrides a header-level verb.", 11, false, DashboardStyle.Muted));
         detail.Children.Add(_message);
         _header.TextChanged += (_, _) => CaptureDraft(); _expected.TextChanged += (_, _) => CaptureDraft();
+        foreach (var box in new[] { _header, _expected })
+        {
+            box.GotFocus += (_, _) => { _activeBox = box; UpdateSuggestions(box); };
+            box.PointerPressed += (_, _) => _activeBox = box;
+            box.AddHandler(InputElement.KeyDownEvent, SuggestionKeyDown, RoutingStrategies.Tunnel);
+        }
         var detailCard = DashboardStyle.Card(new ScrollViewer { Content = detail, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }, new Thickness(14));
         var body = new Grid { ColumnDefinitions = new ColumnDefinitions("1.15*,1.5*"), Margin = new Thickness(0, 18, 0, 0) };
         var listCard = DashboardStyle.Card(left, new Thickness(14)); body.Children.Add(listCard); Grid.SetColumn(detailCard, 1); body.Children.Add(detailCard);
         var close = DashboardStyle.Action("Close", Close);
         var root = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), Margin = new Thickness(20) };
         root.Children.Add(header); Grid.SetRow(body, 1); root.Children.Add(body); Grid.SetRow(close, 2); close.HorizontalAlignment = HorizontalAlignment.Right; root.Children.Add(close);
+        root.Children.Add(_popup);
         return root;
     }
 
@@ -127,6 +144,40 @@ public sealed class AssertionWorkbenchWindow : Window
 
     private void ClearSelection() { _selected = null; _selectionTitle.Text = "Select an assertion field"; _header.Text = ""; _expected.Text = ""; _actual.Text = ""; _failure.Text = ""; _meaning.Text = ""; }
     private void CaptureDraft() { if (_selected is not null && _drafts.ContainsKey(_selected)) _drafts[_selected] = new Draft(_header.Text ?? "", _expected.Text ?? ""); }
+
+    private void SuggestionKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
+    {
+        if (!_popup.IsOpen) return;
+        if (e.Key == Avalonia.Input.Key.Down) { _suggestions.SelectedIndex = Math.Min(_suggestions.ItemCount - 1, _suggestions.SelectedIndex + 1); e.Handled = true; }
+        else if (e.Key == Avalonia.Input.Key.Up) { _suggestions.SelectedIndex = Math.Max(0, _suggestions.SelectedIndex - 1); e.Handled = true; }
+        else if (e.Key is Avalonia.Input.Key.Enter or Avalonia.Input.Key.Tab) { if (_suggestions.SelectedItem is string value) AcceptSuggestion(value); e.Handled = true; }
+        else if (e.Key == Avalonia.Input.Key.Escape) _popup.IsOpen = false;
+    }
+
+    private void UpdateSuggestions(TextBox box)
+    {
+        if (!box.IsFocused) return;
+        _activeBox = box;
+        var text = box.Text ?? string.Empty; var caret = Math.Clamp(box.CaretIndex, 0, text.Length); var before = text[..caret];
+        var lt = before.LastIndexOf('<'); var brace = before.LastIndexOf('{'); var start = Math.Max(lt, brace); var token = start >= 0 ? before[start..] : string.Empty;
+        var headers = _drafts.Values.Select(x => CleanAutocompleteHeader(x.Header)).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Select(x => $"<From_{x}_r>");
+        var source = Verbs().Concat(new[] { "<From_", "<from_request_", "<from_response_", "<guid>", "<currentdatetime>" }).Concat(headers);
+        var values = source.Where(x => string.IsNullOrWhiteSpace(token) || x.Contains(token, StringComparison.OrdinalIgnoreCase)).Distinct().Take(80).ToList();
+        if (values.Count == 0) { _popup.IsOpen = false; return; }
+        _suggestions.ItemsSource = values; _suggestions.SelectedIndex = 0; _popup.PlacementTarget = box; _popup.IsOpen = true;
+    }
+
+    private static IEnumerable<string> Verbs() => new[] { "eq", "ne", "lt", "lte", "gt", "gte", "contains", "notcontains", "startswith", "endswith", "regex", "exists", "notexists", "empty", "notempty", "in", "size" }.Select(x => "{" + x + "}");
+
+    private void AcceptSuggestion(string value)
+    {
+        if (_activeBox is null || _accepting) return;
+        _accepting = true; var text = _activeBox.Text ?? string.Empty; var caret = Math.Clamp(_activeBox.CaretIndex, 0, text.Length); var before = text[..caret]; var start = Math.Max(before.LastIndexOf('<'), before.LastIndexOf('{')); if (start < 0) start = caret;
+        _activeBox.Text = text[..start] + value + text[caret..]; _activeBox.CaretIndex = start + value.Length; _activeBox.Focus(); _popup.IsOpen = false; _accepting = false;
+    }
+
+    private static string CleanAutocompleteHeader(string header)
+        => Regex.Replace(header ?? string.Empty, @"\{[^{}\r\n]*\}", string.Empty).Trim();
 
     private void SaveAll()
     {

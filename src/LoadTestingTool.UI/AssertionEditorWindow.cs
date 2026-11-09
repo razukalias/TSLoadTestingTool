@@ -5,6 +5,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace LoadTestingTool.UI;
 
@@ -24,6 +25,7 @@ public sealed class AssertionEditorWindow : Window
     private TextBox? _activeBox;
     private bool _accepting;
     private bool _updatingSuggestions;
+    private readonly string[] _referenceSuggestions;
     private static readonly string[] Verbs = { "eq", "ne", "lt", "lte", "gt", "gte", "contains", "notcontains", "startswith", "endswith", "regex", "exists", "notexists", "empty", "notempty", "in", "size" };
 
     public AssertionEditResult? Result { get; private set; }
@@ -33,6 +35,10 @@ public sealed class AssertionEditorWindow : Window
         Title = "Edit assertion"; Width = 820; Height = 760; MinWidth = 680; MinHeight = 600;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         _header.Text = string.IsNullOrWhiteSpace(assertion.ResponseHeader) ? $"{assertion.StepName}.{assertion.ResponsePath}" : assertion.ResponseHeader;
+        var cleanHeader = CleanAutocompleteHeader(assertion.ResponseHeader);
+        _referenceSuggestions = string.IsNullOrWhiteSpace(cleanHeader)
+            ? []
+            : [$"<From_{cleanHeader}_r>"];
         if (!string.IsNullOrWhiteSpace(assertion.AssertionVerb) && assertion.AssertionVerb != "eq")
             _header.Text = $"{{{assertion.AssertionVerb}}}{_header.Text}";
         _expected.Text = assertion.ExpectedValue;
@@ -107,9 +113,7 @@ public sealed class AssertionEditorWindow : Window
         var brace = before.LastIndexOf('{');
         var tokenStart = Math.Max(lt, brace);
         var token = tokenStart >= 0 ? before[tokenStart..] : "";
-        var source = box == _header
-            ? Verbs.Select(v => "{" + v + "}").Concat(new[] { "<from_request_", "<from_response_", "<guid>", "<currentdatetime>", "{contains}", "{exists}" })
-            : Verbs.Select(v => "{" + v + "}").Concat(new[] { "<from_request_", "<from_response_", "<guid>", "<currentdatetime>" });
+        var source = Verbs.Select(v => "{" + v + "}").Concat(new[] { "<From_", "<from_request_", "<from_response_", "<guid>", "<currentdatetime>", "{contains}", "{exists}" }).Concat(_referenceSuggestions);
         var values = source.Where(x => string.IsNullOrWhiteSpace(token) || x.Contains(token, StringComparison.OrdinalIgnoreCase)).Distinct().Take(60).ToList();
         if (values.Count == 0) { _popup.IsOpen = false; return; }
         _updatingSuggestions = true;
@@ -158,4 +162,7 @@ public sealed class AssertionEditorWindow : Window
         if (value.StartsWith("{", StringComparison.Ordinal) && value.IndexOf('}') > 1) value = value[(value.IndexOf('}') + 1)..].Trim();
         return value.Contains('.', StringComparison.Ordinal) || value.StartsWith("<from_", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static string CleanAutocompleteHeader(string header)
+        => Regex.Replace(header ?? string.Empty, @"\{[^{}\r\n]*\}", string.Empty).Trim();
 }
