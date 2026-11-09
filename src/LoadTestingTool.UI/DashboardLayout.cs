@@ -968,7 +968,7 @@ public sealed partial class MainWindow
     private void OpenInstanceConfiguration(InstanceInfo item)
     {
         if (!string.IsNullOrWhiteSpace(item.SelectionReadError)) { _details.Text = $"Cannot read run choices: {item.SelectionReadError}"; return; }
-        var form = new InstanceConfigurationWindow(item, ApplyRunSelection, SaveInstanceExecutionSettings, SaveInstanceReportingSettings);
+        var form = new InstanceConfigurationWindow(item, ApplyRunSelection, SaveInstanceExecutionSettings, SaveInstanceReportingSettings, CreateTestcaseForInstance);
         form.Show(this);
     }
 

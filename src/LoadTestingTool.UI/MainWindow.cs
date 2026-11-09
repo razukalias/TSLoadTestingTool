@@ -841,6 +841,92 @@ public sealed partial class MainWindow : Window
         catch (Exception ex) { SetStatusForInstance($"Could not add step: {ex.Message}", true); }
     }
 
+    private void CreateTestcaseForInstance(InstanceInfo item, TestcaseWizardDraft draft)
+    {
+        try
+        {
+            using var workbook = new XLWorkbook(item.WorkbookPath);
+            var config = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("config", StringComparison.OrdinalIgnoreCase)) ?? workbook.AddWorksheet("config");
+            var configHeaders = EnsureHeaders(config, new[] { "testcaseindex", "testcase", "stepname", "steptype", "stage", "enabled", "timeout", "manualtimeoutminutes", "wait", "targeturl", "verb", "templetsource", "contenttype", "expectedstatus", "assert", "ignoreempty", "assertonlyresponse", "stoponfailure", "stepconfig" });
+            var existingRows = config.RowsUsed().Skip(1).Where(row => row.CellsUsed().Any(cell => !string.IsNullOrWhiteSpace(cell.GetString()))).ToList();
+            if (existingRows.Any(row => int.TryParse(row.Cell(configHeaders["testcaseindex"]).GetString(), out var index) && index == draft.TestcaseIndex))
+            {
+                SetStatusForInstance($"Testcase index {draft.TestcaseIndex} already exists in {item.Name}.", true); return;
+            }
+            if (existingRows.Any(row => row.Cell(configHeaders["testcase"]).GetString().Trim().Equals(draft.TestcaseName, StringComparison.OrdinalIgnoreCase)))
+            {
+                SetStatusForInstance($"A testcase named '{draft.TestcaseName}' already exists in {item.Name}.", true); return;
+            }
+
+            var configRow = (config.LastRowUsed()?.RowNumber() ?? 1) + 1;
+            SetCell(config, configRow, configHeaders, "testcaseindex", draft.TestcaseIndex.ToString());
+            SetCell(config, configRow, configHeaders, "testcase", draft.TestcaseName);
+            SetCell(config, configRow, configHeaders, "stepname", draft.StepName);
+            SetCell(config, configRow, configHeaders, "steptype", draft.StepType);
+            SetCell(config, configRow, configHeaders, "stage", draft.Stage);
+            SetCell(config, configRow, configHeaders, "enabled", draft.Enabled ? "true" : "false");
+            SetCell(config, configRow, configHeaders, "timeout", draft.TimeoutSeconds.ToString());
+            SetCell(config, configRow, configHeaders, "manualtimeoutminutes", "15");
+            SetCell(config, configRow, configHeaders, "wait", draft.WaitMilliseconds.ToString());
+            SetCell(config, configRow, configHeaders, "targeturl", draft.TargetUrl);
+            SetCell(config, configRow, configHeaders, "verb", draft.Verb);
+            SetCell(config, configRow, configHeaders, "templetsource", draft.TemplateSource);
+            SetCell(config, configRow, configHeaders, "contenttype", draft.ContentType);
+            SetCell(config, configRow, configHeaders, "expectedstatus", draft.ExpectedStatus);
+            SetCell(config, configRow, configHeaders, "assert", "true");
+            SetCell(config, configRow, configHeaders, "ignoreempty", "false");
+            SetCell(config, configRow, configHeaders, "assertonlyresponse", "false");
+            SetCell(config, configRow, configHeaders, "stoponfailure", "true");
+            SetCell(config, configRow, configHeaders, "stepconfig", "{}");
+
+            if (draft.CreateInitialRow)
+            {
+                var request = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("request", StringComparison.OrdinalIgnoreCase)) ?? workbook.AddWorksheet("request");
+                var requestHeaders = EnsureHeaders(request, new[] { "testcaseindex", "testcase", "dataid" });
+                if (request.RowsUsed().Skip(1).Any(row => int.TryParse(row.Cell(requestHeaders["testcaseindex"]).GetString(), out var index) && index == draft.TestcaseIndex && row.Cell(requestHeaders["dataid"]).GetString().Trim().Equals(draft.DataId, StringComparison.OrdinalIgnoreCase)))
+                {
+                    SetStatusForInstance($"Data ID '{draft.DataId}' already exists for testcase {draft.TestcaseIndex}.", true); return;
+                }
+                var requestRow = (request.LastRowUsed()?.RowNumber() ?? 1) + 1;
+                SetCell(request, requestRow, requestHeaders, "testcaseindex", draft.TestcaseIndex.ToString());
+                SetCell(request, requestRow, requestHeaders, "testcase", draft.TestcaseName);
+                SetCell(request, requestRow, requestHeaders, "dataid", draft.DataId);
+
+                var response = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("response", StringComparison.OrdinalIgnoreCase)) ?? workbook.AddWorksheet("response");
+                var responseHeaders = EnsureHeaders(response, new[] { "testcaseindex", "testcase", "dataid", "extractvariable" });
+                var responseRow = (response.LastRowUsed()?.RowNumber() ?? 1) + 1;
+                SetCell(response, responseRow, responseHeaders, "testcaseindex", draft.TestcaseIndex.ToString());
+                SetCell(response, responseRow, responseHeaders, "testcase", draft.TestcaseName);
+                SetCell(response, responseRow, responseHeaders, "dataid", draft.DataId);
+                SetCell(response, responseRow, responseHeaders, "extractvariable", "");
+            }
+
+            var backup = $"{item.WorkbookPath}.backup.{DateTime.Now:yyyyMMdd_HHmmssfff}.xlsx";
+            File.Copy(item.WorkbookPath, backup, overwrite: false);
+            workbook.Save();
+            RefreshInstances();
+            var refreshed = _instances.FirstOrDefault(x => x.FolderPath.Equals(item.FolderPath, StringComparison.OrdinalIgnoreCase));
+            if (refreshed is not null) { refreshed.Selected = true; _selectedInstance = refreshed; _instanceList.SelectedItem = refreshed; ShowDetails(refreshed); RefreshRows(); }
+            SetStatusForInstance($"Created testcase '{draft.TestcaseName}' with initial step '{draft.StepName}'. Backup created: {Path.GetFileName(backup)}");
+            if (refreshed is not null) OpenInstanceConfiguration(refreshed);
+        }
+        catch (Exception ex) { SetStatusForInstance($"Could not create testcase: {ex.Message}", true); }
+    }
+
+    private static Dictionary<string, int> EnsureHeaders(IXLWorksheet sheet, IEnumerable<string> required)
+    {
+        var headers = sheet.FirstRowUsed()?.CellsUsed().ToDictionary(cell => cell.GetString().Trim(), cell => cell.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase) ?? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var next = Math.Max(1, sheet.LastColumnUsed()?.ColumnNumber() ?? 0) + 1;
+        foreach (var name in required)
+            if (!headers.ContainsKey(name)) { sheet.Cell(1, next).Value = name; headers[name] = next++; }
+        return headers;
+    }
+
+    private static void SetCell(IXLWorksheet sheet, int row, IReadOnlyDictionary<string, int> headers, string name, string value)
+    {
+        if (headers.TryGetValue(name, out var column)) sheet.Cell(row, column).Value = value;
+    }
+
     private void SetStatusForInstance(string message, bool error = false)
     {
         _details.Text = message; _footer.Text = message; UiLog(message);

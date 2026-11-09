@@ -12,6 +12,7 @@ public sealed class InstanceConfigurationWindow : Window
     private readonly Action<InstanceInfo, string?, string?, string?, string?, bool?, string?, bool?> _saveExecution;
     private readonly Action<InstanceInfo, RunSelectionResult> _saveSelection;
     private readonly Action<InstanceInfo, bool> _saveReporting;
+    private readonly Action<InstanceInfo, TestcaseWizardDraft> _createTestcase;
     private readonly RunSelectionEditor _selectionEditor;
     private readonly CheckBox _generateResults;
     private readonly CheckBox _internalLogging;
@@ -23,12 +24,13 @@ public sealed class InstanceConfigurationWindow : Window
     private readonly Dictionary<string, CheckBox> _historySheets = new(StringComparer.OrdinalIgnoreCase);
     private readonly TestStepConfigurationEditor _testStepsEditor;
 
-    public InstanceConfigurationWindow(InstanceInfo item, Action<InstanceInfo, RunSelectionResult> saveSelection, Action<InstanceInfo, string?, string?, string?, string?, bool?, string?, bool?> saveExecution, Action<InstanceInfo, bool> saveReporting)
+    public InstanceConfigurationWindow(InstanceInfo item, Action<InstanceInfo, RunSelectionResult> saveSelection, Action<InstanceInfo, string?, string?, string?, string?, bool?, string?, bool?> saveExecution, Action<InstanceInfo, bool> saveReporting, Action<InstanceInfo, TestcaseWizardDraft> createTestcase)
     {
         _item = item;
         _saveSelection = saveSelection;
         _saveExecution = saveExecution;
         _saveReporting = saveReporting;
+        _createTestcase = createTestcase;
         Title = $"Instance configuration — {item.Name}";
         Width = 980;
         Height = 720;
@@ -83,6 +85,15 @@ public sealed class InstanceConfigurationWindow : Window
     {
         var panel = new StackPanel { Spacing = 12, Margin = new Thickness(8) };
         panel.Children.Add(DashboardStyle.Text("Choose what runs and how the instance executes. All selection and execution settings are editable here and saved together.", 12, false, DashboardStyle.Muted));
+        var nextIndex = _item.TestcaseOptions.Select(x => x.Index).DefaultIfEmpty(0).Max() + 1;
+        var create = DashboardStyle.Action("＋ Create test case", () =>
+        {
+            var wizard = new TestcaseWizardWindow(nextIndex, draft => _createTestcase(_item, draft));
+            wizard.Closed += (_, _) => { if (wizard.Saved) Close(); };
+            wizard.Show(this);
+        }, "primary");
+        ToolTip.SetTip(create, "Create a new testcase directly in this instance workbook");
+        panel.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Children = { create, DashboardStyle.Text("Creates one initial step and an optional request data row.", 11, false, DashboardStyle.Muted) } });
         panel.Children.Add(_selectionEditor);
         return panel;
     }
