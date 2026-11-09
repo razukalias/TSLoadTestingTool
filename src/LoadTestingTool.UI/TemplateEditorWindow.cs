@@ -31,6 +31,8 @@ internal sealed class TemplateEditorWindow : Window
         _path = new TextBox { Text = sourcePath, Watermark = "relative path inside Templates", MinWidth = 320 };
         _format = new ComboBox { ItemsSource = new[] { "JSON", "XML", "SQL", "GraphQL", "C# script", "Plain text" }, SelectedIndex = FormatIndex(sourcePath, stepType), Width = 150 };
         _content = new TextEditor { IsReadOnly = false, ShowLineNumbers = true, WordWrap = false, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto, VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto, FontFamily = new FontFamily("Consolas"), FontSize = _fontSize, Foreground = DashboardStyle.Brush("#E3EDF9"), MinHeight = 360, HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Stretch, SearchResultsBrush = DashboardStyle.Brush("#F6A623") };
+        _content.TextArea.SelectionBrush = DashboardStyle.Brush("#F6A623");
+        _content.TextArea.SelectionForeground = Brushes.Black;
         _content.AttachedToVisualTree += (_, _) => ApplySearch();
         _search.TextChanged += (_, _) => UpdateMatchCount();
         LoadFile();
@@ -41,7 +43,7 @@ internal sealed class TemplateEditorWindow : Window
         var meta = new Grid { ColumnDefinitions = new ColumnDefinitions("90,*,Auto") };
         meta.Children.Add(DashboardStyle.Text("File", 12, false, DashboardStyle.Muted)); Grid.SetColumn(_path, 1); meta.Children.Add(_path); Grid.SetColumn(_format, 2); meta.Children.Add(_format);
         var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { help, validate, save, close } };
-        var textTools = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _search, DashboardStyle.Action("Find next", FindNext), DashboardStyle.Action("−", () => ChangeFontSize(-1)), DashboardStyle.Action("+", () => ChangeFontSize(1)), DashboardStyle.Text("Text size", 11, false, DashboardStyle.Muted), _matchCount } };
+        var textTools = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _search, DashboardStyle.Action("−", () => ChangeFontSize(-1)), DashboardStyle.Action("+", () => ChangeFontSize(1)), DashboardStyle.Text("Text size", 11, false, DashboardStyle.Muted), _matchCount } };
         var body = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,Auto,*,Auto") };
         body.Children.Add(DashboardStyle.Text($"Edit {stepType} template", 19, true));
         Grid.SetRow(textTools, 1); body.Children.Add(textTools);
@@ -89,22 +91,6 @@ internal sealed class TemplateEditorWindow : Window
     {
         _fontSize = Math.Clamp(_fontSize + delta, 8, 28);
         _content.FontSize = _fontSize;
-    }
-
-    private void FindNext()
-    {
-        var text = _content.Text ?? string.Empty;
-        var terms = (_search.Text ?? string.Empty).Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        if (terms.Count == 0) { _matchCount.Text = "Enter one or more terms."; return; }
-        var start = Math.Clamp(_content.SelectionStart + _content.SelectionLength, 0, text.Length);
-        var matches = terms.Select(term => (Index: text.IndexOf(term, start, StringComparison.OrdinalIgnoreCase), Term: term)).Where(x => x.Index >= 0).OrderBy(x => x.Index).ToList();
-        if (matches.Count == 0) matches = terms.Select(term => (Index: text.IndexOf(term, 0, StringComparison.OrdinalIgnoreCase), Term: term)).Where(x => x.Index >= 0).OrderBy(x => x.Index).ToList();
-        if (matches.Count == 0) { _matchCount.Text = "No matches"; return; }
-        var match = matches[0];
-        _content.SelectionStart = match.Index;
-        _content.SelectionLength = match.Term.Length;
-        _content.Focus();
-        UpdateMatchCount();
     }
 
     private void UpdateMatchCount()

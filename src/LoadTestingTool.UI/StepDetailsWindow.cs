@@ -52,7 +52,6 @@ public sealed class StepDetailsWindow : Window
         var tools = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children =
         {
             _search,
-            DashboardStyle.Action("Find next", HighlightCurrent),
             DashboardStyle.Action("Copy visible", () => CopyVisible()),
             DashboardStyle.Action("−", () => ChangeFontSize(-1)),
             DashboardStyle.Action("+", () => ChangeFontSize(1)),
@@ -152,6 +151,8 @@ public sealed class StepDetailsWindow : Window
                 Background = Brushes.Transparent,
                 SearchResultsBrush = DashboardStyle.Brush("#F6A623")
             };
+            box.TextArea.SelectionBrush = DashboardStyle.Brush("#F6A623");
+            box.TextArea.SelectionForeground = Brushes.Black;
             _viewers[name] = box;
             box.Text = value;
             box.AttachedToVisualTree += (_, _) => ApplySearch(box, _search.Text);
@@ -176,20 +177,6 @@ public sealed class StepDetailsWindow : Window
     {
         _fontSize = Math.Clamp(_fontSize + delta, 8, 28);
         RefreshCurrent();
-    }
-
-    private void HighlightCurrent()
-    {
-        if (_tabs.SelectedItem is not TabItem tab || tab.Content is not TextEditor editor) return;
-        var value = editor.Text ?? string.Empty;
-        var terms = (_search.Text ?? string.Empty).Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var start = Math.Clamp(editor.SelectionStart + editor.SelectionLength, 0, value.Length);
-        var matches = terms.Select(term => (Index: value.IndexOf(term, start, StringComparison.OrdinalIgnoreCase), Term: term)).Where(x => x.Index >= 0).OrderBy(x => x.Index).ToList();
-        if (matches.Count == 0) matches = terms.Select(term => (Index: value.IndexOf(term, 0, StringComparison.OrdinalIgnoreCase), Term: term)).Where(x => x.Index >= 0).OrderBy(x => x.Index).ToList();
-        if (matches.Count == 0) return;
-        editor.SelectionStart = matches[0].Index;
-        editor.SelectionLength = matches[0].Term.Length;
-        editor.Focus();
     }
 
     private async void CopyVisible(object? sender = null, Avalonia.Interactivity.RoutedEventArgs? args = null)
