@@ -115,7 +115,7 @@ public sealed class TestRunner
         var timeoutMinutes = step.ManualTimeoutMinutes > 0 ? step.ManualTimeoutMinutes : Math.Max(1, step.TimeoutSeconds / 60);
         _logger.Info($"ACTION MANUAL PENDING [{request.RequestId}] testcase={testcase.TestcaseIndex}; testcaseName={testcase.Testcase}; dataid={dataId}; stepName={step.StepName}; environment={environment}; timeoutMinutes={timeoutMinutes}; manualInfo={request.ManualInfo}");
         _manualPending?.Invoke(request, request.ManualInfo, timeoutMinutes);
-        if (_allowConsoleManual)
+        if (_allowConsoleManual && !Console.IsInputRedirected)
         {
             Console.WriteLine($"\nACTION MANUAL REQUIRED\nEnvironment: {environment}\nTestcase: {testcase.Testcase}\nRow: {dataId}\nStep: {step.StepName}\n\n{request.ManualInfo}\n\nEnter P for Pass or F for Fail:");
             var answer = Console.ReadLine();
