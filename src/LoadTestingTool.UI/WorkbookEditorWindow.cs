@@ -9,6 +9,7 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using ClosedXML.Excel;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 namespace LoadTestingTool.UI;
@@ -512,6 +513,8 @@ public sealed class WorkbookEditorWindow : Window
         {
             if (e.Key == Key.Space && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { UpdateSuggestions(box, true); e.Handled = true; return; }
             if (e.Key == Key.S && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { _saveWorkbook(); e.Handled = true; return; }
+            if (e.Key == Key.C && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control && HasTextSelection(box)) { _ = CopyTextSelectionAsync(box); e.Handled = true; return; }
+            if (e.Key == Key.V && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { _ = PasteTextSelectionAsync(box); e.Handled = true; return; }
             if (e.Key == Key.C && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control && (_selectedRows.Count > 0 || _selectedColumns.Count > 0)) { if (_selectedColumns.Count > 0) CopyColumns(); else CopyRows(); e.Handled = true; return; }
             if (e.Key == Key.V && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control && (_selectedRows.Count > 0 || _selectedColumns.Count > 0)) { if (_copiedColumns is not null && _selectedColumns.Count > 0) PasteColumns(); else if (_copiedRows is not null && _selectedRows.Count > 0) PasteRows(); e.Handled = true; return; }
             if (e.Key == Key.A && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { box.SelectAll(); e.Handled = true; return; }
@@ -519,6 +522,29 @@ public sealed class WorkbookEditorWindow : Window
             if ((e.Key == Key.Enter || e.Key == Key.Tab) && _suggestionPopup.IsOpen && _suggestions.SelectedItem is string value) { AcceptSuggestion(value); e.Handled = true; return; }
             if (e.Key == Key.Z && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { Undo(); e.Handled = true; }
             else if (e.Key == Key.Y && (e.KeyModifiers & KeyModifiers.Control) == KeyModifiers.Control) { Redo(); e.Handled = true; }
+        }
+
+        private static bool HasTextSelection(TextBox box) => box.SelectionStart != box.SelectionEnd;
+
+        private async Task CopyTextSelectionAsync(TextBox box)
+        {
+            var clipboard = TopLevel.GetTopLevel(box)?.Clipboard;
+            if (clipboard is null || !HasTextSelection(box)) return;
+            await clipboard.SetTextAsync(box.SelectedText ?? string.Empty);
+        }
+
+        private async Task PasteTextSelectionAsync(TextBox box)
+        {
+            var clipboard = TopLevel.GetTopLevel(box)?.Clipboard;
+            var pasted = clipboard is null ? null : await clipboard.GetTextAsync();
+            if (string.IsNullOrEmpty(pasted)) return;
+            var text = box.Text ?? string.Empty;
+            var start = Math.Clamp(Math.Min(box.SelectionStart, box.SelectionEnd), 0, text.Length);
+            var end = Math.Clamp(Math.Max(box.SelectionStart, box.SelectionEnd), start, text.Length);
+            box.Text = text[..start] + pasted + text[end..];
+            box.CaretIndex = start + pasted.Length;
+            box.SelectionStart = box.CaretIndex;
+            box.SelectionEnd = box.CaretIndex;
         }
 
         private bool HandleSelectionClipboardKey(KeyEventArgs e)
@@ -542,7 +568,11 @@ public sealed class WorkbookEditorWindow : Window
                 {
                     var parts = from[5..].Split('_'); var sheet = parts[0]; var prefix = parts.Length > 1 ? string.Join('_', parts.Skip(1)) : "";
                     if (parts.Length <= 1) suggestions.AddRange(_allHeaders.Keys.Select(x => $"<From_{x}_"));
-                    else if (_allHeaders.TryGetValue(sheet, out var headers)) suggestions.AddRange(headers.Where(x => x.Contains(prefix, StringComparison.OrdinalIgnoreCase)).Select(x => $"<From_{sheet}_{x}_r>"));
+                    else if (_allHeaders.TryGetValue(sheet, out var headers))
+                    {
+                        var cleanHeaders = headers.Select(CleanAutocompleteHeader).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase);
+                        suggestions.AddRange(cleanHeaders.Where(x => x.Contains(prefix, StringComparison.OrdinalIgnoreCase)).Select(x => $"<From_{sheet}_{x}_r>"));
+                    }
                 }
                 else suggestions.AddRange(Functions);
             }
@@ -559,6 +589,9 @@ public sealed class WorkbookEditorWindow : Window
             _activeBox.Text = value[..start] + suggestion + value[caret..]; _activeBox.CaretIndex = start + suggestion.Length; _activeBox.Focus(); CloseSuggestions(); _selectingSuggestion = false;
         }
         private void CloseSuggestions() { _suggestionPopup.IsOpen = false; }
+
+        private static string CleanAutocompleteHeader(string header)
+            => Regex.Replace(header ?? string.Empty, @"\{[^{}\r\n]*\}", string.Empty).Trim();
 
         private ContextMenu CellMenu(int row, int column) => MakeMenu(
             Menu("Select this row", () => SelectRowDirect(row, false)), Menu("Add this row", () => SelectRowDirect(row, true)),

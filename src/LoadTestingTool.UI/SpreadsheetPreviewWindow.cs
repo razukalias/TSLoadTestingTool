@@ -9,6 +9,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using ClosedXML.Excel;
 using Spreadalonia;
+using System.Text.RegularExpressions;
 
 namespace LoadTestingTool.UI;
 
@@ -395,6 +396,15 @@ public sealed class SpreadsheetPreviewWindow : Window
     private void HandleClipboardKey(Spreadsheet grid, SheetView view, KeyEventArgs e)
     {
         if ((e.KeyModifiers & KeyModifiers.Control) != KeyModifiers.Control || grid.Selection.Count == 0) return;
+        var editor = grid.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(x => x.Name == "EditingBox" && x.IsVisible && x.IsFocused);
+        if (editor is not null && e.Key == Key.C && editor.SelectionStart != editor.SelectionEnd)
+        {
+            _ = CopyTextSelectionAsync(editor); e.Handled = true; return;
+        }
+        if (editor is not null && e.Key == Key.V)
+        {
+            _ = PasteTextSelectionAsync(editor, grid, view); e.Handled = true; return;
+        }
         switch (e.Key)
         {
             case Key.C:
@@ -423,6 +433,29 @@ public sealed class SpreadsheetPreviewWindow : Window
         SyncView(view);
         Dispatcher.UIThread.Post(() => SyncView(view), DispatcherPriority.Background);
         Log($"Spreadsheet paste completed. selection={DescribeSelection(grid)}; gridCells={grid.Data?.Count ?? 0}; modelCells={view.Cells.Count}");
+    }
+
+    private async Task CopyTextSelectionAsync(TextBox editor)
+    {
+        var clipboard = TopLevel.GetTopLevel(editor)?.Clipboard;
+        if (clipboard is not null && editor.SelectionStart != editor.SelectionEnd)
+            await clipboard.SetTextAsync(editor.SelectedText ?? string.Empty);
+    }
+
+    private async Task PasteTextSelectionAsync(TextBox editor, Spreadsheet grid, SheetView view)
+    {
+        var clipboard = TopLevel.GetTopLevel(editor)?.Clipboard;
+        var pasted = clipboard is null ? null : await clipboard.GetTextAsync();
+        if (string.IsNullOrEmpty(pasted)) return;
+        var text = editor.Text ?? string.Empty;
+        var start = Math.Clamp(Math.Min(editor.SelectionStart, editor.SelectionEnd), 0, text.Length);
+        var end = Math.Clamp(Math.Max(editor.SelectionStart, editor.SelectionEnd), start, text.Length);
+        editor.Text = text[..start] + pasted + text[end..];
+        editor.CaretIndex = start + pasted.Length;
+        editor.SelectionStart = editor.CaretIndex;
+        editor.SelectionEnd = editor.CaretIndex;
+        SyncView(view);
+        Dispatcher.UIThread.Post(() => SyncView(view), DispatcherPriority.Background);
     }
 
     private void AttachEditingAutocomplete(Spreadsheet grid, SheetView view)
@@ -845,13 +878,13 @@ public sealed class SpreadsheetPreviewWindow : Window
                 else if (parts.Length == 1)
                 {
                     var source = _sheets.Values.FirstOrDefault(x => x.Name.Equals(parts[0], StringComparison.OrdinalIgnoreCase));
-                    if (source is not null) suggestions.AddRange(source.Cells.Where(x => x.Key.Row == 0).Select(x => $"<From_{source.Name}_{x.Value}_r>"));
+                    if (source is not null) suggestions.AddRange(source.Cells.Where(x => x.Key.Row == 0).Select(x => CleanAutocompleteHeader(x.Value)).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Select(x => $"<From_{source.Name}_{x}_r>"));
                 }
                 else
                 {
                     var source = _sheets.Values.FirstOrDefault(x => x.Name.Equals(parts[0], StringComparison.OrdinalIgnoreCase));
                     var prefix = string.Join('_', parts.Skip(1));
-                    if (source is not null) suggestions.AddRange(source.Cells.Where(x => x.Key.Row == 0 && x.Value.Contains(prefix, StringComparison.OrdinalIgnoreCase)).Select(x => $"<From_{source.Name}_{x.Value}_r>"));
+                    if (source is not null) suggestions.AddRange(source.Cells.Where(x => x.Key.Row == 0).Select(x => CleanAutocompleteHeader(x.Value)).Where(x => !string.IsNullOrWhiteSpace(x) && x.Contains(prefix, StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).Select(x => $"<From_{source.Name}_{x}_r>"));
                 }
             }
             else suggestions.AddRange(new[] { "<From_", "<datum>", "<currentdatum>", "<currenttime>", "<currentdatetime>", "<currenttimestamp>", "<randomnumber>", "<randomnumber:1-100>", "<guid>", "<guid:N>" });
@@ -862,6 +895,9 @@ public sealed class SpreadsheetPreviewWindow : Window
         _suggestions.ItemsSource = suggestions; _suggestions.SelectedIndex = 0;
         _suggestionSheet = view; _suggestionGrid = grid; _suggestionPopup.PlacementTarget = editor is not null ? editor : grid; _suggestionPopup.IsOpen = true;
     }
+
+    private static string CleanAutocompleteHeader(string header)
+        => Regex.Replace(header ?? string.Empty, @"\{[^{}\r\n]*\}", string.Empty).Trim();
 
     private void AcceptSuggestion(string suggestion)
     {
