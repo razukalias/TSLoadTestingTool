@@ -569,9 +569,9 @@ public sealed partial class MainWindow
     {
         var title = DashboardStyle.Text("ActionManual", 12, true);
         var count = DashboardStyle.Badge(pendingCount.ToString());
-        count.Background = DashboardStyle.Brush(pendingCount > 0 ? "#BFE3FF" : "#8EA5BC");
+        count.Background = DashboardStyle.Brush(pendingCount > 0 ? "#E05260" : "#8EA5BC");
         count.Padding = new Thickness(6, 2);
-        if (count.Child is TextBlock countText) countText.Foreground = DashboardStyle.Brush("#102033");
+        if (count.Child is TextBlock countText) countText.Foreground = DashboardStyle.Brush(pendingCount > 0 ? "#FFFFFF" : "#102033");
         return new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { title, count } };
     }
 
