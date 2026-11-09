@@ -7,6 +7,7 @@ using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using ClosedXML.Excel;
+using LoadTestingTool.Reporting;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -329,6 +330,11 @@ public sealed partial class MainWindow
     private readonly TextBlock _historyCompare = DashboardStyle.Text("Select two history files to compare.", 12, false, DashboardStyle.Muted);
     private bool _historyRefreshing;
     private readonly StackPanel _eventPanel = new() { Spacing = 3 };
+    private readonly StackPanel _manualItems = new() { Spacing = 8 };
+    private readonly ComboBox _manualEnvironment = new() { Width = 180 };
+    private readonly ComboBox _manualTestcase = new() { Width = 220 };
+    private readonly TextBox _manualFilter = new() { Width = 280, Watermark = "Filter actions: term1 & term2…" };
+    private TabItem _manualTab = null!;
     private readonly TextBox _overviewFilter = new() { Watermark = "Filter overview: term1 & term2…", Width = 260 };
     private readonly TextBox _assertionSearch = new() { Watermark = "Filter assertions: term1 & term2…", Width = 260 };
     private readonly TextBlock _selectedTitle = DashboardStyle.Text("Selected instance", 16, true);
@@ -464,9 +470,11 @@ public sealed partial class MainWindow
         assertionPanel.Children.Add(new ScrollViewer { Content = _assertionItems, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
         var assertionPaging = CreatePaginationBar(false);
         DockPanel.SetDock(assertionPaging, Dock.Bottom); assertionPanel.Children.Add(assertionPaging);
+        _manualTab = new TabItem { Header = "ActionManual", Content = BuildActionManualPanel() };
         _detailTabs.ItemsSource = new[]
         {
             new TabItem { Header = "Overview", Content = Scroll(_overviewPanel) },
+            _manualTab,
             new TabItem { Header = "Run Summary", Content = Scroll(_runSummaryPanel) },
             new TabItem { Header = "Assertions", Content = assertionPanel },
             new TabItem { Header = "Artifacts", Content = Scroll(_artifactPanel) }
@@ -536,6 +544,62 @@ public sealed partial class MainWindow
         _listTitle.Text = $"{(_page == "Active runs" ? "Active runs" : "Test instances")} ({visible.Count})";
         _instanceList.SelectedItem = visible.Contains(selected!) ? selected : visible.FirstOrDefault();
     }
+    private Control BuildActionManualPanel()
+    {
+        _manualEnvironment.ItemsSource = new[] { "All environments" }; _manualEnvironment.SelectedIndex = 0;
+        _manualTestcase.ItemsSource = new[] { "All testcases" }; _manualTestcase.SelectedIndex = 0;
+        _manualEnvironment.SelectionChanged += (_, _) => RefreshActionManualPanel();
+        _manualTestcase.SelectionChanged += (_, _) => RefreshActionManualPanel();
+        _manualFilter.TextChanged += (_, _) => RefreshActionManualPanel();
+        var filters = new WrapPanel { Orientation = Orientation.Horizontal, Children = { DashboardStyle.Text("Environment", 11, false, DashboardStyle.Muted), _manualEnvironment, DashboardStyle.Text("Testcase", 11, false, DashboardStyle.Muted), _manualTestcase, _manualFilter } };
+        return new DockPanel { Margin = new Thickness(12), Children = { filters, _manualItems } };
+    }
+
+    private void RefreshActionManualPanel()
+    {
+        if (_manualItems is null) return;
+        _manualItems.Children.Clear();
+        var item = _selectedInstance;
+        var actions = item?.ManualActions ?? [];
+        var environments = new[] { "All environments" }.Concat(actions.Select(x => string.IsNullOrWhiteSpace(x.Environment) ? "default" : x.Environment).Distinct(StringComparer.OrdinalIgnoreCase)).ToList();
+        var testcases = new[] { "All testcases" }.Concat(actions.Select(x => x.Testcase).Distinct(StringComparer.OrdinalIgnoreCase)).ToList();
+        if (_manualEnvironment.ItemsSource is not IEnumerable<string> existingEnvironments || !existingEnvironments.SequenceEqual(environments, StringComparer.OrdinalIgnoreCase)) { _manualEnvironment.ItemsSource = environments; _manualEnvironment.SelectedIndex = 0; }
+        if (_manualTestcase.ItemsSource is not IEnumerable<string> existingTestcases || !existingTestcases.SequenceEqual(testcases, StringComparer.OrdinalIgnoreCase)) { _manualTestcase.ItemsSource = testcases; _manualTestcase.SelectedIndex = 0; }
+        var env = _manualEnvironment.SelectedItem?.ToString(); var tc = _manualTestcase.SelectedItem?.ToString();
+        var visible = actions.Where(x => x.Status.Equals("Pending", StringComparison.OrdinalIgnoreCase))
+            .Where(x => env is null or "All environments" || (string.IsNullOrWhiteSpace(x.Environment) ? "default" : x.Environment).Equals(env, StringComparison.OrdinalIgnoreCase))
+            .Where(x => tc is null or "All testcases" || x.Testcase.Equals(tc, StringComparison.OrdinalIgnoreCase))
+            .Where(x => MatchesTerms($"{x.Environment} {x.Testcase} {x.DataId} {x.StepName} {x.ManualInfo}", _manualFilter.Text)).ToList();
+        _manualTab.Header = actions.Any(x => x.Status.Equals("Pending", StringComparison.OrdinalIgnoreCase)) ? $"ActionManual ({actions.Count(x => x.Status.Equals("Pending", StringComparison.OrdinalIgnoreCase))})" : "ActionManual";
+        if (visible.Count == 0) { _manualItems.Children.Add(DashboardStyle.Text(actions.Count == 0 ? "No pending manual actions." : "No actions match the current filters.", 12, false, DashboardStyle.Muted)); return; }
+        foreach (var action in visible)
+        {
+            var message = new TextBox { Text = action.ManualInfo, IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 70, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = DashboardStyle.Brush("#E3EDF9") };
+            var comment = new TextBox { Watermark = "Operator comment (optional)", AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 45 };
+            var pass = DashboardStyle.Action("Pass", () => RespondToManual(action, "pass", comment.Text ?? ""), "primary");
+            var fail = DashboardStyle.Action("Fail", () => RespondToManual(action, "fail", comment.Text ?? "")); fail.Classes.Add("danger");
+            var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { DashboardStyle.Badge("Pending"), DashboardStyle.Text($"{action.Environment}  /  {action.Testcase}  /  Row: {action.DataId}  /  {action.StepName}", 12, true) } };
+            var card = DashboardStyle.Card(new StackPanel { Spacing = 7, Children = { header, DashboardStyle.Text($"Timeout: {action.TimeoutMinutes} minute(s)", 11, false, DashboardStyle.Muted), message, comment, new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Children = { pass, fail } } } });
+            _manualItems.Children.Add(card);
+        }
+    }
+
+    private void RespondToManual(ActionManualInfo action, string result, string comment)
+    {
+        try
+        {
+            var item = _selectedInstance;
+            var folder = action.ControlFolder;
+            if (string.IsNullOrWhiteSpace(folder)) throw new InvalidOperationException("The runner control folder is unavailable. Wait for the pending action to refresh.");
+            ManualActionControl.WriteResponse(folder, action.RequestId, result, comment);
+            action.Status = result.Equals("pass", StringComparison.OrdinalIgnoreCase) ? "Passed" : "Failed";
+            action.Comment = comment;
+            UiLog($"ActionManual response sent. instance={item?.Name}; requestId={action.RequestId}; result={result}; commentLength={comment.Length}");
+            RefreshActionManualPanel();
+        }
+        catch (Exception ex) { _details.Text = $"Could not respond to ActionManual: {ex.Message}"; UiLog($"ActionManual response failed. error={ex}"); }
+    }
+
     private Control CreateSettingsPage()
     {
         var panel = new StackPanel { Spacing = 16 };

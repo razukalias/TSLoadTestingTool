@@ -22,10 +22,10 @@ internal sealed class RuntimeReferenceException : Exception
 
 public sealed class TestRunner
 {
-    private readonly HttpClient _client; private readonly AssertionEngine _assertions; private readonly string _templatesFolder; private readonly int _timeoutSeconds; private readonly Action<RequestResult>? _requestCompleted; private readonly InternalLogger _logger; private readonly FeatureConfig _features; private readonly ExecutionPipeline _pipeline; private int _sequence;
-    public TestRunner(HttpClient client, AssertionEngine assertions, string templatesFolder, int timeoutSeconds, Action<RequestResult>? requestCompleted = null, InternalLogger? logger = null, FeatureConfig? features = null)
+    private readonly HttpClient _client; private readonly AssertionEngine _assertions; private readonly string _templatesFolder; private readonly int _timeoutSeconds; private readonly Action<RequestResult>? _requestCompleted; private readonly Action<RequestResult, string, int>? _manualPending; private readonly string _manualControlFolder; private readonly bool _allowConsoleManual; private readonly InternalLogger _logger; private readonly FeatureConfig _features; private readonly ExecutionPipeline _pipeline; private int _sequence;
+    public TestRunner(HttpClient client, AssertionEngine assertions, string templatesFolder, int timeoutSeconds, Action<RequestResult>? requestCompleted = null, InternalLogger? logger = null, FeatureConfig? features = null, Action<RequestResult, string, int>? manualPending = null, string? manualControlFolder = null, bool allowConsoleManual = false)
     {
-        _client = client; _assertions = assertions; _templatesFolder = templatesFolder; _timeoutSeconds = Math.Max(1, timeoutSeconds); _requestCompleted = requestCompleted; _logger = logger ?? new InternalLogger(string.Empty, "disabled", "disabled", false); _features = features ?? new FeatureConfig { WorkspaceRoot = Directory.GetCurrentDirectory() };
+        _client = client; _assertions = assertions; _templatesFolder = templatesFolder; _timeoutSeconds = Math.Max(1, timeoutSeconds); _requestCompleted = requestCompleted; _manualPending = manualPending; _manualControlFolder = manualControlFolder ?? string.Empty; _allowConsoleManual = allowConsoleManual; _logger = logger ?? new InternalLogger(string.Empty, "disabled", "disabled", false); _features = features ?? new FeatureConfig { WorkspaceRoot = Directory.GetCurrentDirectory() };
         _pipeline = new ExecutionPipeline(new StepExecutorRegistry([new GraphQlStepExecutor(_client), new GraphQlStepExecutor(_client, flattenCaseQl: true), new FileStepExecutor(), new SqlStepExecutor(_features), new CSharpScriptStepExecutor()]));
     }
 
@@ -92,10 +92,12 @@ public sealed class TestRunner
                     foreach (var variable in variables) executionContext.Set(variable.Key, variable.Value, VariableScope.Iteration);
                     foreach (var source in correlationSources.Values) if (string.IsNullOrWhiteSpace(source.UsedByStepName) || !source.UsedByStepName.Split(',', StringSplitOptions.TrimEntries).Contains(request.StepName, StringComparer.OrdinalIgnoreCase)) source.UsedByStepName = string.IsNullOrWhiteSpace(source.UsedByStepName) ? request.StepName : $"{source.UsedByStepName},{request.StepName}";
                     var definitions = workbook.Assertions.GetValueOrDefault((request.TestcaseIndex, data.DataId, request.StepName)) ?? [];
-                    var result = await ExecuteRequestAsync(run, testcase, data.DataId, request, variables, redactedVariables, definitions, requestReferences, ++stepOrder, threadId, iteration, correlation, correlationSources, executionContext, token, environment);
+                    var result = request.StepType == StepType.ActionManual
+                        ? await ExecuteActionManualAsync(run, testcase, data.DataId, request, variables, ++stepOrder, threadId, iteration, token, environment)
+                        : await ExecuteRequestAsync(run, testcase, data.DataId, request, variables, redactedVariables, definitions, requestReferences, ++stepOrder, threadId, iteration, correlation, correlationSources, executionContext, token, environment);
                     testcaseResult.Requests.Add(result);
                     if (result.FailureCategory.Equals("RuntimeReference", StringComparison.OrdinalIgnoreCase)) { _logger.Warn($"Stopping current data row after missing runtime reference. dataid={data.DataId}; step={request.StepName}; iteration={iteration}; remaining rows will continue."); break; }
-                    if (result.Result == "FAIL" && request.StopOnFailure) { _logger.Warn($"Stopping testcase sequence after failed dataid={data.DataId}, step {request.StepName} because stopOnFailure=true."); break; }
+                    if (result.Result == "FAIL" && (request.StopOnFailure || request.StepType == StepType.ActionManual)) { _logger.Warn($"Stopping current data row after failed dataid={data.DataId}, step {request.StepName} because {(request.StepType == StepType.ActionManual ? "ActionManual always stops immediately" : "stopOnFailure=true")}."); break; }
                 }
                 testcaseResult.EndedAt = DateTimeOffset.Now;
                 lock (run.Testcases) run.Testcases.Add(testcaseResult);
@@ -103,6 +105,51 @@ public sealed class TestRunner
                 if (sequential && iteration < iterationCount && iterationInterval > 0) await Task.Delay(iterationInterval, token);
         });
         _logger.Section($"TESTCASE {testcase.TestcaseIndex}: {testcase.Testcase} - END");
+    }
+
+    private async Task<RequestResult> ExecuteActionManualAsync(RunResult run, TestcaseDefinition testcase, string dataId, RequestStep step, Dictionary<string, string> variables, int sequence, int thread, int iteration, CancellationToken cancellationToken, string environment)
+    {
+        var started = DateTimeOffset.Now;
+        var request = new RequestResult { RunId = run.RunId, RequestId = $"MANUAL-{Interlocked.Increment(ref _sequence):D8}", TestcaseIndex = step.TestcaseIndex, Testcase = testcase.Testcase, DataId = dataId, StepName = step.StepName, StepType = step.StepType.WireName(), Thread = thread, Iteration = iteration, SequenceOrder = sequence, StartedAt = started, EndedAt = started, Verb = step.StepType.WireName(), StepConfig = step.StepConfig, HttpStatus = 200, Environment = environment };
+        request.ManualInfo = variables.TryGetValue("manualinfo", out var info) ? Substitute(info, variables) : string.Empty;
+        var timeoutMinutes = step.ManualTimeoutMinutes > 0 ? step.ManualTimeoutMinutes : Math.Max(1, step.TimeoutSeconds / 60);
+        _logger.Info($"ACTION MANUAL PENDING [{request.RequestId}] testcase={testcase.TestcaseIndex}; testcaseName={testcase.Testcase}; dataid={dataId}; stepName={step.StepName}; environment={environment}; timeoutMinutes={timeoutMinutes}; manualInfo={request.ManualInfo}");
+        _manualPending?.Invoke(request, request.ManualInfo, timeoutMinutes);
+        if (_allowConsoleManual)
+        {
+            Console.WriteLine($"\nACTION MANUAL REQUIRED\nEnvironment: {environment}\nTestcase: {testcase.Testcase}\nRow: {dataId}\nStep: {step.StepName}\n\n{request.ManualInfo}\n\nEnter P for Pass or F for Fail:");
+            var answer = Console.ReadLine();
+            request.ManualComment = "Console response";
+            request.HttpStatus = answer?.Trim().Equals("P", StringComparison.OrdinalIgnoreCase) == true ? 200 : 500;
+        }
+        else
+        {
+            var deadline = DateTimeOffset.Now.AddMinutes(timeoutMinutes);
+            var responded = false;
+            while (!cancellationToken.IsCancellationRequested && DateTimeOffset.Now < deadline)
+            {
+                if (!string.IsNullOrWhiteSpace(_manualControlFolder) && ManualActionControl.TryReadResponse(_manualControlFolder, request.RequestId, out var response))
+                {
+                    request.HttpStatus = response.Result.Equals("pass", StringComparison.OrdinalIgnoreCase) ? 200 : 500;
+                    request.ManualComment = response.Comment;
+                    responded = true;
+                    break;
+                }
+                await Task.Delay(250, cancellationToken);
+            }
+            if (!responded && DateTimeOffset.Now >= deadline)
+            {
+                request.HttpStatus = 500;
+                request.FailureCategory = "ActionManual";
+                request.ErrorMessage = $"ActionManual timed out after {timeoutMinutes} minute(s).";
+            }
+            else if (request.HttpStatus == 500 && string.IsNullOrWhiteSpace(request.ErrorMessage)) { request.FailureCategory = "ActionManual"; request.ErrorMessage = "ActionManual failed by operator."; }
+        }
+        request.EndedAt = DateTimeOffset.Now;
+        request.DurationMs = (long)(request.EndedAt - request.StartedAt).TotalMilliseconds;
+        _logger.Info($"ACTION MANUAL COMPLETED [{request.RequestId}] result={request.Result}; comment={request.ManualComment}; durationMs={request.DurationMs}{OptionalError(request.ErrorMessage)}");
+        _requestCompleted?.Invoke(request);
+        return request;
     }
 
     private static Dictionary<string, string> StepVariables(RequestDataRow data, string stepName)

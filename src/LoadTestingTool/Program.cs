@@ -195,12 +195,17 @@ internal static class Program
         var local = new RunResult { RunId = runId, Selection = selection, StartedAt = DateTimeOffset.Now, Environment = environment };
         logger.Info($"UI diagnostic correlation. uiLaunchId={uiLaunchId}; uiLaunchAt={uiLaunchAt}; runnerStartedAt={DateTimeOffset.Now:O}; processId={Environment.ProcessId}");
         processLogger.Info($"Testcase process started. Index={testcase.TestcaseIndex}; name={testcase.Testcase}; environment={environment}");
-        var runner = new TestRunner(http, new AssertionEngine(), config.TemplatesFolder, config.RequestTimeoutSeconds, events.WriteRequest, logger, new FeatureConfig
+        void WriteRequestEvent(RequestResult result)
+        {
+            events.WriteRequest(result);
+            if (result.StepType.Equals("ActionManual", StringComparison.OrdinalIgnoreCase)) events.WriteManualCompleted(result);
+        }
+        var runner = new TestRunner(http, new AssertionEngine(), config.TemplatesFolder, config.RequestTimeoutSeconds, WriteRequestEvent, logger, new FeatureConfig
         {
             WorkspaceRoot = Path.GetFullPath(config.WorkspaceRoot),
             TemplatesFolder = Path.GetFullPath(config.TemplatesFolder),
             Connections = config.Connections
-        });
+        }, events.WriteManualPending, eventFolder, string.Equals(uiLaunchId, "not-provided", StringComparison.OrdinalIgnoreCase));
         filters.TryGetValue(testcase.TestcaseIndex, out var selectedDataIds);
         try
         {

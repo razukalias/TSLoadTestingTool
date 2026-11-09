@@ -23,7 +23,7 @@ internal sealed class TestStepConfigurationEditor : UserControl
     private readonly StackPanel _steps = new() { Spacing = 5 };
     private readonly StackPanel _editor = new() { Spacing = 8 };
     private readonly TextBox _newStepName = new() { Watermark = "Step name", MinWidth = 260 };
-    private readonly ComboBox _newStepType = new() { ItemsSource = new[] { "HTTP", "GraphQL", "CaseQL", "File", "Script", "SQL" }, SelectedIndex = 0, MinWidth = 180 };
+    private readonly ComboBox _newStepType = new() { ItemsSource = new[] { "HTTP", "GraphQL", "CaseQL", "File", "Script", "SQL", "ActionManual" }, SelectedIndex = 0, MinWidth = 180 };
     private readonly TextBlock _status = DashboardStyle.Text("", 11, false, DashboardStyle.Muted);
     private readonly Dictionary<string, int> _headers = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<StepRow> _rows = [];
@@ -37,6 +37,7 @@ internal sealed class TestStepConfigurationEditor : UserControl
     private CheckBox _enabled = null!;
     private ComboBox _stage = null!;
     private TextBox _timeout = null!;
+    private TextBox _manualTimeoutMinutes = null!;
     private TextBox _wait = null!;
     private TextBox _targetUrl = null!;
     private ComboBox _verb = null!;
@@ -114,6 +115,7 @@ internal sealed class TestStepConfigurationEditor : UserControl
             var sheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("config", StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidDataException("The workbook has no config sheet.");
             var header = sheet.FirstRowUsed() ?? throw new InvalidDataException("The config sheet has no header row.");
             foreach (var cell in header.CellsUsed()) _headers[cell.GetString().Trim()] = cell.Address.ColumnNumber;
+            if (!_headers.ContainsKey("manualtimeoutminutes")) _headers["manualtimeoutminutes"] = _headers.Values.DefaultIfEmpty(0).Max() + 1;
             if (!_headers.ContainsKey("testcaseindex") || !_headers.ContainsKey("stepname")) throw new InvalidDataException("The config sheet needs testcaseindex and stepname columns.");
             var lastColumn = sheet.LastColumnUsed()?.ColumnNumber() ?? _headers.Values.DefaultIfEmpty(1).Max();
             foreach (var row in sheet.RowsUsed().Skip(1))
@@ -184,10 +186,10 @@ internal sealed class TestStepConfigurationEditor : UserControl
     {
         _selectedStep = row; _loading = true; _editor.Children.Clear();
         _stepName = new TextBox { Text = row.Get(_headers, "stepname", "NewStep") };
-        _stepType = new ComboBox { ItemsSource = new[] { "HTTP", "GraphQL", "CaseQL", "File", "Script", "SQL" }, SelectedItem = row.Get(_headers, "steptype", "HTTP") };
+        _stepType = new ComboBox { ItemsSource = new[] { "HTTP", "GraphQL", "CaseQL", "File", "Script", "SQL", "ActionManual" }, SelectedItem = row.Get(_headers, "steptype", "HTTP") };
         _enabled = new CheckBox { Content = "Enabled", IsChecked = !row.Get(_headers, "enabled", "true").Equals("false", StringComparison.OrdinalIgnoreCase) };
         _stage = new ComboBox { ItemsSource = new[] { "Setup", "Test", "Teardown" }, SelectedItem = row.Get(_headers, "stage", "Test") };
-        _timeout = new TextBox { Text = row.Get(_headers, "timeout", "30") }; _wait = new TextBox { Text = row.Get(_headers, "wait", "0") };
+        _timeout = new TextBox { Text = row.Get(_headers, "timeout", "30") }; _manualTimeoutMinutes = new TextBox { Text = row.Get(_headers, "manualtimeoutminutes", "15") }; _wait = new TextBox { Text = row.Get(_headers, "wait", "0") };
         _targetUrl = new TextBox { Text = row.Get(_headers, "targeturl") }; _verb = new ComboBox { ItemsSource = new[] { "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS" }, SelectedItem = row.Get(_headers, "verb", "POST") };
         _template = new TextBox { Text = row.Get(_headers, "templetsource") }; _contentType = new TextBox { Text = row.Get(_headers, "contenttype", "application/json"), Watermark = "application/json" };
         _expectedStatus = new TextBox { Text = row.Get(_headers, "expectedstatus") };
@@ -203,11 +205,11 @@ internal sealed class TestStepConfigurationEditor : UserControl
         _stopOnFailure = new CheckBox { Content = "Stop on failure", IsChecked = !row.Get(_headers, "stoponfailure", "true").Equals("false", StringComparison.OrdinalIgnoreCase) };
         _assertionFields = new StackPanel { Spacing = 6, Children = { DashboardStyle.Text("Assertions", 13, true), _assertEnabled, _ignoreEmpty, _assertOnlyResponse, _stopOnFailure } };
         _typeFields = new StackPanel { Spacing = 6 };
-        foreach (var control in new Control[] { _stepName, _stepType, _enabled, _stage, _timeout, _wait, _targetUrl, _verb, _template, _contentType, _expectedStatus, _graphqlSource, _graphqlInline, _graphqlOperation, _graphqlVariables, _fileAction, _filePath, _fileContent, _fileOutput, _fileJsonPath, _fileEncoding, _fileMode, _fileMaxBytes, _fileContentType, _scriptSource, _scriptInline, _sqlConnection, _sqlCommandType, _sqlSource, _sqlCommandText, _sqlProcedure, _sqlParameters, _sqlOutputs, _stepConfig, _assertEnabled, _ignoreEmpty, _assertOnlyResponse, _stopOnFailure }) control.PropertyChanged += (_, _) => { if (!_loading) UpdateRowFromForm(); };
+        foreach (var control in new Control[] { _stepName, _stepType, _enabled, _stage, _timeout, _manualTimeoutMinutes, _wait, _targetUrl, _verb, _template, _contentType, _expectedStatus, _graphqlSource, _graphqlInline, _graphqlOperation, _graphqlVariables, _fileAction, _filePath, _fileContent, _fileOutput, _fileJsonPath, _fileEncoding, _fileMode, _fileMaxBytes, _fileContentType, _scriptSource, _scriptInline, _sqlConnection, _sqlCommandType, _sqlSource, _sqlCommandText, _sqlProcedure, _sqlParameters, _sqlOutputs, _stepConfig, _assertEnabled, _ignoreEmpty, _assertOnlyResponse, _stopOnFailure }) control.PropertyChanged += (_, _) => { if (!_loading) UpdateRowFromForm(); };
         _headerFields = BuildHeaderFields(row);
         _stepType.SelectionChanged += (_, _) => { if (!_loading) { UpdateRowFromForm(); RenderTypeFields(); } };
         _editor.Children.Add(DashboardStyle.Text($"Selected step: {row.Get(_headers, "stepname", "New step")}", 15, true));
-        _editor.Children.Add(Field("Step name", _stepName)); _editor.Children.Add(Field("Step type", _stepType)); _editor.Children.Add(_enabled); _editor.Children.Add(Field("Stage", _stage)); _editor.Children.Add(Field("Timeout (seconds)", _timeout)); _editor.Children.Add(Field("Wait (milliseconds)", _wait)); _editor.Children.Add(_assertionFields); _editor.Children.Add(_typeFields);
+        _editor.Children.Add(Field("Step name", _stepName)); _editor.Children.Add(Field("Step type", _stepType)); _editor.Children.Add(_enabled); _editor.Children.Add(Field("Stage", _stage)); _editor.Children.Add(Field("Timeout (seconds)", _timeout)); _editor.Children.Add(Field("ActionManual timeout (minutes)", _manualTimeoutMinutes)); _editor.Children.Add(Field("Wait (milliseconds)", _wait)); _editor.Children.Add(_assertionFields); _editor.Children.Add(_typeFields);
         _editor.Children.Add(Field("Advanced StepConfig JSON", _stepConfig));
         RenderTypeFields();
         _loading = false;
@@ -225,6 +227,7 @@ internal sealed class TestStepConfigurationEditor : UserControl
         if (type == "File") { _typeFields.Children.Add(DashboardStyle.Text("File configuration", 13, true)); _typeFields.Children.Add(Field("Template source", _template)); _typeFields.Children.Add(Field("Action", _fileAction)); _typeFields.Children.Add(Field("Path", _filePath)); _typeFields.Children.Add(Field("Content", _fileContent)); _typeFields.Children.Add(Field("Output variable", _fileOutput)); _typeFields.Children.Add(Field("JSON path", _fileJsonPath)); _typeFields.Children.Add(Field("Encoding", _fileEncoding)); _typeFields.Children.Add(Field("Output mode", _fileMode)); _typeFields.Children.Add(Field("Maximum bytes", _fileMaxBytes)); _typeFields.Children.Add(Field("Content type", _fileContentType)); _typeFields.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Children = { DashboardStyle.Action("New / edit template", EditTemplate, "primary"), DashboardStyle.Action("Validate template", ValidateTemplate), DashboardStyle.Action("Generate File StepConfig", GenerateStepConfig) } }); }
         if (type == "Script") { _typeFields.Children.Add(DashboardStyle.Text("Script configuration", 13, true)); _typeFields.Children.Add(Field("Template source", _template)); _typeFields.Children.Add(Field("Script source", _scriptSource)); _typeFields.Children.Add(Field("Inline script", _scriptInline)); _typeFields.Children.Add(DashboardStyle.Text("Trusted scripts must be enabled in the instance Security settings.", 12, false, DashboardStyle.Muted)); _typeFields.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Children = { DashboardStyle.Action("New / edit template", EditTemplate, "primary"), DashboardStyle.Action("Validate template", ValidateTemplate), DashboardStyle.Action("Generate Script StepConfig", GenerateStepConfig) } }); }
         if (type == "SQL") { _typeFields.Children.Add(DashboardStyle.Text("SQL configuration", 13, true)); _typeFields.Children.Add(Field("Template source", _template)); _typeFields.Children.Add(Field("Connection profile", _sqlConnection)); _typeFields.Children.Add(Field("Command type", _sqlCommandType)); _typeFields.Children.Add(Field("Source", _sqlSource)); _typeFields.Children.Add(Field("Command text", _sqlCommandText)); _typeFields.Children.Add(Field("Procedure", _sqlProcedure)); _typeFields.Children.Add(Field("Parameters JSON", _sqlParameters)); _typeFields.Children.Add(Field("Outputs JSON", _sqlOutputs)); _typeFields.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Children = { DashboardStyle.Action("New / edit template", EditTemplate, "primary"), DashboardStyle.Action("Validate template", ValidateTemplate), DashboardStyle.Action("Generate SQL StepConfig", GenerateStepConfig) } }); }
+        if (type == "ActionManual") { _typeFields.Children.Add(DashboardStyle.Text("ActionManual configuration", 13, true)); _typeFields.Children.Add(DashboardStyle.Text($"The Request sheet must contain a column named '{_stepName.Text}.manualinfo'. The value is shown to the operator. The current row pauses until Pass or Fail, and a failure stops the row immediately.", 12, false, DashboardStyle.Muted)); }
     }
 
     private void LoadStepConfigFields(string raw)
@@ -290,7 +293,7 @@ internal sealed class TestStepConfigurationEditor : UserControl
     private void UpdateRowFromForm()
     {
         if (_selectedStep is null) return;
-        _selectedStep.Set(_headers, "stepname", _stepName.Text?.Trim() ?? ""); _selectedStep.Set(_headers, "steptype", _stepType.SelectedItem?.ToString() ?? "HTTP"); _selectedStep.Set(_headers, "enabled", (_enabled.IsChecked == true).ToString().ToLowerInvariant()); _selectedStep.Set(_headers, "stage", _stage.SelectedItem?.ToString() ?? "Test"); _selectedStep.Set(_headers, "timeout", _timeout.Text ?? "0"); _selectedStep.Set(_headers, "wait", _wait.Text ?? "0"); _selectedStep.Set(_headers, "targeturl", _targetUrl.Text ?? ""); _selectedStep.Set(_headers, "verb", _verb.SelectedItem?.ToString() ?? "POST"); _selectedStep.Set(_headers, "templetsource", _template.Text ?? ""); _selectedStep.Set(_headers, "contenttype", _contentType.Text ?? ""); _selectedStep.Set(_headers, "expectedstatus", _expectedStatus.Text ?? ""); _selectedStep.Set(_headers, "stepconfig", _stepConfig.Text ?? "{}"); _selectedStep.Set(_headers, "assert", (_assertEnabled.IsChecked == true).ToString().ToLowerInvariant()); _selectedStep.Set(_headers, "ignoreempty", (_ignoreEmpty.IsChecked == true).ToString().ToLowerInvariant()); _selectedStep.Set(_headers, "assertonlyresponse", (_assertOnlyResponse.IsChecked == true).ToString().ToLowerInvariant()); _selectedStep.Set(_headers, "stoponfailure", (_stopOnFailure.IsChecked == true).ToString().ToLowerInvariant());
+        _selectedStep.Set(_headers, "stepname", _stepName.Text?.Trim() ?? ""); _selectedStep.Set(_headers, "steptype", _stepType.SelectedItem?.ToString() ?? "HTTP"); _selectedStep.Set(_headers, "enabled", (_enabled.IsChecked == true).ToString().ToLowerInvariant()); _selectedStep.Set(_headers, "stage", _stage.SelectedItem?.ToString() ?? "Test"); _selectedStep.Set(_headers, "timeout", _timeout.Text ?? "0"); _selectedStep.Set(_headers, "manualtimeoutminutes", _manualTimeoutMinutes.Text ?? "15"); _selectedStep.Set(_headers, "wait", _wait.Text ?? "0"); _selectedStep.Set(_headers, "targeturl", _targetUrl.Text ?? ""); _selectedStep.Set(_headers, "verb", _verb.SelectedItem?.ToString() ?? "POST"); _selectedStep.Set(_headers, "templetsource", _template.Text ?? ""); _selectedStep.Set(_headers, "contenttype", _contentType.Text ?? ""); _selectedStep.Set(_headers, "expectedstatus", _expectedStatus.Text ?? ""); _selectedStep.Set(_headers, "stepconfig", _stepConfig.Text ?? "{}"); _selectedStep.Set(_headers, "assert", (_assertEnabled.IsChecked == true).ToString().ToLowerInvariant()); _selectedStep.Set(_headers, "ignoreempty", (_ignoreEmpty.IsChecked == true).ToString().ToLowerInvariant()); _selectedStep.Set(_headers, "assertonlyresponse", (_assertOnlyResponse.IsChecked == true).ToString().ToLowerInvariant()); _selectedStep.Set(_headers, "stoponfailure", (_stopOnFailure.IsChecked == true).ToString().ToLowerInvariant());
         foreach (var key in _headers.Keys.Where(x => x.StartsWith("header_", StringComparison.OrdinalIgnoreCase)).ToList()) _selectedStep.Set(_headers, key, "");
         foreach (var pair in _headerEditors)
         {

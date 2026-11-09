@@ -56,6 +56,7 @@ public sealed class InstanceInfo
     public string CurrentRunId { get; set; } = string.Empty;
     public List<AssertionInfo> Assertions { get; } = [];
     public List<DashboardRequest> Requests { get; } = [];
+    public List<ActionManualInfo> ManualActions { get; } = [];
     public List<string> EventMessages { get; } = [];
     public DateTimeOffset? StartedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
@@ -75,6 +76,22 @@ public sealed class InstanceInfo
         ["RuntimeReferenceErrors"] = true, ["AssertionHistory"] = true, ["Variables"] = true,
         ["CorrelationHistory"] = true, ["DataEngineRequestRows"] = true, ["DataEngineConfig"] = true
     };
+}
+
+public sealed class ActionManualInfo
+{
+    public string RequestId { get; init; } = string.Empty;
+    public int TestcaseIndex { get; init; }
+    public string Testcase { get; init; } = string.Empty;
+    public string DataId { get; init; } = string.Empty;
+    public string StepName { get; init; } = string.Empty;
+    public string Environment { get; init; } = string.Empty;
+    public string ManualInfo { get; init; } = string.Empty;
+    public int TimeoutMinutes { get; init; }
+    public DateTimeOffset StartedAt { get; init; }
+    public string ControlFolder { get; init; } = string.Empty;
+    public string Status { get; set; } = "Pending";
+    public string Comment { get; set; } = string.Empty;
 }
 
 public sealed class AssertionInfo
@@ -896,7 +913,7 @@ public sealed partial class MainWindow : Window
                 item.Process.BeginErrorReadLine();
                 UiLog($"Runner launch returned. instance={item.Name}; runId={item.CurrentRunId}; uiLaunchId={uiLaunchId}; processId={item.Process?.Id}; returnedAt={DateTimeOffset.Now:O}");
                 item.Status = "Running"; item.LastEvent = $"Started with testcases {selection}"; item.EventPosition = 0; item.EventLineIndex = 0; item.EventLinePositions.Clear(); item.Assertions.Clear();
-                item.Requests.Clear(); item.EventMessages.Clear(); item.CompletedRequests = null; item.AverageMs = null;
+                item.Requests.Clear(); item.ManualActions.Clear(); item.EventMessages.Clear(); item.CompletedRequests = null; item.AverageMs = null;
                 item.P95Ms = null; item.RequestsPerSecond = null; item.StartedAt = DateTimeOffset.Now; item.CompletedAt = null;
                 item.EventMessages.Add($"{DateTime.Now:HH:mm:ss}  RUN started / testcases {selection}");
                 UiLog($"Run state initialized. instance={item.Name}; runId={item.CurrentRunId}; testcases={selection}; mode={item.RowsExecutionMode}; environments={environments}; dataIds={item.DataIdSelection}; internalLog={_enableInternalLog.IsChecked == true}");
@@ -1004,6 +1021,31 @@ public sealed partial class MainWindow : Window
     {
         RecordDashboardEvent(item, e);
         var type = e.GetProperty("eventType").GetString();
+        if (type == "actionmanual-pending")
+        {
+            var requestId = e.GetProperty("requestId").GetString() ?? "";
+            item.ManualActions.RemoveAll(x => x.RequestId.Equals(requestId, StringComparison.OrdinalIgnoreCase));
+            item.ManualActions.Add(new ActionManualInfo
+            {
+                RequestId = requestId, TestcaseIndex = e.GetProperty("testcaseIndex").GetInt32(), Testcase = e.GetProperty("testcase").GetString() ?? "",
+                DataId = e.GetProperty("dataId").GetString() ?? "", StepName = e.GetProperty("stepName").GetString() ?? "",
+                Environment = e.TryGetProperty("environment", out var manualEnvironment) ? manualEnvironment.GetString() ?? "" : "",
+                ManualInfo = e.TryGetProperty("manualInfo", out var manualInfo) ? manualInfo.GetString() ?? "" : "",
+                TimeoutMinutes = e.TryGetProperty("timeoutMinutes", out var timeoutMinutes) ? timeoutMinutes.GetInt32() : 1,
+                StartedAt = e.TryGetProperty("startedAt", out var startedAt) && startedAt.TryGetDateTimeOffset(out var parsedStartedAt) ? parsedStartedAt : DateTimeOffset.Now,
+                ControlFolder = e.TryGetProperty("controlFolder", out var controlFolder) ? controlFolder.GetString() ?? "" : ""
+            });
+            item.LastEvent = $"ACTION MANUAL PENDING: {requestId} / {item.ManualActions[^1].StepName}";
+            UiLog($"Runner event applied. type=actionmanual-pending; instance={item.Name}; requestId={requestId}; step={item.ManualActions[^1].StepName}");
+            RefreshActionManualPanel();
+        }
+        if (type == "actionmanual-completed")
+        {
+            var requestId = e.GetProperty("requestId").GetString() ?? "";
+            var action = item.ManualActions.FirstOrDefault(x => x.RequestId.Equals(requestId, StringComparison.OrdinalIgnoreCase));
+            if (action is not null) { action.Status = e.GetProperty("result").GetString() ?? "Failed"; action.Comment = e.TryGetProperty("comment", out var comment) ? comment.GetString() ?? "" : ""; }
+            RefreshActionManualPanel();
+        }
         if (type == "request-completed")
         {
             var error = e.TryGetProperty("errorMessage", out var errorProperty) ? errorProperty.GetString() : "";

@@ -46,7 +46,7 @@ public sealed class LiveEventWriter : IDisposable
             failureCategory = request.FailureCategory,
             runtimeReference = request.RuntimeReference,
             runtimeReferenceKey = request.RuntimeReferenceKey
-            ,environment = request.Environment
+            ,environment = request.Environment, manualInfo = request.ManualInfo, manualComment = request.ManualComment
         };
         Write(message);
         foreach (var assertion in request.Assertions) Write(new
@@ -74,6 +74,29 @@ public sealed class LiveEventWriter : IDisposable
             // the request does. Use the request environment so UI filters
             // and cross-environment comparisons receive a reliable value.
             ,environment = request.Environment
+        });
+    }
+
+    public void WriteManualPending(RequestResult request, string manualInfo, int timeoutMinutes)
+    {
+        Write(new
+        {
+            eventType = "actionmanual-pending", instanceId = _instanceId, runId = request.RunId,
+            requestId = request.RequestId, testcaseIndex = request.TestcaseIndex, testcase = request.Testcase,
+            dataId = request.DataId, stepName = request.StepName, stepType = request.StepType,
+            environment = request.Environment, manualInfo, timeoutMinutes, startedAt = request.StartedAt, controlFolder = Path.GetDirectoryName(EventPath) ?? string.Empty
+        });
+    }
+
+    public void WriteManualCompleted(RequestResult request)
+    {
+        Write(new
+        {
+            eventType = "actionmanual-completed", instanceId = _instanceId, runId = request.RunId,
+            requestId = request.RequestId, testcaseIndex = request.TestcaseIndex, testcase = request.Testcase,
+            dataId = request.DataId, stepName = request.StepName, stepType = request.StepType,
+            environment = request.Environment, result = request.Result, comment = request.ManualComment,
+            manualInfo = request.ManualInfo, errorMessage = request.ErrorMessage, durationMs = request.DurationMs
         });
     }
 

@@ -5,7 +5,7 @@ using System.Text.RegularExpressions;
 
 namespace LoadTestingTool.Domain;
 
-public enum StepType { Http, GraphQL, CaseQL, Sql, File, Script }
+public enum StepType { Http, GraphQL, CaseQL, Sql, File, Script, ActionManual }
 public enum ExecutionStage { Setup, Test, Teardown }
 public enum VariableScope { Step, Iteration, VirtualUser, Testcase, Run }
 
@@ -163,6 +163,7 @@ public static class StepTypeParser
         "sql" or "sqlserver" or "sql-server" => StepType.Sql,
         "file" or "fileio" or "file-io" => StepType.File,
         "script" or "csharp" or "c#" => StepType.Script,
+        "actionmanual" or "manual" or "manualhandling" or "manual-action" => StepType.ActionManual,
         _ => throw new InvalidDataException($"Unsupported StepType '{value}'.")
     };
 }
@@ -322,6 +323,7 @@ public static class StepTypeExtensions
         StepType.Sql => "SQL",
         StepType.File => "File",
         StepType.Script => "Script",
+        StepType.ActionManual => "ActionManual",
         _ => "HTTP"
     };
 }

@@ -29,11 +29,11 @@ public sealed class WorkbookReader
             if (string.IsNullOrWhiteSpace(testcase) || string.IsNullOrWhiteSpace(stepName)) throw new InvalidDataException($"config row {row.RowNumber()} is missing testcase or stepname.");
             if ((stepType is StepType.Http or StepType.GraphQL or StepType.CaseQL) && string.IsNullOrWhiteSpace(url)) throw new InvalidDataException($"config row {row.RowNumber()} requires targetUrl for {stepType.WireName()}.");
             if (stepType == StepType.Http && string.IsNullOrWhiteSpace(template)) throw new InvalidDataException($"config row {row.RowNumber()} requires templetsource for HTTP.");
-            if (stepType != StepType.Http && string.IsNullOrWhiteSpace(Text(configHeaders, row, "stepconfig"))) throw new InvalidDataException($"config row {row.RowNumber()} requires StepConfig for {stepType.WireName()}.");
+            if (stepType != StepType.Http && stepType != StepType.ActionManual && string.IsNullOrWhiteSpace(Text(configHeaders, row, "stepconfig"))) throw new InvalidDataException($"config row {row.RowNumber()} requires StepConfig for {stepType.WireName()}.");
             steps.Add(new RequestStep
             {
                 TestcaseIndex = index, Testcase = testcase, StepName = stepName, Sequence = row.RowNumber(), TemplateSource = template, TargetUrl = url,
-                StepType = stepType, Stage = ExecutionStageParser.Parse(Text(configHeaders, row, "stage", "Test")), Enabled = Bool(configHeaders, row, "enabled", true), TimeoutSeconds = Math.Max(0, Int(configHeaders, row, "timeout", 0)), StepConfig = Compile(Text(configHeaders, row, "stepconfig", "{}"), workbook, config, compiledCellCache, row.RowNumber()),
+                StepType = stepType, Stage = ExecutionStageParser.Parse(Text(configHeaders, row, "stage", "Test")), Enabled = Bool(configHeaders, row, "enabled", true), TimeoutSeconds = Math.Max(0, Int(configHeaders, row, "timeout", 0)), ManualTimeoutMinutes = Math.Max(0, Int(configHeaders, row, "manualtimeoutminutes", 15)), StepConfig = Compile(Text(configHeaders, row, "stepconfig", "{}"), workbook, config, compiledCellCache, row.RowNumber()),
                 Verb = Text(configHeaders, row, "verb", "POST").ToUpperInvariant(), ContentType = Text(configHeaders, row, "contenttype"),
                 WaitMs = Math.Max(0, Int(configHeaders, row, "wait", 0)), ExpectedStatus = Compile(Text(configHeaders, row, "expectedstatus"), workbook, config, compiledCellCache, row.RowNumber()),
                 StopOnFailure = Bool(configHeaders, row, "stoponfailure", true), IgnoreEmpty = Bool(configHeaders, row, "ignoreempty", false),

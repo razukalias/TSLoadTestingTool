@@ -107,6 +107,7 @@ public sealed class RequestStep
     public ExecutionStage Stage { get; init; } = ExecutionStage.Test;
     public bool Enabled { get; init; } = true;
     public int TimeoutSeconds { get; init; }
+    public int ManualTimeoutMinutes { get; init; }
     public string StepConfig { get; init; } = "{}";
     public int Sequence { get; init; }
     public string TemplateSource { get; init; } = string.Empty;
@@ -290,6 +291,8 @@ public sealed class RequestResult
     public string FailureCategory { get; set; } = string.Empty;
     public string RuntimeReference { get; set; } = string.Empty;
     public string RuntimeReferenceKey { get; set; } = string.Empty;
+    public string ManualInfo { get; set; } = string.Empty;
+    public string ManualComment { get; set; } = string.Empty;
     public string Environment { get; init; } = string.Empty;
     public string Result => ErrorMessage.Length > 0 || Assertions.Any(a => a.Result == "FAIL") || (HttpStatus is < 200 or >= 300) ? "FAIL" : "PASS";
 }
