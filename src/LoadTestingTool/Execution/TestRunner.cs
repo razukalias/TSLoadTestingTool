@@ -537,28 +537,33 @@ public sealed class TestRunner
         var content = new MultipartFormDataContent(); var files = new List<string>(); var names = new List<string>();
         foreach (var part in options.Parts)
         {
-            var name = Substitute(context.Resolve(part.Name ?? string.Empty), variables).Trim();
+            var name = RenderMultipartValue(part.Name ?? string.Empty, variables, context).Trim();
             if (string.IsNullOrWhiteSpace(name)) throw new InvalidDataException($"Multipart step '{step.StepName}' contains a part without a name.");
             names.Add(name);
             if (part.Type.Equals("file", StringComparison.OrdinalIgnoreCase))
             {
-                var relative = Substitute(context.Resolve(part.Path ?? string.Empty), variables);
+                var relative = RenderMultipartValue(part.Path ?? string.Empty, variables, context);
                 var path = WorkspaceGuard.Resolve(workspaceRoot, relative);
                 if (!File.Exists(path)) throw new FileNotFoundException($"Multipart file part '{relative}' was not found.", path);
                 var info = new FileInfo(path); using var hash = SHA256.Create(); using var stream = File.OpenRead(path); var digest = Convert.ToHexString(hash.ComputeHash(stream)).ToLowerInvariant();
                 var fileContent = new StreamContent(File.OpenRead(path));
                 fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(string.IsNullOrWhiteSpace(part.ContentType) ? "application/octet-stream" : part.ContentType);
-                var fileName = string.IsNullOrWhiteSpace(part.FileName) ? info.Name : Substitute(context.Resolve(part.FileName), variables);
+                var fileName = string.IsNullOrWhiteSpace(part.FileName) ? info.Name : RenderMultipartValue(part.FileName, variables, context);
                 content.Add(fileContent, name, fileName); files.Add($"{name}:{fileName}; bytes={info.Length}; sha256={digest}; contentType={fileContent.Headers.ContentType}");
             }
             else
             {
-                var value = Substitute(context.Resolve(part.Value ?? string.Empty), variables);
+                var value = RenderMultipartValue(part.Value ?? string.Empty, variables, context);
                 content.Add(new StringContent(value, Encoding.UTF8), name);
             }
         }
         var summary = $"[multipart body omitted; parts={string.Join(", ", names)}; files={(files.Count == 0 ? "none" : string.Join(" | ", files))}]";
         return (content, summary);
+    }
+    private static string RenderMultipartValue(string value, IReadOnlyDictionary<string, string> variables, LoadTestingTool.Domain.ExecutionContext context)
+    {
+        var resolved = context.Resolve(value ?? string.Empty);
+        return TemplateRenderer.Render(resolved, "text/plain", variables);
     }
     private static string ResolveContentType(RequestStep step) => !string.IsNullOrWhiteSpace(step.ContentType) ? step.ContentType : Path.GetExtension(step.TemplateSource).TrimStart('.').ToLowerInvariant() switch { "xml" => "xml", _ => "json" };
     private static bool StatusMatches(int actual, string expected) => expected.Contains('-') ? int.TryParse(expected.Split('-')[0], out var min) && int.TryParse(expected.Split('-')[1], out var max) && actual >= min && actual <= max : expected.EndsWith("xx", StringComparison.OrdinalIgnoreCase) && int.TryParse(expected[..1], out var family) ? actual / 100 == family : int.TryParse(expected, out var exact) && actual == exact;

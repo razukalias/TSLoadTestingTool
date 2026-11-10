@@ -51,6 +51,7 @@ internal sealed class TestStepWizardWindow : Window
     private readonly StackPanel _httpFields = new() { Spacing = 6 };
     private readonly StackPanel _templateFields = new() { Spacing = 6 };
     private readonly StackPanel _typeFields = new() { Spacing = 6 };
+    private readonly MultipartPartsEditor _multipartEditor = new();
     private readonly int? _editRow;
 
     public TestStepWizardWindow(Action<WizardStepDraft> saveStep, WizardStepDraft? existing = null, string? templatesFolder = null)
@@ -62,6 +63,7 @@ internal sealed class TestStepWizardWindow : Window
         if (existing is not null) Load(existing);
         _stepType.SelectionChanged += (_, _) => UpdateTypeFields();
         _contentType.SelectionChanged += (_, _) => UpdateTypeFields();
+        _multipartEditor.Changed += (_, _) => { if (string.Equals(_contentType.SelectedItem?.ToString(), "multipart/form-data", StringComparison.OrdinalIgnoreCase)) GenerateStepConfig(); };
         _stepConfig.TextChanged += (_, _) => UpdatePreview();
         var common = new Grid { ColumnDefinitions = new ColumnDefinitions("170,*"), RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto") };
         AddRow(common, 0, "Testcase index", _testcaseIndex); AddRow(common, 1, "Testcase", _testcase); AddRow(common, 2, "Step name", _stepName); AddRow(common, 3, "Step type", _stepType); AddRow(common, 4, "Stage", _stage); AddRow(common, 5, "Timeout (seconds)", _timeout); AddRow(common, 6, "Wait (milliseconds)", _waitMs); AddRow(common, 7, "Enabled", _enabled); AddRow(common, 8, "Assertions", _assertEnabled); AddRow(common, 9, "Assert mode", _assertOnlyResponse); AddRow(common, 10, "Failure handling", _stopOnFailure);
@@ -88,7 +90,7 @@ internal sealed class TestStepWizardWindow : Window
     private static void AddRow(Grid grid, int row, string label, Control control) { grid.Children.Add(DashboardStyle.Text(label, 12, false, DashboardStyle.Muted)); Grid.SetRow(grid.Children[^1], row); grid.Children.Add(control); Grid.SetRow(control, row); Grid.SetColumn(control, 1); }
     private void Load(WizardStepDraft existing)
     {
-        Set(_testcaseIndex, existing.Get("testcaseindex")); Set(_testcase, existing.Get("testcase")); Set(_stepName, existing.Get("stepname")); Set(_timeout, existing.Get("timeout", "30")); Set(_waitMs, existing.Get("wait", "0")); Set(_targetUrl, existing.Get("targeturl")); _verb.SelectedItem = existing.Get("verb", "POST"); Set(_template, existing.Get("templetsource")); _contentType.SelectedItem = existing.Get("contenttype", "application/json"); Set(_expectedStatus, existing.Get("expectedstatus")); _assertEnabled.IsChecked = !existing.Get("assert", "true").Equals("false", StringComparison.OrdinalIgnoreCase); _assertOnlyResponse.IsChecked = existing.Get("assertonlyresponse", "false").Equals("true", StringComparison.OrdinalIgnoreCase); _stopOnFailure.IsChecked = !existing.Get("stoponfailure", "true").Equals("false", StringComparison.OrdinalIgnoreCase); _enabled.IsChecked = !existing.Get("enabled", "true").Equals("false", StringComparison.OrdinalIgnoreCase); _stage.SelectedItem = existing.Get("stage", "Test"); _stepType.SelectedItem = existing.Get("steptype", "HTTP"); _stepConfig.Text = existing.Get("stepconfig", "{}");
+        Set(_testcaseIndex, existing.Get("testcaseindex")); Set(_testcase, existing.Get("testcase")); Set(_stepName, existing.Get("stepname")); Set(_timeout, existing.Get("timeout", "30")); Set(_waitMs, existing.Get("wait", "0")); Set(_targetUrl, existing.Get("targeturl")); _verb.SelectedItem = existing.Get("verb", "POST"); Set(_template, existing.Get("templetsource")); _contentType.SelectedItem = existing.Get("contenttype", "application/json"); Set(_expectedStatus, existing.Get("expectedstatus")); _assertEnabled.IsChecked = !existing.Get("assert", "true").Equals("false", StringComparison.OrdinalIgnoreCase); _assertOnlyResponse.IsChecked = existing.Get("assertonlyresponse", "false").Equals("true", StringComparison.OrdinalIgnoreCase); _stopOnFailure.IsChecked = !existing.Get("stoponfailure", "true").Equals("false", StringComparison.OrdinalIgnoreCase); _enabled.IsChecked = !existing.Get("enabled", "true").Equals("false", StringComparison.OrdinalIgnoreCase); _stage.SelectedItem = existing.Get("stage", "Test"); _stepType.SelectedItem = existing.Get("steptype", "HTTP"); _stepConfig.Text = existing.Get("stepconfig", "{}"); try { using var document = JsonDocument.Parse(_stepConfig.Text); _multipartEditor.Load(document.RootElement); } catch { }
     }
     private static void Set(TextBox box, string value) => box.Text = value;
     private void UpdateTypeFields()
@@ -110,25 +112,19 @@ internal sealed class TestStepWizardWindow : Window
         if (type == "File") { _typeFields.Children.Add(Labeled("Action", _fileAction)); _typeFields.Children.Add(Labeled("Path", _filePath)); _typeFields.Children.Add(Labeled("Output variable", _fileOutput)); _typeFields.Children.Add(Labeled("Output mode", _fileMode)); _typeFields.Children.Add(DashboardStyle.Action("Generate File StepConfig", GenerateStepConfig)); }
         if (type == "Script") { _typeFields.Children.Add(Labeled("Script source", _scriptSource)); _typeFields.Children.Add(DashboardStyle.Action("Generate Script StepConfig", GenerateStepConfig)); }
         if (type == "SQL") { _typeFields.Children.Add(Labeled("Connection", _sqlConnection)); _typeFields.Children.Add(Labeled("Command type", _sqlCommandType)); _typeFields.Children.Add(Labeled("Query", _sqlQuery)); _typeFields.Children.Add(DashboardStyle.Action("Generate SQL StepConfig", GenerateStepConfig)); }
-        if (type == "HTTP" && string.Equals(_contentType.SelectedItem?.ToString(), "multipart/form-data", StringComparison.OrdinalIgnoreCase))
-        {
-            _typeFields.Children.Add(DashboardStyle.Text("Multipart form parts", 13, true));
-            _typeFields.Children.Add(DashboardStyle.Text("The uploaded file is sent as a multipart part. Its bytes are never written to internal logs or History; only metadata is recorded.", 11, false, DashboardStyle.Muted));
-            _typeFields.Children.Add(Labeled("Text field name", _multipartTextName)); _typeFields.Children.Add(Labeled("Text field value", _multipartTextValue));
-            _typeFields.Children.Add(Labeled("File field name", _multipartFileName)); _typeFields.Children.Add(Labeled("File path", _multipartFilePath)); _typeFields.Children.Add(Labeled("File content type", _multipartFileContentType));
-            _typeFields.Children.Add(DashboardStyle.Action("Generate multipart StepConfig", GenerateStepConfig));
-        }
+        if (type == "HTTP" && string.Equals(_contentType.SelectedItem?.ToString(), "multipart/form-data", StringComparison.OrdinalIgnoreCase)) _typeFields.Children.Add(_multipartEditor);
     }
     private void GenerateStepConfig()
     {
         var type = _stepType.SelectedItem?.ToString() ?? "HTTP";
+        if (type == "HTTP" && string.Equals(_contentType.SelectedItem?.ToString(), "multipart/form-data", StringComparison.OrdinalIgnoreCase) && !_multipartEditor.Validate(out var multipartError)) { _error.Text = multipartError; return; }
         object value = type switch
         {
             "GraphQL" => new { Query = _graphqlQuery.Text ?? "", OperationName = _graphqlOperation.Text ?? "", Variables = ParseObject(_graphqlVariables.Text) },
             "File" => new { Action = _fileAction.SelectedItem?.ToString() ?? "ReadBinary", Path = _filePath.Text ?? "", OutputVariable = _fileOutput.Text ?? "", OutputMode = _fileMode.SelectedItem?.ToString() ?? "Reference" },
             "Script" => new { Source = _scriptSource.Text ?? "" },
             "SQL" => new { Connection = _sqlConnection.Text ?? "", CommandType = _sqlCommandType.SelectedItem?.ToString() ?? "Text", Query = _sqlQuery.Text ?? "" },
-            "HTTP" when string.Equals(_contentType.SelectedItem?.ToString(), "multipart/form-data", StringComparison.OrdinalIgnoreCase) => new { Parts = new object[] { new { Name = _multipartTextName.Text ?? "", Type = "text", Value = _multipartTextValue.Text ?? "" }, new { Name = _multipartFileName.Text ?? "", Type = "file", Path = _multipartFilePath.Text ?? "", FileName = Path.GetFileName(_multipartFilePath.Text ?? ""), ContentType = _multipartFileContentType.Text ?? "application/octet-stream" } } },
+            "HTTP" when string.Equals(_contentType.SelectedItem?.ToString(), "multipart/form-data", StringComparison.OrdinalIgnoreCase) => new { Parts = _multipartEditor.BuildParts() },
             _ => new { }
         };
         _stepConfig.Text = JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = true });
