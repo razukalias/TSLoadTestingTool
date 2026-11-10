@@ -22,7 +22,7 @@ internal sealed class TestStepWizardWindow : Window
     private readonly TextBox _targetUrl = Field("https://example.test/api");
     private readonly ComboBox _verb = new() { Width = 240, ItemsSource = new[] { "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS" }, SelectedIndex = 0 };
     private readonly TextBox _template = Field("request.json");
-    private readonly ComboBox _contentType = new() { Width = 240, ItemsSource = new[] { "application/json", "application/xml", "text/plain", "application/graphql", "application/octet-stream" }, SelectedIndex = 0 };
+    private readonly ComboBox _contentType = new() { Width = 240, ItemsSource = new[] { "application/json", "application/xml", "text/plain", "application/graphql", "application/octet-stream", "multipart/form-data" }, SelectedIndex = 0 };
     private readonly TextBox _expectedStatus = Field("200");
     private readonly TextBox _graphqlQuery = Field("query Example { field }");
     private readonly TextBox _graphqlOperation = Field("Example");
@@ -34,6 +34,11 @@ internal sealed class TestStepWizardWindow : Window
     private readonly TextBox _scriptSource = Field("Scripts/setup.csx");
     private readonly TextBox _sqlConnection = Field("Default");
     private readonly TextBox _sqlQuery = Field("select 1");
+    private readonly TextBox _multipartTextName = Field("description");
+    private readonly TextBox _multipartTextValue = Field("sample upload");
+    private readonly TextBox _multipartFileName = Field("file");
+    private readonly TextBox _multipartFilePath = Field("Files/sample-upload.txt");
+    private readonly TextBox _multipartFileContentType = Field("text/plain");
     private readonly ComboBox _sqlCommandType = new() { Width = 240, ItemsSource = new[] { "Text", "StoredProcedure" }, SelectedIndex = 0 };
     private readonly TextBox _waitMs = Field("0");
     private readonly CheckBox _assertEnabled = new() { Content = "Enable assertions", IsChecked = true };
@@ -56,6 +61,7 @@ internal sealed class TestStepWizardWindow : Window
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         if (existing is not null) Load(existing);
         _stepType.SelectionChanged += (_, _) => UpdateTypeFields();
+        _contentType.SelectionChanged += (_, _) => UpdateTypeFields();
         _stepConfig.TextChanged += (_, _) => UpdatePreview();
         var common = new Grid { ColumnDefinitions = new ColumnDefinitions("170,*"), RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto") };
         AddRow(common, 0, "Testcase index", _testcaseIndex); AddRow(common, 1, "Testcase", _testcase); AddRow(common, 2, "Step name", _stepName); AddRow(common, 3, "Step type", _stepType); AddRow(common, 4, "Stage", _stage); AddRow(common, 5, "Timeout (seconds)", _timeout); AddRow(common, 6, "Wait (milliseconds)", _waitMs); AddRow(common, 7, "Enabled", _enabled); AddRow(common, 8, "Assertions", _assertEnabled); AddRow(common, 9, "Assert mode", _assertOnlyResponse); AddRow(common, 10, "Failure handling", _stopOnFailure);
@@ -104,6 +110,14 @@ internal sealed class TestStepWizardWindow : Window
         if (type == "File") { _typeFields.Children.Add(Labeled("Action", _fileAction)); _typeFields.Children.Add(Labeled("Path", _filePath)); _typeFields.Children.Add(Labeled("Output variable", _fileOutput)); _typeFields.Children.Add(Labeled("Output mode", _fileMode)); _typeFields.Children.Add(DashboardStyle.Action("Generate File StepConfig", GenerateStepConfig)); }
         if (type == "Script") { _typeFields.Children.Add(Labeled("Script source", _scriptSource)); _typeFields.Children.Add(DashboardStyle.Action("Generate Script StepConfig", GenerateStepConfig)); }
         if (type == "SQL") { _typeFields.Children.Add(Labeled("Connection", _sqlConnection)); _typeFields.Children.Add(Labeled("Command type", _sqlCommandType)); _typeFields.Children.Add(Labeled("Query", _sqlQuery)); _typeFields.Children.Add(DashboardStyle.Action("Generate SQL StepConfig", GenerateStepConfig)); }
+        if (type == "HTTP" && string.Equals(_contentType.SelectedItem?.ToString(), "multipart/form-data", StringComparison.OrdinalIgnoreCase))
+        {
+            _typeFields.Children.Add(DashboardStyle.Text("Multipart form parts", 13, true));
+            _typeFields.Children.Add(DashboardStyle.Text("The uploaded file is sent as a multipart part. Its bytes are never written to internal logs or History; only metadata is recorded.", 11, false, DashboardStyle.Muted));
+            _typeFields.Children.Add(Labeled("Text field name", _multipartTextName)); _typeFields.Children.Add(Labeled("Text field value", _multipartTextValue));
+            _typeFields.Children.Add(Labeled("File field name", _multipartFileName)); _typeFields.Children.Add(Labeled("File path", _multipartFilePath)); _typeFields.Children.Add(Labeled("File content type", _multipartFileContentType));
+            _typeFields.Children.Add(DashboardStyle.Action("Generate multipart StepConfig", GenerateStepConfig));
+        }
     }
     private void GenerateStepConfig()
     {
@@ -114,6 +128,7 @@ internal sealed class TestStepWizardWindow : Window
             "File" => new { Action = _fileAction.SelectedItem?.ToString() ?? "ReadBinary", Path = _filePath.Text ?? "", OutputVariable = _fileOutput.Text ?? "", OutputMode = _fileMode.SelectedItem?.ToString() ?? "Reference" },
             "Script" => new { Source = _scriptSource.Text ?? "" },
             "SQL" => new { Connection = _sqlConnection.Text ?? "", CommandType = _sqlCommandType.SelectedItem?.ToString() ?? "Text", Query = _sqlQuery.Text ?? "" },
+            "HTTP" when string.Equals(_contentType.SelectedItem?.ToString(), "multipart/form-data", StringComparison.OrdinalIgnoreCase) => new { Parts = new object[] { new { Name = _multipartTextName.Text ?? "", Type = "text", Value = _multipartTextValue.Text ?? "" }, new { Name = _multipartFileName.Text ?? "", Type = "file", Path = _multipartFilePath.Text ?? "", FileName = Path.GetFileName(_multipartFilePath.Text ?? ""), ContentType = _multipartFileContentType.Text ?? "application/octet-stream" } } },
             _ => new { }
         };
         _stepConfig.Text = JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = true });

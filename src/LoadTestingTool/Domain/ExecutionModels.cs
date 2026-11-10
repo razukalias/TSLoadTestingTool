@@ -153,6 +153,21 @@ public sealed class ScriptStepOptions
     public string? Inline { get; set; }
 }
 
+public sealed class MultipartPart
+{
+    public string Name { get; set; } = string.Empty;
+    public string Type { get; set; } = "text";
+    public string? Value { get; set; }
+    public string? Path { get; set; }
+    public string? FileName { get; set; }
+    public string ContentType { get; set; } = "application/octet-stream";
+}
+
+public sealed class MultipartStepOptions
+{
+    public List<MultipartPart> Parts { get; set; } = [];
+}
+
 public static class StepTypeParser
 {
     public static StepType Parse(string? value) => string.IsNullOrWhiteSpace(value) ? StepType.Http : value.Trim().ToLowerInvariant() switch

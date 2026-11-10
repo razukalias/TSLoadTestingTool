@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Text.Json;
+using System.Security.Cryptography;
 using LoadTestingTool.Domain;
 using LoadTestingTool.Reporting;
 
@@ -217,14 +218,20 @@ public sealed class TestRunner
                 if (runtimeVariable.Value is string runtimeText)
                     variables[runtimeVariable.Key] = runtimeText;
             var resolvedUrl = await ResolveDynamicValueAsync(step.TargetUrl.Replace("{env}", environment, StringComparison.OrdinalIgnoreCase), correlation, requestReferences, executionContext, cancellationToken);
-            result.TargetUrl = Substitute(resolvedUrl, variables); var originalTemplate = await File.ReadAllTextAsync(templatePath, cancellationToken); var resolvedTemplate = await ResolveDynamicValueAsync(originalTemplate, correlation, requestReferences, executionContext, cancellationToken);
+            result.TargetUrl = Substitute(resolvedUrl, variables); var originalTemplate = string.IsNullOrWhiteSpace(step.TemplateSource) ? string.Empty : await File.ReadAllTextAsync(templatePath, cancellationToken); var resolvedTemplate = string.IsNullOrWhiteSpace(originalTemplate) ? string.Empty : await ResolveDynamicValueAsync(originalTemplate, correlation, requestReferences, executionContext, cancellationToken);
             var streamedTemplate = PrepareStreamingBinaryTemplate(resolvedTemplate, result.ContentType, variables, executionContext);
             var body = streamedTemplate is null ? TemplateRenderer.Render(resolvedTemplate, result.ContentType, variables) : string.Empty;
             var resolvedTemplateForLog = streamedTemplate is null ? body : resolvedTemplate;
             _logger.Info($"STEP RESOLUTION [{requestId}]\nORIGINAL URL: {step.TargetUrl}\nRESOLVED URL: {result.TargetUrl}\nORIGINAL TEMPLATE:\n{originalTemplate}\nRESOLVED TEMPLATE:\n{InternalLogger.RedactVariableValues(resolvedTemplateForLog, redactedVariables, variables)}\nVARIABLES:\n{FormatVariables(variables, redactedVariables)}");
             using var request = new HttpRequestMessage(new HttpMethod(step.Verb), result.TargetUrl);
             var binaryBody = ResolveBinaryHttpBody(step, executionContext);
-            if (streamedTemplate is not null)
+            if (result.ContentType.Equals("multipart/form-data", StringComparison.OrdinalIgnoreCase))
+            {
+                var multipart = CreateMultipartContent(step, _features.WorkspaceRoot, variables, executionContext);
+                request.Content = multipart.Content;
+                result.RequestBody = multipart.Summary;
+            }
+            else if (streamedTemplate is not null)
             {
                 request.Content = new StreamingBase64FileJsonContent(streamedTemplate.Value.Prefix, streamedTemplate.Value.Suffix, streamedTemplate.Value.File, ResolveHttpMediaType(result.ContentType));
                 result.RequestBody = streamedTemplate.Value.Summary;
@@ -246,7 +253,7 @@ public sealed class TestRunner
                 var value = await ResolveDynamicValueAsync(header.Value, correlation, requestReferences, executionContext, cancellationToken);
                 resolvedHeaders[header.Key] = Substitute(value, variables);
             }
-            result.RequestHeaders = InternalLogger.RedactVariableValues(string.Join("; ", resolvedHeaders.Select(h => $"{h.Key}={h.Value}")), redactedVariables, variables); foreach (var h in resolvedHeaders) if (!request.Headers.TryAddWithoutValidation(h.Key, h.Value)) request.Content?.Headers.TryAddWithoutValidation(h.Key, h.Value);
+            result.RequestHeaders = InternalLogger.RedactVariableValues(string.Join("; ", resolvedHeaders.Select(h => $"{h.Key}={h.Value}")), redactedVariables, variables); foreach (var h in resolvedHeaders) if (!h.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase) && !request.Headers.TryAddWithoutValidation(h.Key, h.Value)) request.Content?.Headers.TryAddWithoutValidation(h.Key, h.Value);
             _logger.Info($"REQUEST SENT [{requestId}]\nURL: {result.TargetUrl}\nMETHOD: {step.Verb}\nHEADERS:\n{result.RequestHeaders}\nBODY:\n{result.RequestBody}");
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken); timeout.CancelAfter(TimeSpan.FromSeconds(step.TimeoutSeconds > 0 ? step.TimeoutSeconds : _timeoutSeconds)); using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseContentRead, timeout.Token);
             result.HttpStatus = (int)response.StatusCode; result.ResponseHeaders = string.Join("; ", response.Headers.Concat(response.Content.Headers).Select(h => $"{h.Key}={string.Join(",", h.Value)}")); result.ResponseBody = await response.Content.ReadAsStringAsync(timeout.Token);
@@ -522,6 +529,36 @@ public sealed class TestRunner
         return contentType.Value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(contentType.Value.GetString())
             ? new BinaryFileReference { Path = reference.Path, SizeBytes = reference.SizeBytes, Sha256 = reference.Sha256, ContentType = contentType.Value.GetString()! }
             : reference;
+    }
+    private static (MultipartFormDataContent Content, string Summary) CreateMultipartContent(RequestStep step, string workspaceRoot, IReadOnlyDictionary<string, string> variables, LoadTestingTool.Domain.ExecutionContext context)
+    {
+        var options = StepConfig.Read<MultipartStepOptions>(step);
+        if (options.Parts.Count == 0) throw new InvalidDataException($"Multipart HTTP step '{step.StepName}' must define at least one part.");
+        var content = new MultipartFormDataContent(); var files = new List<string>(); var names = new List<string>();
+        foreach (var part in options.Parts)
+        {
+            var name = Substitute(context.Resolve(part.Name ?? string.Empty), variables).Trim();
+            if (string.IsNullOrWhiteSpace(name)) throw new InvalidDataException($"Multipart step '{step.StepName}' contains a part without a name.");
+            names.Add(name);
+            if (part.Type.Equals("file", StringComparison.OrdinalIgnoreCase))
+            {
+                var relative = Substitute(context.Resolve(part.Path ?? string.Empty), variables);
+                var path = WorkspaceGuard.Resolve(workspaceRoot, relative);
+                if (!File.Exists(path)) throw new FileNotFoundException($"Multipart file part '{relative}' was not found.", path);
+                var info = new FileInfo(path); using var hash = SHA256.Create(); using var stream = File.OpenRead(path); var digest = Convert.ToHexString(hash.ComputeHash(stream)).ToLowerInvariant();
+                var fileContent = new StreamContent(File.OpenRead(path));
+                fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(string.IsNullOrWhiteSpace(part.ContentType) ? "application/octet-stream" : part.ContentType);
+                var fileName = string.IsNullOrWhiteSpace(part.FileName) ? info.Name : Substitute(context.Resolve(part.FileName), variables);
+                content.Add(fileContent, name, fileName); files.Add($"{name}:{fileName}; bytes={info.Length}; sha256={digest}; contentType={fileContent.Headers.ContentType}");
+            }
+            else
+            {
+                var value = Substitute(context.Resolve(part.Value ?? string.Empty), variables);
+                content.Add(new StringContent(value, Encoding.UTF8), name);
+            }
+        }
+        var summary = $"[multipart body omitted; parts={string.Join(", ", names)}; files={(files.Count == 0 ? "none" : string.Join(" | ", files))}]";
+        return (content, summary);
     }
     private static string ResolveContentType(RequestStep step) => !string.IsNullOrWhiteSpace(step.ContentType) ? step.ContentType : Path.GetExtension(step.TemplateSource).TrimStart('.').ToLowerInvariant() switch { "xml" => "xml", _ => "json" };
     private static bool StatusMatches(int actual, string expected) => expected.Contains('-') ? int.TryParse(expected.Split('-')[0], out var min) && int.TryParse(expected.Split('-')[1], out var max) && actual >= min && actual <= max : expected.EndsWith("xx", StringComparison.OrdinalIgnoreCase) && int.TryParse(expected[..1], out var family) ? actual / 100 == family : int.TryParse(expected, out var exact) && actual == exact;
