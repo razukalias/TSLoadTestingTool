@@ -60,7 +60,7 @@ public sealed class SpreadsheetPreviewWindow : Window
     private readonly Dictionary<string, SheetView> _sheets = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _removedSheetNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly TextBox _headerFilter = new() { Watermark = "Headers: header1 & header2…", MinWidth = 230 };
-    private readonly TextBox _rowFilter = new() { Watermark = "Rows: 1,3,5…", MinWidth = 150 };
+    private readonly TextBox _rowFilter = new() { Watermark = "Rows: 0,1,2…", MinWidth = 150 };
     private readonly TextBox _valueFilter = new() { Watermark = "Cell values: term1 & term2…", MinWidth = 230 };
     private readonly TextBlock _status = DashboardStyle.Text("Edit cells here and save the original workbook.", 12, false, DashboardStyle.Muted);
     private readonly ComboBox _textColor = new() { Width = 120, ItemsSource = new[] { "Text color", "White", "Yellow", "Cyan", "Red", "Green" }, SelectedIndex = 0 };
@@ -82,7 +82,8 @@ public sealed class SpreadsheetPreviewWindow : Window
 
         try
         {
-            using var workbook = new XLWorkbook(workbookPath);
+            using var workbookStream = new FileStream(workbookPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var workbook = new XLWorkbook(workbookStream);
             foreach (var worksheet in workbook.Worksheets)
             {
                 var used = worksheet.RangeUsed();
@@ -301,13 +302,13 @@ public sealed class SpreadsheetPreviewWindow : Window
             var range = part.Split('-', StringSplitOptions.TrimEntries);
             if (range.Length == 2 && int.TryParse(range[0], out var first) && int.TryParse(range[1], out var last))
             {
-                var lower = Math.Max(1, Math.Min(first, last));
-                var upper = Math.Min(allRows.Length, Math.Max(first, last));
-                for (var number = lower; number <= upper; number++) requested.Add(number - 1);
+                var lower = Math.Max(0, Math.Min(first, last));
+                var upper = Math.Min(allRows.Length - 1, Math.Max(first, last));
+                for (var number = lower; number <= upper; number++) requested.Add(number);
             }
-            else if (range.Length == 1 && int.TryParse(part, out var number) && number >= 1)
+            else if (range.Length == 1 && int.TryParse(part, out var number) && number >= 0)
             {
-                requested.Add(number - 1);
+                requested.Add(number);
             }
         }
 
@@ -1073,7 +1074,7 @@ public sealed class SpreadsheetPreviewWindow : Window
     {
         var view = _sheets.Values.ElementAtOrDefault(_tabs.SelectedIndex);
         if (view is null) return;
-        _status.Text = $"Showing {view.DisplayRows.Count} rows × {view.DisplayColumns.Count} columns in {view.Name}. Use & for AND filters; row numbers are 1-based workbook rows.";
+        _status.Text = $"Showing {view.DisplayRows.Count} rows × {view.DisplayColumns.Count} columns in {view.Name}. Use & for AND filters; row indexes are zero-based with the header at 0.";
         _status.Foreground = DashboardStyle.Muted;
     }
 

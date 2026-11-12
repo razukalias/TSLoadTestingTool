@@ -32,7 +32,8 @@ public sealed class WorkbookEditorWindow : Window
         Title = $"DataEngine Editor — {Path.GetFileName(workbookPath)}";
         Width = 1250; Height = 920; MinWidth = 900; MinHeight = 650;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        using var workbook = new XLWorkbook(workbookPath);
+        using var workbookStream = new FileStream(workbookPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var workbook = new XLWorkbook(workbookStream);
         var sheetHeaders = workbook.Worksheets.ToDictionary(x => x.Name,
             x => x.FirstRowUsed()?.CellsUsed().Select(c => c.GetString()).Where(x => !string.IsNullOrWhiteSpace(x)).ToArray() ?? [], StringComparer.OrdinalIgnoreCase);
         foreach (var pair in sheetHeaders) _sheetHeaders[pair.Key] = pair.Value;
@@ -256,7 +257,7 @@ public sealed class WorkbookEditorWindow : Window
         private readonly Button _transposeButton;
         private readonly StackPanel _rows = new() { Spacing = 1 };
         private readonly TextBox _columnFilter = new() { Watermark = "Headers: header1 & header2…", Width = 280 };
-        private readonly TextBox _rowFilter = new() { Watermark = "Rows: 1,3,5…", Width = 130 };
+        private readonly TextBox _rowFilter = new() { Watermark = "Rows: 0,1,2…", Width = 130 };
         private readonly TextBox _cellValueFilter = new() { Watermark = "Cell values: value1 & value2…", Width = 250 };
         private readonly TextBlock _position = DashboardStyle.Text("Select a cell, row, or column", 11, false, DashboardStyle.Muted);
         private readonly ComboBox _zoom = new() { Width = 90, ItemsSource = new[] { "80%", "90%", "100%", "110%", "125%", "150%" }, SelectedIndex = 2 };
@@ -312,7 +313,7 @@ public sealed class WorkbookEditorWindow : Window
             _suggestions.SelectionChanged += (_, _) => { if (!_updatingSuggestions && _suggestionPopup.IsOpen && _suggestions.SelectedItem is string value) AcceptSuggestion(value); };
             _suggestions.PointerReleased += (_, _) => { if (_suggestions.SelectedItem is string value) AcceptSuggestion(value); };
             _suggestionPopup.Child = _suggestions;
-            var help = DashboardStyle.Text("Mouse: use column letters and row numbers; Ctrl adds selections; Shift selects ranges. Drag column borders to resize. Right-click cells, rows, or headers for operations. Wrap, copy, insert, delete, and auto-fit are available in context menus. Filters accept multiple terms with &: headers and cell values match any term; row numbers use the original DataEngine row index, for example 1,3,5.", 11, false, DashboardStyle.Muted);
+            var help = DashboardStyle.Text("Mouse: use column letters and row numbers; Ctrl adds selections; Shift selects ranges. Drag column borders to resize. Right-click cells, rows, or headers for operations. Wrap, copy, insert, delete, and auto-fit are available in context menus. Filters accept multiple terms with &: headers and cell values match any term; row indexes are zero-based with the header at 0, for example 0,1,2.", 11, false, DashboardStyle.Muted);
             var zoomOut = DashboardStyle.Action("A−", () => ChangeFont(-1)); zoomOut.Padding = new Thickness(7, 5); var zoomIn = DashboardStyle.Action("A+", () => ChangeFont(1)); zoomIn.Padding = new Thickness(7, 5); _transposeButton = DashboardStyle.Action("Transpose view", ToggleTranspose); var toolbar = new WrapPanel { Orientation = Orientation.Horizontal, Children = { _columnFilter, _rowFilter, _cellValueFilter, DashboardStyle.Text("Zoom", 11, false, DashboardStyle.Muted), _zoom, zoomOut, zoomIn, _transposeButton, _position } };
             var gridScroll = new ScrollViewer { Content = _rows, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             var table = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*"), Children = { toolbar, help, gridScroll } }; Grid.SetRow(help, 1); Grid.SetRow(gridScroll, 2);
@@ -339,7 +340,7 @@ public sealed class WorkbookEditorWindow : Window
         {
             var rows = new HashSet<int>();
             foreach (var token in (text ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                if (int.TryParse(token, out var row) && row > 0) rows.Add(row);
+                if (int.TryParse(token, out var row) && row >= 0) rows.Add(row);
             return rows;
         }
 

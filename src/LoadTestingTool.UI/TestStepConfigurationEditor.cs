@@ -117,7 +117,8 @@ internal sealed class TestStepConfigurationEditor : UserControl
     {
         try
         {
-            using var workbook = new XLWorkbook(_item.WorkbookPath);
+            using var workbookStream = new FileStream(_item.WorkbookPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var workbook = new XLWorkbook(workbookStream);
             var sheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("config", StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidDataException("The workbook has no config sheet.");
             var header = sheet.FirstRowUsed() ?? throw new InvalidDataException("The config sheet has no header row.");
             foreach (var cell in header.CellsUsed()) _headers[cell.GetString().Trim()] = cell.Address.ColumnNumber;
