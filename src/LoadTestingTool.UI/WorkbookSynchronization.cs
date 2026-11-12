@@ -63,29 +63,48 @@ internal static class WorkbookSynchronization
     {
         var warnings = new List<string>();
         var sheets = workbook.Worksheets.Where(x => x.Name.Equals("request", StringComparison.OrdinalIgnoreCase) || x.Name.Equals("response", StringComparison.OrdinalIgnoreCase)).ToList();
-        foreach (var change in changes.Where(x => !string.IsNullOrWhiteSpace(x.OldName)))
+        // A deleted config row can produce more than one StepChange for the
+        // same step (for example after a filtered/shifted row operation).
+        // Resolve each old step once before mutating any worksheet. Deleting
+        // columns while iterating the live header map can otherwise make the
+        // next change address a shifted column and trigger duplicate-key
+        // failures in ClosedXML or the UI model.
+        var distinctChanges = changes
+            .Where(x => !string.IsNullOrWhiteSpace(x.OldName))
+            .GroupBy(x => x.OldName.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.Any(x => x.NewName is null)
+                ? new StepChange(group.First().TestcaseIndex, group.Key, null)
+                : group.Last())
+            .ToList();
+
+        foreach (var sheet in sheets)
         {
-            foreach (var sheet in sheets)
+            var headers = Headers(sheet);
+            var columnsToDelete = distinctChanges
+                .Where(x => x.NewName is null)
+                .SelectMany(change => headers.Where(x => IsStepHeader(x.Key, change.OldName)).Select(x => x.Value))
+                .Distinct()
+                .OrderByDescending(x => x)
+                .ToList();
+            foreach (var column in columnsToDelete) sheet.Column(column).Delete();
+
+            foreach (var change in distinctChanges.Where(x => x.NewName is not null))
             {
-                var headers = Headers(sheet);
+                headers = Headers(sheet);
                 var matching = headers.Where(x => IsStepHeader(x.Key, change.OldName)).OrderByDescending(x => x.Value).ToList();
-                if (change.NewName is null)
+                foreach (var column in matching)
                 {
-                    foreach (var column in matching) sheet.Column(column.Value).Delete();
-                }
-                else
-                {
-                    foreach (var column in matching)
-                    {
-                        var updated = RenameStepHeader(column.Key, change.OldName, change.NewName);
-                        sheet.Cell(1, column.Value).Value = updated;
-                    }
-                    ReplaceReferences(sheet, change.OldName, change.NewName);
+                    var updated = RenameStepHeader(column.Key, change.OldName, change.NewName!);
+                    sheet.Cell(1, column.Value).Value = updated;
                 }
             }
-            if (change.NewName is null)
-                foreach (var sheet in sheets) ReplaceReferences(sheet, change.OldName, null);
         }
+
+        // Reference replacement happens after all column mutations, so it is
+        // performed against the final worksheet layout and only once per step.
+        foreach (var change in distinctChanges)
+            foreach (var sheet in sheets)
+                ReplaceReferences(sheet, change.OldName, change.NewName);
         return warnings;
     }
 
@@ -109,7 +128,13 @@ internal static class WorkbookSynchronization
         }
     }
 
-    private static Dictionary<string, int> Headers(IXLWorksheet sheet) => sheet.FirstRowUsed()?.CellsUsed().ToDictionary(x => x.GetString().Trim(), x => x.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase) ?? new(StringComparer.OrdinalIgnoreCase);
+    private static Dictionary<string, int> Headers(IXLWorksheet sheet)
+        => sheet.FirstRowUsed()?.CellsUsed()
+            .Select(x => (Header: x.GetString().Trim(), Column: x.Address.ColumnNumber))
+            .Where(x => !string.IsNullOrWhiteSpace(x.Header))
+            .GroupBy(x => x.Header, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Last().Column, StringComparer.OrdinalIgnoreCase)
+            ?? new(StringComparer.OrdinalIgnoreCase);
     private static bool TryColumn(Dictionary<string, int> headers, string name, out int column) => headers.TryGetValue(name, out column);
     private static bool IsStepHeader(string header, string stepName)
     {
