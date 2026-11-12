@@ -88,7 +88,9 @@ public sealed class SpreadsheetPreviewWindow : Window
             foreach (var worksheet in workbook.Worksheets)
             {
                 var used = worksheet.RangeUsed();
-                var cells = ReadCells(worksheet).ToDictionary(x => (x.Key.Item1, x.Key.Item2), x => x.Value);
+                var cells = ReadCells(worksheet)
+                    .GroupBy(x => (x.Key.Item1, x.Key.Item2))
+                    .ToDictionary(group => group.Key, group => group.Last().Value);
                 var tab = new TabItem { Header = worksheet.Name };
                 var view = new SheetView { Name = worksheet.Name, OriginalName = worksheet.Name, Cells = cells, OriginalCells = new Dictionary<(int Col, int Row), string>(cells), Tab = tab,
                     RowCount = Math.Max(1, used?.RangeAddress.LastAddress.RowNumber ?? 1),
@@ -1412,9 +1414,9 @@ public sealed class SpreadsheetPreviewWindow : Window
         var current = _sheets.Values.FirstOrDefault(x => x.Name.Equals("config", StringComparison.OrdinalIgnoreCase));
         if (oldSheet is null || current is null) return changes;
 
-        var oldHeaders = oldSheet.FirstRowUsed()?.CellsUsed().ToDictionary(x => x.GetString().Trim(), x => x.Address.ColumnNumber - 1, StringComparer.OrdinalIgnoreCase);
+        var oldHeaders = HeaderMap(oldSheet.FirstRowUsed()?.CellsUsed().Select(x => (x.GetString().Trim(), x.Address.ColumnNumber - 1)));
         if (oldHeaders is null || !oldHeaders.TryGetValue("stepname", out var oldStepColumn) || !oldHeaders.TryGetValue("testcaseindex", out var oldTestcaseColumn)) return changes;
-        var currentHeaders = Enumerable.Range(0, current.ColumnCount).ToDictionary(c => current.Cells.GetValueOrDefault((c, 0), "").Trim(), c => c, StringComparer.OrdinalIgnoreCase);
+        var currentHeaders = HeaderMap(Enumerable.Range(0, current.ColumnCount).Select(c => (current.Cells.GetValueOrDefault((c, 0), "").Trim(), c)));
         if (!currentHeaders.TryGetValue("stepname", out var currentStepColumn) || !currentHeaders.TryGetValue("testcaseindex", out var currentTestcaseColumn)) return changes;
 
         var currentByPosition = new Dictionary<int, (string Testcase, string Step)>();
@@ -1470,6 +1472,13 @@ public sealed class SpreadsheetPreviewWindow : Window
     }
 
     private static string CleanHeaderForComparison(string value) => Regex.Replace(value.Trim(), @"^\{[^{}]*\}", "").Trim();
+
+    private static Dictionary<string, int> HeaderMap(IEnumerable<(string Header, int Column)>? entries)
+        => entries is null
+            ? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+            : entries.Where(x => !string.IsNullOrWhiteSpace(x.Header))
+                .GroupBy(x => x.Header, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.Last().Column, StringComparer.OrdinalIgnoreCase);
 
     private static bool HasChanges(SheetView view)
     {
