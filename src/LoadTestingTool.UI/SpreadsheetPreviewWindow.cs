@@ -78,6 +78,7 @@ public sealed class SpreadsheetPreviewWindow : Window
         _log = log;
         Title = $"Spreadsheet editor — {Path.GetFileName(workbookPath)}";
         Width = 1320; Height = 900; MinWidth = 900; MinHeight = 600;
+        WindowState = WindowState.Maximized;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
         try
@@ -183,7 +184,29 @@ public sealed class SpreadsheetPreviewWindow : Window
         Content = new Grid { Children = { root, _suggestionPopup } };
         _tabs.SelectionChanged += (_, _) => { LoadSelectedSheetFilters(); RefreshFilteredViews(SelectedSheet()); RefreshStatus(); };
         _tabs.SelectedIndex = 0;
-        Dispatcher.UIThread.Post(() => { LoadSelectedSheetFilters(); RefreshFilteredViews(); }, DispatcherPriority.Loaded);
+        Dispatcher.UIThread.Post(() =>
+        {
+            LoadSelectedSheetFilters();
+            RefreshFilteredViews();
+            ScheduleInitialAutoFit();
+        }, DispatcherPriority.Loaded);
+    }
+
+    private void ScheduleInitialAutoFit()
+    {
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+        var attempts = 0;
+        timer.Tick += (_, _) =>
+        {
+            var view = SelectedSheet();
+            if (view?.GridDataLoaded == true)
+            {
+                AutoFitSelectedColumns();
+                timer.Stop();
+            }
+            else if (++attempts >= 50) timer.Stop();
+        };
+        timer.Start();
     }
 
     private static Control Labeled(string label, Control field) => new StackPanel { Spacing = 3, Children = { DashboardStyle.Text(label, 10, false, DashboardStyle.Muted), field } };
@@ -506,12 +529,21 @@ public sealed class SpreadsheetPreviewWindow : Window
         Menu("Reset format", ResetSelectedFormat), new Separator(), Menu("Undo", () => grid.Undo()), Menu("Redo", () => grid.Redo())
     ];
 
-    private Control[] RowMenu(Spreadsheet grid) =>
-    [
-        Menu("Insert empty row", () => ApplyStructuralCommand("Inserted empty row", true, 1)),
-        Menu("Duplicate row", () => DuplicateSelection(true)),
-        Menu("Delete row", () => ApplyStructuralCommand("Deleted row", true, -1))
-    ];
+    private Control[] RowMenu(Spreadsheet grid)
+    {
+        var items = new List<Control>
+        {
+            Menu("Insert empty row", () => ApplyStructuralCommand("Inserted empty row", true, 1)),
+            Menu("Duplicate row", () => DuplicateSelection(true)),
+            Menu("Delete row", () => ApplyStructuralCommand("Deleted row", true, -1))
+        };
+        if (SelectedSheet()?.Name.Equals("config", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            items.Add(new Separator());
+            items.Add(Menu("Open template", () => OpenTemplateForSelectedConfigRow(grid)));
+        }
+        return items.ToArray();
+    }
 
     private Control[] ColumnMenu(Spreadsheet grid) =>
     [
@@ -527,6 +559,56 @@ public sealed class SpreadsheetPreviewWindow : Window
         item.Click += (_, _) => action();
         return item;
     }
+
+    private void OpenTemplateForSelectedConfigRow(Spreadsheet grid)
+    {
+        var view = SelectedSheet();
+        if (view is null || grid.Selection.Count == 0) return;
+        var row = OriginalRowAt(view, grid.Selection[0].Top);
+        if (row <= 0)
+        {
+            _status.Text = "Select a config data row, not the header, to open its template.";
+            _status.Foreground = DashboardStyle.Red;
+            return;
+        }
+
+        var templateColumn = HeaderColumn(view, "templetsource");
+        if (templateColumn < 0)
+        {
+            _status.Text = "The config sheet has no templetsource column.";
+            _status.Foreground = DashboardStyle.Red;
+            return;
+        }
+        var source = Cell(view.Cells, templateColumn, row).Trim();
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            _status.Text = "The selected config row has no templetsource value.";
+            _status.Foreground = DashboardStyle.Red;
+            return;
+        }
+
+        var templatesFolder = Path.Combine(Path.GetDirectoryName(_sourcePath)!, "Templates");
+        var path = Path.GetFullPath(Path.Combine(templatesFolder, source.Replace('/', Path.DirectorySeparatorChar)));
+        var root = Path.GetFullPath(templatesFolder).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase) || !File.Exists(path))
+        {
+            _status.Text = $"Template not found: {source}";
+            _status.Foreground = DashboardStyle.Red;
+            return;
+        }
+
+        var testcase = Cell(view.Cells, HeaderColumn(view, "testcase"), row);
+        var stepName = Cell(view.Cells, HeaderColumn(view, "stepname"), row);
+        var stepType = Cell(view.Cells, HeaderColumn(view, "steptype"), row);
+        var instanceName = Path.GetFileName(Path.GetDirectoryName(_sourcePath) ?? "");
+        var editor = new TemplateEditorWindow(templatesFolder, source, string.IsNullOrWhiteSpace(stepType) ? "HTTP" : stepType,
+            value => { view.Cells[(templateColumn, row)] = value; _status.Text = $"Template saved: {value}"; _status.Foreground = DashboardStyle.Green; },
+            instanceName, testcase, stepName);
+        editor.Show(this);
+    }
+
+    private static int HeaderColumn(SheetView view, string name)
+        => view.Cells.Where(x => x.Key.Row == 0 && x.Value.Equals(name, StringComparison.OrdinalIgnoreCase)).Select(x => x.Key.Col).DefaultIfEmpty(-1).First();
 
     private void Log(string message) => _log?.Invoke(message);
 
@@ -1031,7 +1113,12 @@ public sealed class SpreadsheetPreviewWindow : Window
     private static void SyncView(SheetView view)
     {
         if (view.Grid is null || !view.GridDataLoaded || view.DisplayRows.Count == 0 || view.DisplayColumns.Count == 0 || view.Grid.Data is null) return;
-        var visibleCells = view.Grid.Data.ToDictionary(x => x.Key, x => x.Value);
+        // A structural refresh can briefly expose the same coordinate more
+        // than once in the grid data. Collapse it deterministically instead
+        // of throwing a duplicate-key exception and taking down the editor.
+        var visibleCells = view.Grid.Data
+            .GroupBy(x => x.Key)
+            .ToDictionary(group => group.Key, group => group.Last().Value);
         EnsureDisplayMapCoverage(view, visibleCells.Keys);
         var editor = view.Grid.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(x => x.Name == "EditingBox" && x.IsVisible);
         if (view.Grid.IsEditing && editor is not null && view.Grid.Selection.Count > 0)
@@ -1194,9 +1281,11 @@ public sealed class SpreadsheetPreviewWindow : Window
             }
             using var workbook = new XLWorkbook(_sourcePath);
             var stepChanges = CaptureConfigStepChanges(workbook);
+            var columnChanges = CaptureColumnChanges(workbook);
             WriteWorkbookChanges(workbook, includeEditorStyles: true);
             WorkbookSynchronization.SynchronizeRequestResponse(workbook);
             WorkbookSynchronization.SynchronizeStepColumns(workbook, stepChanges);
+            WorkbookSynchronization.SynchronizeColumnReferences(workbook, columnChanges);
             workbook.SaveAs(temp, true);
         }
         catch (Exception ex) when (IsStylesXmlFailure(ex))
@@ -1206,9 +1295,11 @@ public sealed class SpreadsheetPreviewWindow : Window
                 if (File.Exists(temp)) File.Delete(temp);
                 using var recoveryWorkbook = new XLWorkbook(_sourcePath);
                 var stepChanges = CaptureConfigStepChanges(recoveryWorkbook);
+                var columnChanges = CaptureColumnChanges(recoveryWorkbook);
                 WriteWorkbookChanges(recoveryWorkbook, includeEditorStyles: true);
                 WorkbookSynchronization.SynchronizeRequestResponse(recoveryWorkbook);
                 WorkbookSynchronization.SynchronizeStepColumns(recoveryWorkbook, stepChanges);
+                WorkbookSynchronization.SynchronizeColumnReferences(recoveryWorkbook, columnChanges);
                 // Older workbooks can contain legacy font/color ordering that
                 // ClosedXML reads but rejects during strict OpenXML validation.
                 // Validation-disabled output remains readable by Excel and keeps
@@ -1349,6 +1440,36 @@ public sealed class SpreadsheetPreviewWindow : Window
         }
         return changes;
     }
+
+    private List<WorkbookSynchronization.ColumnChange> CaptureColumnChanges(XLWorkbook workbook)
+    {
+        var changes = new List<WorkbookSynchronization.ColumnChange>();
+        foreach (var sheetName in new[] { "request", "response" })
+        {
+            var oldSheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals(sheetName, StringComparison.OrdinalIgnoreCase));
+            var current = _sheets.Values.FirstOrDefault(x => x.Name.Equals(sheetName, StringComparison.OrdinalIgnoreCase));
+            if (oldSheet is null || current is null) continue;
+            var oldLast = oldSheet.LastColumnUsed()?.ColumnNumber() ?? 0;
+            var oldHeaders = Enumerable.Range(0, oldLast).Select(column => oldSheet.Cell(1, column + 1).GetString().Trim()).ToList();
+            var currentHeaders = Enumerable.Range(0, current.ColumnCount).Select(column => current.Cells.GetValueOrDefault((column, 0), "").Trim()).ToList();
+            if (oldHeaders.Count == currentHeaders.Count)
+            {
+                for (var column = 0; column < oldHeaders.Count; column++)
+                    if (!string.Equals(oldHeaders[column], currentHeaders[column], StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(oldHeaders[column]))
+                        changes.Add(new WorkbookSynchronization.ColumnChange(oldHeaders[column], string.IsNullOrWhiteSpace(currentHeaders[column]) ? null : currentHeaders[column]));
+            }
+            else
+            {
+                var currentClean = currentHeaders.Select(CleanHeaderForComparison).Where(x => x.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                foreach (var oldHeader in oldHeaders.Where(x => !string.IsNullOrWhiteSpace(x)))
+                    if (!currentClean.Contains(CleanHeaderForComparison(oldHeader)))
+                        changes.Add(new WorkbookSynchronization.ColumnChange(oldHeader, null));
+            }
+        }
+        return changes;
+    }
+
+    private static string CleanHeaderForComparison(string value) => Regex.Replace(value.Trim(), @"^\{[^{}]*\}", "").Trim();
 
     private static bool HasChanges(SheetView view)
     {

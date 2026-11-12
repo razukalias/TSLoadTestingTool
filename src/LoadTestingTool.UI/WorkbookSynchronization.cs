@@ -6,6 +6,7 @@ namespace LoadTestingTool.UI;
 internal static class WorkbookSynchronization
 {
     internal sealed record StepChange(string TestcaseIndex, string OldName, string? NewName);
+    internal sealed record ColumnChange(string OldHeader, string? NewHeader);
 
     public static void SynchronizeRequestResponse(IXLWorkbook workbook)
     {
@@ -88,6 +89,26 @@ internal static class WorkbookSynchronization
         return warnings;
     }
 
+    public static void SynchronizeColumnReferences(IXLWorkbook workbook, IEnumerable<ColumnChange> changes)
+    {
+        var sheets = workbook.Worksheets.Where(x => x.Name.Equals("request", StringComparison.OrdinalIgnoreCase) || x.Name.Equals("response", StringComparison.OrdinalIgnoreCase)).ToList();
+        foreach (var change in changes.Where(x => !string.IsNullOrWhiteSpace(x.OldHeader)))
+        {
+            var oldHeader = CleanHeader(change.OldHeader);
+            if (string.IsNullOrWhiteSpace(oldHeader)) continue;
+            var pattern = $"(<From_(?:(?:request|response)_)?){Regex.Escape(oldHeader)}(?=_(?:r|\\d+)>)";
+            var replacement = change.NewHeader is null ? "$1[deleted-column]" : "$1" + CleanHeader(change.NewHeader);
+            foreach (var sheet in sheets)
+                foreach (var cell in sheet.CellsUsed().ToArray())
+                {
+                    var value = cell.GetString();
+                    if (string.IsNullOrEmpty(value)) continue;
+                    var updated = Regex.Replace(value, pattern, replacement, RegexOptions.IgnoreCase);
+                    if (!string.Equals(updated, value, StringComparison.Ordinal)) cell.Value = updated;
+                }
+        }
+    }
+
     private static Dictionary<string, int> Headers(IXLWorksheet sheet) => sheet.FirstRowUsed()?.CellsUsed().ToDictionary(x => x.GetString().Trim(), x => x.Address.ColumnNumber, StringComparer.OrdinalIgnoreCase) ?? new(StringComparer.OrdinalIgnoreCase);
     private static bool TryColumn(Dictionary<string, int> headers, string name, out int column) => headers.TryGetValue(name, out column);
     private static bool IsStepHeader(string header, string stepName)
@@ -102,6 +123,7 @@ internal static class WorkbookSynchronization
         var clean = marker.Success ? header[marker.Length..] : header;
         return prefix + (clean.Equals(oldName, StringComparison.OrdinalIgnoreCase) ? newName : newName + clean[oldName.Length..]);
     }
+    private static string CleanHeader(string header) => Regex.Replace(header.Trim(), @"^\{[^{}]*\}", "").Trim();
     private static void ReplaceReferences(IXLWorksheet sheet, string oldName, string? newName)
     {
         foreach (var cell in sheet.CellsUsed())
