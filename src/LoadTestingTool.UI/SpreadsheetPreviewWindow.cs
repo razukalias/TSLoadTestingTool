@@ -331,7 +331,15 @@ public sealed class SpreadsheetPreviewWindow : Window
             // more importantly, reusing it guarantees that grid coordinates
             // remain the original workbook coordinates.
             CaptureFilterDimensions(view);
-            view.Grid.SetData(projected);
+            // Spreadalonia keeps values for coordinates omitted from SetData.
+            // Supply explicit empty values for old coordinates that disappeared
+            // from the model, otherwise deleted rows/columns appear duplicated
+            // and empty cells inherit stale neighbouring values.
+            var refreshed = new Dictionary<(int, int), string>(projected);
+            if (view.Grid.Data is not null)
+                foreach (var key in view.Grid.Data.Keys)
+                    if (!refreshed.ContainsKey(key)) refreshed[key] = string.Empty;
+            view.Grid.SetData(refreshed);
             ApplyChangedHiddenDimensions(view, hiddenRows, hiddenColumns);
             Dispatcher.UIThread.Post(() => RefreshHighlightOverlay(view), DispatcherPriority.Render);
             return;
