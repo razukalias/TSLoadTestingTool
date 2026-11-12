@@ -108,7 +108,10 @@ internal static class WorkbookSynchronization
         {
             var value = cell.GetString();
             if (string.IsNullOrEmpty(value)) continue;
-            var pattern = $"(<from_){Regex.Escape(oldName)}(?=[_.>])";
+            // Supported runner forms include:
+            // <From_Step.field_r>, <From_request_Step.field_r>, and
+            // <From_response_Step.field_r>. Keep the source prefix intact.
+            var pattern = $"(<From_(?:(?:request|response)_)?){Regex.Escape(oldName)}(?=[_.>])";
             var replacement = newName is null ? "$1[deleted-step]" : "$1" + newName;
             var updated = Regex.Replace(value, pattern, replacement, RegexOptions.IgnoreCase);
             if (!ReferenceEquals(updated, value) && updated != value) cell.Value = updated;
