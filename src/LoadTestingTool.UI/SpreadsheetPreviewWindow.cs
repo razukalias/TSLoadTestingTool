@@ -1185,7 +1185,10 @@ public sealed class SpreadsheetPreviewWindow : Window
                 return;
             }
             using var workbook = new XLWorkbook(_sourcePath);
+            var stepChanges = CaptureConfigStepChanges(workbook);
             WriteWorkbookChanges(workbook, includeEditorStyles: true);
+            WorkbookSynchronization.SynchronizeRequestResponse(workbook);
+            WorkbookSynchronization.SynchronizeStepColumns(workbook, stepChanges);
             workbook.SaveAs(temp, true);
         }
         catch (Exception ex) when (IsStylesXmlFailure(ex))
@@ -1194,7 +1197,10 @@ public sealed class SpreadsheetPreviewWindow : Window
             {
                 if (File.Exists(temp)) File.Delete(temp);
                 using var recoveryWorkbook = new XLWorkbook(_sourcePath);
+                var stepChanges = CaptureConfigStepChanges(recoveryWorkbook);
                 WriteWorkbookChanges(recoveryWorkbook, includeEditorStyles: true);
+                WorkbookSynchronization.SynchronizeRequestResponse(recoveryWorkbook);
+                WorkbookSynchronization.SynchronizeStepColumns(recoveryWorkbook, stepChanges);
                 // Older workbooks can contain legacy font/color ordering that
                 // ClosedXML reads but rejects during strict OpenXML validation.
                 // Validation-disabled output remains readable by Excel and keeps
@@ -1298,6 +1304,42 @@ public sealed class SpreadsheetPreviewWindow : Window
                 if (view.Styles.TryGetValue(key, out var style)) WriteStyle(sheet.Cell(key.Row + 1, key.Col + 1), style);
             }
         }
+    }
+
+    private List<WorkbookSynchronization.StepChange> CaptureConfigStepChanges(XLWorkbook workbook)
+    {
+        var changes = new List<WorkbookSynchronization.StepChange>();
+        var oldSheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("config", StringComparison.OrdinalIgnoreCase));
+        var current = _sheets.Values.FirstOrDefault(x => x.Name.Equals("config", StringComparison.OrdinalIgnoreCase));
+        if (oldSheet is null || current is null) return changes;
+
+        var oldHeaders = oldSheet.FirstRowUsed()?.CellsUsed().ToDictionary(x => x.GetString().Trim(), x => x.Address.ColumnNumber - 1, StringComparer.OrdinalIgnoreCase);
+        if (oldHeaders is null || !oldHeaders.TryGetValue("stepname", out var oldStepColumn) || !oldHeaders.TryGetValue("testcaseindex", out var oldTestcaseColumn)) return changes;
+        var currentHeaders = Enumerable.Range(0, current.ColumnCount).ToDictionary(c => current.Cells.GetValueOrDefault((c, 0), "").Trim(), c => c, StringComparer.OrdinalIgnoreCase);
+        if (!currentHeaders.TryGetValue("stepname", out var currentStepColumn) || !currentHeaders.TryGetValue("testcaseindex", out var currentTestcaseColumn)) return changes;
+
+        var currentByPosition = new Dictionary<int, (string Testcase, string Step)>();
+        for (var row = 1; row < current.RowCount; row++)
+        {
+            var testcase = current.Cells.GetValueOrDefault((currentTestcaseColumn, row), "").Trim();
+            var step = current.Cells.GetValueOrDefault((currentStepColumn, row), "").Trim();
+            if (!string.IsNullOrWhiteSpace(testcase) && !string.IsNullOrWhiteSpace(step)) currentByPosition[row + 1] = (testcase, step);
+        }
+
+        foreach (var oldRow in oldSheet.RowsUsed().Skip(1))
+        {
+            var oldName = oldRow.Cell(oldStepColumn + 1).GetString().Trim();
+            var testcase = oldRow.Cell(oldTestcaseColumn + 1).GetString().Trim();
+            if (string.IsNullOrWhiteSpace(oldName)) continue;
+            if (!currentByPosition.TryGetValue(oldRow.RowNumber(), out var currentStep))
+            {
+                changes.Add(new WorkbookSynchronization.StepChange(testcase, oldName, null));
+                continue;
+            }
+            if (string.Equals(testcase, currentStep.Testcase, StringComparison.OrdinalIgnoreCase) && !string.Equals(oldName, currentStep.Step, StringComparison.OrdinalIgnoreCase))
+                changes.Add(new WorkbookSynchronization.StepChange(testcase, oldName, currentStep.Step));
+        }
+        return changes;
     }
 
     private static bool HasChanges(SheetView view)
