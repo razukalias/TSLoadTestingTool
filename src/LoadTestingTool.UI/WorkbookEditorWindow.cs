@@ -221,7 +221,7 @@ public sealed class WorkbookEditorWindow : Window
         if (!_sheets.TryGetValue(sheetName, out var draft)) return;
         var existing = edit ? draft.SelectedConfigStep() : null;
         if (edit && existing is null) { SetStatus("Select a config data row first, then choose Edit selected step.", true); return; }
-        var wizard = new TestStepWizardWindow(step => { draft.ApplyConfigStep(step); SetStatus(edit ? "Test step updated. Press Ctrl+S to save." : "Test step added. Press Ctrl+S to save."); }, existing, Path.Combine(Path.GetDirectoryName(_path)!, "Templates"));
+        var wizard = new TestStepWizardWindow(step => { draft.ApplyConfigStep(step); SetStatus(edit ? "Test step updated. Press Ctrl+S to save." : "Test step added. Press Ctrl+S to save."); }, existing, Path.Combine(Path.GetDirectoryName(_path)!, "Templates"), Path.GetFileName(Path.GetDirectoryName(_path)!));
         wizard.Show(this);
     }
 
@@ -237,6 +237,7 @@ public sealed class WorkbookEditorWindow : Window
                 if (!sheet.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) sheet.Name = name;
                 draft.WriteTo(sheet);
             }
+            WorkbookSynchronization.SynchronizeRequestResponse(workbook);
             var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmssfff");
             SavedBackup = $"{_path}.backup.{stamp}.xlsx";
             File.Copy(_path, SavedBackup, overwrite: false); workbook.Save(); SetStatus(close ? $"Saved workbook. Backup: {Path.GetFileName(SavedBackup)}" : $"Saved workbook and backup. Editor remains open. Backup: {Path.GetFileName(SavedBackup)}");

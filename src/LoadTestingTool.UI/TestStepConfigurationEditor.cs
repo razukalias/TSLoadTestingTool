@@ -390,6 +390,7 @@ internal sealed class TestStepConfigurationEditor : UserControl
             using var workbook = new XLWorkbook(_item.WorkbookPath); var sheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("config", StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidDataException("The workbook has no config sheet.");
             var backup = $"{_item.WorkbookPath}.backup.{DateTime.Now:yyyyMMdd_HHmmssfff}.xlsx"; File.Copy(_item.WorkbookPath, backup, false);
             var original = sheet.RowsUsed().Skip(1).Where(r => r.CellsUsed().Any(c => !string.IsNullOrWhiteSpace(c.GetString()))).ToList();
+            var stepChanges = BuildStepChanges(original);
             foreach (var header in _headers) sheet.Cell(1, header.Value).Value = header.Key;
             var lastColumn = Math.Max(sheet.LastColumnUsed()?.ColumnNumber() ?? 1, _headers.Values.DefaultIfEmpty(1).Max());
             for (var i = 0; i < _rows.Count; i++)
@@ -398,9 +399,31 @@ internal sealed class TestStepConfigurationEditor : UserControl
                 for (var column = 1; column <= lastColumn; column++) target.Cell(column).Value = source.Cells.GetValueOrDefault(column, "");
             }
             for (var row = _rows.Count + 2; row <= original.Count + 1; row++) for (var column = 1; column <= lastColumn; column++) sheet.Cell(row, column).Clear(XLClearOptions.Contents);
+            var warnings = WorkbookSynchronization.SynchronizeStepColumns(workbook, stepChanges);
             workbook.Save(); _dirty = false; error = $"Workbook saved. Backup: {Path.GetFileName(backup)}"; _status.Text = error; _status.Foreground = DashboardStyle.Green; return true;
         }
         catch (Exception ex) { error = ex.Message; _status.Text = $"Could not save step changes: {ex.Message}"; _status.Foreground = DashboardStyle.Red; return false; }
+    }
+
+    private List<WorkbookSynchronization.StepChange> BuildStepChanges(IReadOnlyList<IXLRow> original)
+    {
+        var changes = new List<WorkbookSynchronization.StepChange>();
+        var currentByRow = _rows.Where(x => x.OriginalRow != int.MaxValue).ToDictionary(x => x.OriginalRow);
+        foreach (var oldRow in original)
+        {
+            var testcase = oldRow.Cell(_headers.GetValueOrDefault("testcaseindex")).GetString().Trim();
+            var oldName = oldRow.Cell(_headers.GetValueOrDefault("stepname")).GetString().Trim();
+            if (string.IsNullOrWhiteSpace(oldName)) continue;
+            var rowNumber = oldRow.RowNumber();
+            if (!currentByRow.TryGetValue(rowNumber, out var current)) changes.Add(new WorkbookSynchronization.StepChange(testcase, oldName, null));
+            else
+            {
+                var newName = current.Get(_headers, "stepname").Trim();
+                if (!string.Equals(oldName, newName, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(newName))
+                    changes.Add(new WorkbookSynchronization.StepChange(testcase, oldName, newName));
+            }
+        }
+        return changes;
     }
 
     private static Control Field(string label, Control control) => new StackPanel { Spacing = 3, Children = { DashboardStyle.Text(label, 11, false, DashboardStyle.Muted), control } };
