@@ -18,17 +18,17 @@ internal static class WorkbookSynchronization
         if (!TryColumn(requestHeaders, "testcaseindex", out var requestTestcase) || !TryColumn(requestHeaders, "dataid", out var requestDataId)
             || !TryColumn(responseHeaders, "testcaseindex", out var responseTestcase) || !TryColumn(responseHeaders, "dataid", out var responseDataId)) return;
 
-        var requestKeys = new List<(string Testcase, string DataId)>();
+        var requestRows = new List<(string Testcase, string DataId)>();
         foreach (var row in request.RowsUsed().Skip(1))
         {
             var key = (row.Cell(requestTestcase).GetString().Trim(), row.Cell(requestDataId).GetString().Trim());
-            if (string.IsNullOrWhiteSpace(key.Item1) || string.IsNullOrWhiteSpace(key.Item2) || requestKeys.Contains(key)) continue;
-            requestKeys.Add(key);
+            requestRows.Add(key);
         }
 
         var width = Math.Max(responseHeaders.Values.DefaultIfEmpty(1).Max(), response.LastColumnUsed()?.ColumnNumber() ?? 1);
         var existing = new Dictionary<(string Testcase, string DataId), string[]>(new RowKeyComparer());
-        foreach (var row in response.RowsUsed().Skip(1))
+        var responseRows = response.RowsUsed().Skip(1).ToList();
+        foreach (var row in responseRows)
         {
             var key = (row.Cell(responseTestcase).GetString().Trim(), row.Cell(responseDataId).GetString().Trim());
             if (!string.IsNullOrWhiteSpace(key.Item1) && !string.IsNullOrWhiteSpace(key.Item2) && !existing.ContainsKey(key))
@@ -41,10 +41,14 @@ internal static class WorkbookSynchronization
         foreach (var pair in responseHeaders) response.Cell(1, pair.Value).Value = pair.Key;
 
         var outputRow = 2;
-        foreach (var key in requestKeys)
+        for (var requestIndex = 0; requestIndex < requestRows.Count; requestIndex++)
         {
-            if (existing.TryGetValue(key, out var values))
+            var key = requestRows[requestIndex];
+            if (existing.TryGetValue(key, out var values) || (requestIndex < responseRows.Count && !string.IsNullOrWhiteSpace(responseRows[requestIndex].Cell(responseTestcase).GetString())))
+            {
+                values ??= Enumerable.Range(1, width).Select(responseRows[requestIndex].Cell).Select(x => x.GetString()).ToArray();
                 for (var column = 1; column <= width; column++) response.Cell(outputRow, column).Value = values.ElementAtOrDefault(column - 1) ?? "";
+            }
             response.Cell(outputRow, responseTestcase).Value = key.Testcase;
             response.Cell(outputRow, responseDataId).Value = key.DataId;
             outputRow++;
@@ -74,8 +78,8 @@ internal static class WorkbookSynchronization
                     {
                         var updated = RenameStepHeader(column.Key, change.OldName, change.NewName);
                         sheet.Cell(1, column.Value).Value = updated;
-                        ReplaceReferences(sheet, change.OldName, change.NewName);
                     }
+                    ReplaceReferences(sheet, change.OldName, change.NewName);
                 }
             }
             if (change.NewName is null)
