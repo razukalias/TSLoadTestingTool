@@ -340,7 +340,14 @@ public sealed class WorkbookEditorWindow : Window
         {
             var rows = new HashSet<int>();
             foreach (var token in (text ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                if (int.TryParse(token, out var row) && row >= 0) rows.Add(row);
+            {
+                var range = token.Split('-', StringSplitOptions.TrimEntries);
+                if (range.Length == 2 && int.TryParse(range[0], out var first) && int.TryParse(range[1], out var last))
+                {
+                    for (var row = Math.Max(0, Math.Min(first, last)); row <= Math.Max(first, last); row++) rows.Add(row);
+                }
+                else if (range.Length == 1 && int.TryParse(token, out var row) && row >= 0) rows.Add(row);
+            }
             return rows;
         }
 
