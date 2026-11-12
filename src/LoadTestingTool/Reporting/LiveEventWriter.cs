@@ -139,6 +139,15 @@ public sealed class LiveEventWriter : IDisposable
         });
     }
 
+    public void WriteIssue(string severity, string category, string message, string environment = "", string testcase = "", string dataId = "", string stepName = "")
+    {
+        Write(new
+        {
+            eventType = "run-issue", instanceId = _instanceId, severity, category, message,
+            environment, testcase, dataId, stepName, occurredAt = DateTimeOffset.Now
+        });
+    }
+
     private void Write(object value)
     {
         lock (_sync) _writer.WriteLine(JsonSerializer.Serialize(value));

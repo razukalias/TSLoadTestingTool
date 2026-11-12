@@ -865,12 +865,20 @@ public sealed partial class MainWindow
             _validationLog.Add(($"Validation completed: {errors} error(s), {warnings} warning(s) across {results.Count} instance(s).", status));
             foreach (var result in results)
             {
+                var instance = _instances.FirstOrDefault(x => x.Name.Equals(result.Instance, StringComparison.OrdinalIgnoreCase));
+                if (instance is not null)
+                {
+                    instance.Issues.RemoveAll(x => x.Category.Equals("Validation", StringComparison.OrdinalIgnoreCase));
+                    foreach (var issue in result.Issues)
+                        instance.Issues.Add(new RunIssueInfo { Severity = issue.Severity.Equals("WARNING", StringComparison.OrdinalIgnoreCase) ? "Warning" : "Error", Category = "Validation", Message = $"{issue.Location}: {issue.Problem} Fix: {issue.Fix}", Testcase = issue.Location, OccurredAt = DateTimeOffset.Now });
+                }
                 _validationLog.Add(($"\n{(result.HasErrors ? "FAILED" : result.HasWarnings ? "WARNINGS" : "PASSED")}  {result.Instance}", result.HasErrors ? "ERROR" : result.HasWarnings ? "WARNING" : "PASS"));
                 foreach (var issue in result.Issues)
                     _validationLog.Add((issue.ToString(), issue.Severity));
             }
             _validationLog.Add(("[end validate]", status));
             SetValidationButton(status, errors, warnings);
+            RefreshDashboardDetails(force: true);
             UiLog($"Global validation completed. instances={results.Count}; errors={errors}; warnings={warnings}");
         }
         catch (Exception ex)
@@ -1322,7 +1330,7 @@ public sealed partial class MainWindow
     private void RefreshDashboardDetails(bool force = false)
     {
         var item = _selectedInstance;
-        var signature = item is null ? "empty" : $"{item.Name}|{item.Status}|{item.Requests.Count}|{item.Assertions.Count}|{item.LastEvent}|{item.P95Ms}|{item.StartedAt}|{item.CompletedAt}|{item.TestcaseSelection}|{item.EnvironmentSelection}|{item.RowsExecutionMode}|{item.RunEnvironmentsParallel}|{item.StepSelectionJson}";
+        var signature = item is null ? "empty" : $"{item.Name}|{item.Status}|{item.Requests.Count}|{item.Assertions.Count}|{item.Issues.Count}|{item.LastEvent}|{item.P95Ms}|{item.StartedAt}|{item.CompletedAt}|{item.TestcaseSelection}|{item.EnvironmentSelection}|{item.RowsExecutionMode}|{item.RunEnvironmentsParallel}|{item.StepSelectionJson}";
         if (!force && signature == _detailSignature) return;
         _detailSignature = signature;
         _selectedTitle.Text = item?.Name ?? "Selected instance";
@@ -1358,6 +1366,22 @@ public sealed partial class MainWindow
         AddOverview(KeyValue("p95 latency", item.P95Ms is null ? "Available on completion" : $"{item.P95Ms} ms"), item.P95Ms?.ToString() ?? "Available");
         AddOverview(KeyValue("Throughput", item.RequestsPerSecond is null ? "Available on completion" : $"{item.RequestsPerSecond:F2} requests / sec"), item.RequestsPerSecond?.ToString() ?? "Available");
         AddOverview(KeyValue("Assertions", $"{item.Assertions.Count(a => a.Result == "PASS")} passed / {item.Assertions.Count(a => a.Result == "FAIL")} failed"), $"{item.Assertions.Count} pass fail");
+        if (item.Issues.Count > 0)
+        {
+            _overviewPanel.Children.Add(DashboardStyle.Text($"Run issues  ·  {item.Issues.Count(i => i.Severity.Equals("Error", StringComparison.OrdinalIgnoreCase))} error(s) / {item.Issues.Count(i => i.Severity.Equals("Warning", StringComparison.OrdinalIgnoreCase))} warning(s)", 13, true));
+            foreach (var issue in item.Issues.Where(i => MatchesTerms($"{i.Severity} {i.Category} {i.Environment} {i.Testcase} {i.DataId} {i.StepName} {i.Message}", _overviewFilter.Text)).OrderByDescending(i => i.OccurredAt))
+            {
+                var color = issue.Severity.Equals("Warning", StringComparison.OrdinalIgnoreCase) ? DashboardStyle.Brush("#FFB36B") : DashboardStyle.Red;
+                var scope = string.Join(" / ", new[] { issue.Environment, issue.Testcase, issue.DataId, issue.StepName }.Where(x => !string.IsNullOrWhiteSpace(x)));
+                var content = new StackPanel { Spacing = 3, Children =
+                {
+                    new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { DashboardStyle.Badge(issue.Severity), DashboardStyle.Text($"{issue.Category}{(string.IsNullOrWhiteSpace(scope) ? "" : $" · {scope}")}", 11, true) } },
+                    DashboardStyle.Text(issue.Message, 11, false, color),
+                    DashboardStyle.Text($"{issue.OccurredAt:HH:mm:ss} · Informational issue; warnings do not affect failure totals.", 10, false, DashboardStyle.Muted)
+                }};
+                _overviewPanel.Children.Add(DashboardStyle.Card(content, new Thickness(8)));
+            }
+        }
         _overviewPanel.Children.Add(DashboardStyle.Text($"Step execution timeline  ·  Total duration: {FormatRunDuration(item)}", 13, true));
         var stepFilterBar = new WrapPanel { Orientation = Orientation.Horizontal, ItemWidth = double.NaN, ItemHeight = double.NaN, Children =
         {

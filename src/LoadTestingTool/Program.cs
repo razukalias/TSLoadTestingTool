@@ -72,6 +72,7 @@ internal static class Program
             catch (Exception ex)
             {
                 var validationLog = WriteStartupFailureLog(config, runId, workbookPath, args, ex);
+                runEvents.WriteIssue("Error", "Validation", ex.Message, config.EnvironmentSelection, "", "", "<startup>");
                 Console.Error.WriteLine($"[Fatal] {ex.Message}\n[Internal log] {validationLog}");
                 return 1;
             }
@@ -118,7 +119,7 @@ internal static class Program
                     }
                     historyPath = historyFiles.FirstOrDefault() ?? string.Empty;
                 }
-                catch (Exception ex) { Console.Error.WriteLine($"[Warning] History generation failed: {ex.Message}"); }
+                catch (Exception ex) { runEvents.WriteIssue("Warning", "History", ex.Message); Console.Error.WriteLine($"[Warning] History generation failed: {ex.Message}"); }
                 if (config.GenerateResults) WriteMetrics(config.ResultsFolder, runId, overall);
                 runEvents.WriteRunCompleted(overall, historyPath);
                 Console.WriteLine($"[Run complete] result={(overall.Cancelled ? "CANCELLED" : overall.Testcases.Any(t => t.Result == "FAILED") ? "FAILED" : "PASSED")}; requests={overall.Metrics.TotalRequests}; p95={overall.Metrics.P95DurationMs}ms; rps={overall.Metrics.RequestsPerSecond:F2}; historyFiles={historyFiles.Length}; history={historyPath}");
@@ -219,6 +220,7 @@ internal static class Program
         catch (Exception ex)
         {
             logger.Error($"Unhandled testcase execution exception. testcase={testcase.Testcase}; environment={environment}", ex);
+            events.WriteIssue("Error", "Unexpected error", ex.Message, environment, testcase.Testcase, selectedDataIds?.FirstOrDefault() ?? "", "<runner>");
             local.Testcases.Add(new TestcaseResult
             {
                 RunId = runId, TestcaseIndex = testcase.TestcaseIndex, Testcase = testcase.Testcase,

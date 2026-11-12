@@ -57,6 +57,7 @@ public sealed class InstanceInfo
     public List<AssertionInfo> Assertions { get; } = [];
     public List<DashboardRequest> Requests { get; } = [];
     public List<ActionManualInfo> ManualActions { get; } = [];
+    public List<RunIssueInfo> Issues { get; } = [];
     public List<string> EventMessages { get; } = [];
     public DateTimeOffset? StartedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
@@ -76,6 +77,20 @@ public sealed class InstanceInfo
         ["RuntimeReferenceErrors"] = true, ["AssertionHistory"] = true, ["Variables"] = true,
         ["CorrelationHistory"] = true, ["DataEngineRequestRows"] = true, ["DataEngineConfig"] = true
     };
+}
+
+public sealed class RunIssueInfo
+{
+    public string IssueId { get; init; } = Guid.NewGuid().ToString("N");
+    public string Severity { get; init; } = "Error";
+    public string Category { get; init; } = "Runner";
+    public string Message { get; init; } = string.Empty;
+    public string Environment { get; init; } = string.Empty;
+    public string Testcase { get; init; } = string.Empty;
+    public string DataId { get; init; } = string.Empty;
+    public string StepName { get; init; } = string.Empty;
+    public DateTimeOffset OccurredAt { get; init; } = DateTimeOffset.Now;
+    public string Identity => $"{Category}|{Severity}|{Environment}|{Testcase}|{DataId}|{StepName}|{Message}";
 }
 
 public sealed class ActionManualInfo
@@ -1108,6 +1123,23 @@ public sealed partial class MainWindow : Window
     {
         RecordDashboardEvent(item, e);
         var type = e.GetProperty("eventType").GetString();
+        if (type == "run-issue")
+        {
+            var issue = new RunIssueInfo
+            {
+                Severity = e.TryGetProperty("severity", out var severity) ? severity.GetString() ?? "Error" : "Error",
+                Category = e.TryGetProperty("category", out var category) ? category.GetString() ?? "Runner" : "Runner",
+                Message = e.TryGetProperty("message", out var message) ? message.GetString() ?? "" : "",
+                Environment = e.TryGetProperty("environment", out var issueEnvironment) ? issueEnvironment.GetString() ?? "" : "",
+                Testcase = e.TryGetProperty("testcase", out var issueTestcase) ? issueTestcase.GetString() ?? "" : "",
+                DataId = e.TryGetProperty("dataId", out var issueDataId) ? issueDataId.GetString() ?? "" : "",
+                StepName = e.TryGetProperty("stepName", out var issueStep) ? issueStep.GetString() ?? "" : "",
+                OccurredAt = e.TryGetProperty("occurredAt", out var occurred) && occurred.TryGetDateTimeOffset(out var issueTime) ? issueTime : DateTimeOffset.Now
+            };
+            if (!item.Issues.Any(x => x.Identity.Equals(issue.Identity, StringComparison.OrdinalIgnoreCase))) item.Issues.Add(issue);
+            item.LastEvent = $"{issue.Severity}: {issue.Category} — {issue.Message}";
+            UiLog($"Runner issue applied. instance={item.Name}; severity={issue.Severity}; category={issue.Category}; message={issue.Message}");
+        }
         if (type == "actionmanual-pending")
         {
             var requestId = e.GetProperty("requestId").GetString() ?? "";
