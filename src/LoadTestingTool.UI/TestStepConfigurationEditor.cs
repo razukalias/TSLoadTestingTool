@@ -338,7 +338,8 @@ internal sealed class TestStepConfigurationEditor : UserControl
     private void EditTemplate()
     {
         var source = string.IsNullOrWhiteSpace(_template.Text) ? $"{_stepName.Text?.Trim() ?? "step"}.json" : _template.Text!.Trim();
-        var editor = new TemplateEditorWindow(_item.TemplatesFolder, source, _stepType.SelectedItem?.ToString() ?? "HTTP", value => { _template.Text = value; UpdateRowFromForm(); _status.Text = "Template saved."; _status.Foreground = DashboardStyle.Green; });
+        var testcaseName = _byTestcase.GetValueOrDefault(_selectedTestcase)?.FirstOrDefault()?.Get(_headers, "testcase", _selectedTestcase.ToString()) ?? _selectedTestcase.ToString();
+        var editor = new TemplateEditorWindow(_item.TemplatesFolder, source, _stepType.SelectedItem?.ToString() ?? "HTTP", value => { _template.Text = value; UpdateRowFromForm(); _status.Text = "Template saved."; _status.Foreground = DashboardStyle.Green; }, _item.Name, testcaseName, _stepName.Text);
         editor.Show();
     }
 

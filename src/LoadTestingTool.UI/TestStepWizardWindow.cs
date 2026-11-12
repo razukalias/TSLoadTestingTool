@@ -12,6 +12,7 @@ internal sealed class TestStepWizardWindow : Window
 {
     private readonly Action<WizardStepDraft> _saveStep;
     private readonly string _templatesFolder;
+    private readonly string _instanceName;
     private readonly TextBox _testcaseIndex = Field("1");
     private readonly TextBox _testcase = Field("ExampleTest");
     private readonly TextBox _stepName = Field("NewStep");
@@ -54,9 +55,9 @@ internal sealed class TestStepWizardWindow : Window
     private readonly MultipartPartsEditor _multipartEditor = new();
     private readonly int? _editRow;
 
-    public TestStepWizardWindow(Action<WizardStepDraft> saveStep, WizardStepDraft? existing = null, string? templatesFolder = null)
+    public TestStepWizardWindow(Action<WizardStepDraft> saveStep, WizardStepDraft? existing = null, string? templatesFolder = null, string? instanceName = null)
     {
-        _saveStep = saveStep; _editRow = existing?.Row; _templatesFolder = Path.GetFullPath(templatesFolder ?? Path.Combine(Directory.GetCurrentDirectory(), "Templates"));
+        _saveStep = saveStep; _editRow = existing?.Row; _templatesFolder = Path.GetFullPath(templatesFolder ?? Path.Combine(Directory.GetCurrentDirectory(), "Templates")); _instanceName = string.IsNullOrWhiteSpace(instanceName) ? "—" : instanceName;
         Title = existing is null ? "Add test step" : "Edit test step";
         Width = 760; Height = 820; MinWidth = 620; MinHeight = 600;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -138,7 +139,7 @@ internal sealed class TestStepWizardWindow : Window
     private void EditTemplate()
     {
         var source = string.IsNullOrWhiteSpace(_template.Text) ? $"{_stepName.Text?.Trim() ?? "step"}.json" : _template.Text!.Trim();
-        var editor = new TemplateEditorWindow(_templatesFolder, source, _stepType.SelectedItem?.ToString() ?? "HTTP", value => { _template.Text = value; _error.Text = "Template saved."; _error.Foreground = DashboardStyle.Green; });
+        var editor = new TemplateEditorWindow(_templatesFolder, source, _stepType.SelectedItem?.ToString() ?? "HTTP", value => { _template.Text = value; _error.Text = "Template saved."; _error.Foreground = DashboardStyle.Green; }, _instanceName, _testcase.Text, _stepName.Text);
         editor.Show(this);
     }
 

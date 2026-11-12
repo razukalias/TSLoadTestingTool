@@ -19,14 +19,18 @@ internal sealed class TemplateEditorWindow : Window
     private readonly TextBlock _matchCount = DashboardStyle.Text("", 11, false, DashboardStyle.Muted);
     private readonly TextBlock _status = DashboardStyle.Text("", 11, false, DashboardStyle.Muted);
     private readonly Action<string> _saved;
+    private readonly string _instanceName;
+    private readonly string _testcaseName;
+    private readonly string _stepName;
     private double _fontSize = 12;
 
-    public TemplateEditorWindow(string templatesFolder, string sourcePath, string stepType, Action<string> saved)
+    public TemplateEditorWindow(string templatesFolder, string sourcePath, string stepType, Action<string> saved, string? instanceName = null, string? testcaseName = null, string? stepName = null)
     {
         _templatesFolder = Path.GetFullPath(templatesFolder);
         Directory.CreateDirectory(_templatesFolder);
         _saved = saved;
-        Title = "Template editor"; Width = 900; Height = 700; MinWidth = 640; MinHeight = 480;
+        _instanceName = Display(instanceName); _testcaseName = Display(testcaseName); _stepName = Display(stepName);
+        Title = $"Template editor — Instance: {_instanceName} · Testcase: {_testcaseName} · Test step: {_stepName}"; Width = 900; Height = 700; MinWidth = 640; MinHeight = 480;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         _path = new TextBox { Text = sourcePath, Watermark = "relative path inside Templates", MinWidth = 320 };
         _format = new ComboBox { ItemsSource = new[] { "JSON", "XML", "SQL", "GraphQL", "C# script", "Plain text" }, SelectedIndex = FormatIndex(sourcePath, stepType), Width = 150 };
@@ -45,7 +49,7 @@ internal sealed class TemplateEditorWindow : Window
         var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { help, validate, save, close } };
         var textTools = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _search, DashboardStyle.Action("−", () => ChangeFontSize(-1)), DashboardStyle.Action("+", () => ChangeFontSize(1)), DashboardStyle.Text("Text size", 11, false, DashboardStyle.Muted), _matchCount } };
         var body = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,Auto,*,Auto") };
-        body.Children.Add(DashboardStyle.Text($"Edit {stepType} template", 19, true));
+        body.Children.Add(DashboardStyle.Text($"Edit {stepType} template — Instance: {_instanceName} · Testcase: {_testcaseName} · Test step: {_stepName}", 19, true));
         Grid.SetRow(textTools, 1); body.Children.Add(textTools);
         Grid.SetRow(meta, 2); body.Children.Add(meta);
         Grid.SetRow(_content, 3); body.Children.Add(_content);
@@ -55,6 +59,8 @@ internal sealed class TemplateEditorWindow : Window
         Content = new Border { Padding = new Thickness(18), Background = DashboardStyle.Panel, Child = shell };
         UpdateMatchCount();
     }
+
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
 
     private void LoadFile()
     {

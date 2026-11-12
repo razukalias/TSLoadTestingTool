@@ -967,7 +967,7 @@ public sealed partial class MainWindow
     private async Task EditWorkbookAsync()
     {
         if (_selectedInstance is null) { _details.Text = "Select an instance first."; return; }
-        var editor = new WorkbookEditorWindow(_selectedInstance.WorkbookPath);
+        var editor = new WorkbookEditorWindow(_selectedInstance.WorkbookPath, _selectedInstance.Name);
         editor.Closed += (_, _) => { if (!string.IsNullOrWhiteSpace(editor.SavedBackup)) { RefreshInstances(); _details.Text = $"Workbook saved. Backup created: {Path.GetFileName(editor.SavedBackup)}"; } };
         editor.Show(this);
         await Task.CompletedTask;

@@ -26,7 +26,7 @@ public sealed class WorkbookEditorWindow : Window
     private readonly TextBox _addRowsCount = new() { Text = "10", Width = 52 };
     public string? SavedBackup { get; private set; }
 
-    public WorkbookEditorWindow(string workbookPath)
+    public WorkbookEditorWindow(string workbookPath, string? instanceName = null)
     {
         _path = workbookPath;
         Title = $"DataEngine Editor — {Path.GetFileName(workbookPath)}";
@@ -49,7 +49,8 @@ public sealed class WorkbookEditorWindow : Window
         }
         _save = DashboardStyle.Action("Save workbook", () => Save(), "primary");
         var top = new StackPanel { Spacing = 4, Children = {
-            DashboardStyle.Text("DataEngine Editor", 21, true),
+            DashboardStyle.Text($"DataEngine Editor — Instance: {Display(instanceName)}", 21, true),
+            DashboardStyle.Text($"Workbook: {Path.GetFileName(workbookPath)}", 12, false, DashboardStyle.Muted),
             DashboardStyle.Text("Excel-style selection: click A/B/C column indexes or row numbers; Ctrl adds and Shift selects ranges. Edit headers directly. Drag column borders to resize. Type < or { for autocomplete; Ctrl+Space opens it.", 12, false, DashboardStyle.Muted) } };
         _status.Foreground = DashboardStyle.Red;
         var row1 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 6, Children = { DashboardStyle.Action("Help", ShowHelp), DashboardStyle.Action("New sheet", AddNewSheet), DashboardStyle.Action("Rename sheet", RenameCurrentSheet), DashboardStyle.Action("Add test step", () => OpenStepWizard(false), "primary"), DashboardStyle.Action("Edit selected step", () => OpenStepWizard(true)), DashboardStyle.Action("Import", ShowImportMenu), DashboardStyle.Action("Open raw workbook", () => SystemDefaultFileOpener.Open(_path)) } };
@@ -66,6 +67,8 @@ public sealed class WorkbookEditorWindow : Window
         }, RoutingStrategies.Tunnel);
         _tabs.SelectedIndex = 0;
     }
+
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
 
     private void AddNewSheet()
     {
