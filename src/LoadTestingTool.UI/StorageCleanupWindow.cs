@@ -159,9 +159,11 @@ public sealed class StorageCleanupWindow : Window
             : Path.GetFileName(instance);
         var testcase = Regex.Replace(Path.GetFileNameWithoutExtension(name), @"_Row\d+.*$", "", RegexOptions.IgnoreCase);
         var row = Regex.Match(name, @"_Row([^_]+)", RegexOptions.IgnoreCase).Groups[1].Value;
+        var thread = Regex.Match(name, @"_T(\d+)", RegexOptions.IgnoreCase).Groups[1].Value;
+        var iteration = Regex.Match(name, @"_I(\d+)", RegexOptions.IgnoreCase).Groups[1].Value;
         var stamp = File.GetLastWriteTime(path);
         var size = new FileInfo(path).Length;
-        var key = kind.Equals("History", StringComparison.OrdinalIgnoreCase) ? $"{instance}|{environment}|{testcase}|row:{row}|{status}" : $"{instance}|{environment}|{testcase}|{status}|{kind}";
+        var key = kind.Equals("History", StringComparison.OrdinalIgnoreCase) ? $"{instance}|{environment}|{testcase}|row:{row}|{status}" : $"{instance}|{environment}|{testcase}|{status}|T:{thread}|I:{iteration}|{kind}";
         return new Candidate(path, kind, instance, environment, testcase, status, stamp, size, key);
     }
 
