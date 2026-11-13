@@ -296,8 +296,7 @@ public sealed partial class MainWindow : Window
         try
         {
             var workbookPath = _selectedInstance.WorkbookPath;
-            var backup = $"{workbookPath}.backup.{DateTime.Now:yyyyMMdd_HHmmss}.xlsx";
-            File.Copy(workbookPath, backup, overwrite: false);
+            var backup = DataEngineBackup.CreateBackup(workbookPath);
             using var workbook = new XLWorkbook(workbookPath);
             var sheet = workbook.Worksheet("response");
             var header = sheet.Cell(1, assertion.ExpectedValueColumn);
@@ -325,8 +324,7 @@ public sealed partial class MainWindow : Window
         if (selected.Count == 0) { _details.Text = "Select one or more failed assertions first."; UiLog($"Apply selected values ignored. instance={_selectedInstance.Name}; reason=no-failed-assertions-selected"); return; }
         try
         {
-            var backup = $"{_selectedInstance.WorkbookPath}.backup.{DateTime.Now:yyyyMMdd_HHmmss}.xlsx";
-            File.Copy(_selectedInstance.WorkbookPath, backup, overwrite: false);
+            var backup = DataEngineBackup.CreateBackup(_selectedInstance.WorkbookPath);
             using var workbook = new XLWorkbook(_selectedInstance.WorkbookPath);
             var sheet = workbook.Worksheet("response");
             var skippedMissing = 0;
@@ -857,8 +855,7 @@ public sealed partial class MainWindow : Window
             if (headers.Count == 0) { SetStatusForInstance($"Cannot add step to {item.Name}: config sheet has no headers.", true); return; }
             var row = step.Row ?? ((sheet.RangeUsed()?.RangeAddress.LastAddress.RowNumber ?? 1) + 1);
             foreach (var pair in step.Values) if (headers.TryGetValue(pair.Key, out var column)) sheet.Cell(row, column).Value = pair.Value;
-            var backup = $"{item.WorkbookPath}.backup.{DateTime.Now:yyyyMMdd_HHmmssfff}.xlsx";
-            File.Copy(item.WorkbookPath, backup, overwrite: false); workbook.Save();
+            var backup = DataEngineBackup.CreateBackup(item.WorkbookPath); workbook.Save();
             SetStatusForInstance($"Added step '{step.Get("stepname")}' to {item.Name}. Backup: {Path.GetFileName(backup)}");
             RefreshInstances();
         }
@@ -925,8 +922,7 @@ public sealed partial class MainWindow : Window
                 SetCell(response, responseRow, responseHeaders, "extractvariable", "");
             }
 
-            var backup = $"{item.WorkbookPath}.backup.{DateTime.Now:yyyyMMdd_HHmmssfff}.xlsx";
-            File.Copy(item.WorkbookPath, backup, overwrite: false);
+            var backup = DataEngineBackup.CreateBackup(item.WorkbookPath);
             workbook.Save();
             RefreshInstances();
             var refreshed = _instances.FirstOrDefault(x => x.FolderPath.Equals(item.FolderPath, StringComparison.OrdinalIgnoreCase));
@@ -1704,6 +1700,8 @@ public sealed partial class MainWindow : Window
                         config.InstancesRoot = ResolveConfiguredPath(instancesRoot.ToString(), Path.GetDirectoryName(config.SettingsFile)!);
                     if (central["WorkbookName"] is JsonValue workbookName && !string.IsNullOrWhiteSpace(workbookName.ToString()))
                         config.WorkbookName = Path.GetFileName(workbookName.ToString());
+                    if (central["DataEngineBackupFolder"] is JsonValue backupFolder && !string.IsNullOrWhiteSpace(backupFolder.ToString()))
+                        config.DataEngineBackupFolder = ResolveConfiguredPath(backupFolder.ToString(), Path.GetDirectoryName(config.SettingsFile)!);
                     if (int.TryParse(central["MaxParallelRows"]?.ToString() ?? central["MaxConcurrentRows"]?.ToString(), out var maxParallelRows)) config.MaxParallelRows = Math.Clamp(maxParallelRows, 1, 100);
                     if (int.TryParse(central["Iterations"]?.ToString(), out var iterations)) config.Iterations = Math.Max(1, iterations);
                     if (int.TryParse(central["ParallelRowStartIntervalMs"]?.ToString() ?? central["ThreadIntervalMs"]?.ToString(), out var threadInterval)) config.ParallelRowStartIntervalMs = Math.Max(0, threadInterval);

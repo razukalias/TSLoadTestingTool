@@ -297,6 +297,7 @@ internal static class Program
         var baseDirectory = Path.GetDirectoryName(path)!;
         var root = new ConfigurationBuilder().SetBasePath(baseDirectory).AddJsonFile(Path.GetFileName(path), optional: false, reloadOnChange: false).Build();
         var config = new AppConfig(); root.Bind(config);
+        config.DataEngineBackupFolder = ResolveCentralPath(baseDirectory, config.DataEngineBackupFolder, "backup");
         if (root["MaxParallelRows"] is null && int.TryParse(root["MaxConcurrentRows"], out var legacyMaxRows)) config.MaxParallelRows = Math.Clamp(legacyMaxRows, 1, 100);
         if (root["ParallelRowStartIntervalMs"] is null && int.TryParse(root["ThreadIntervalMs"], out var legacyStartInterval)) config.ParallelRowStartIntervalMs = Math.Max(0, legacyStartInterval);
         config.RowsExecutionMode = NormalizeRowsExecutionMode(root["RowsExecutionMode"]?.ToString() ?? root["ExecutionMode"]?.ToString() ?? config.RowsExecutionMode);

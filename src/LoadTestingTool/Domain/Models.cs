@@ -4,6 +4,7 @@ public sealed class AppConfig
 {
     public string InstancesRoot { get; set; } = "Instances";
     public string WorkbookName { get; set; } = "DataEngine.xlsx";
+    public string DataEngineBackupFolder { get; set; } = "backup";
     public string ExcelFilePath { get; set; } = "DataEngine.xlsx";
     public string TemplatesFolder { get; set; } = "Templates";
     public string LogsFolder { get; set; } = "Logs";
