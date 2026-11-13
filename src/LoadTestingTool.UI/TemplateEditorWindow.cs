@@ -85,8 +85,18 @@ internal sealed class TemplateEditorWindow : Window
         {
             ValidateContent(_content.Text ?? "", _format.SelectedItem?.ToString() ?? "Plain text");
             var path = ResolvePath(_path.Text ?? "");
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, _content.Text ?? "");
+            var directory = Path.GetDirectoryName(path)!;
+            Directory.CreateDirectory(directory);
+            var temporary = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+            try
+            {
+                File.WriteAllText(temporary, _content.Text ?? "", new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                File.Move(temporary, path, overwrite: true);
+            }
+            finally
+            {
+                try { if (File.Exists(temporary)) File.Delete(temporary); } catch { }
+            }
             var relative = Path.GetRelativePath(_templatesFolder, path).Replace(Path.DirectorySeparatorChar, '/');
             _saved(relative); _status.Text = $"Saved {relative}"; _status.Foreground = DashboardStyle.Green;
         }
