@@ -116,6 +116,7 @@ public sealed class RequestStep
     public string Verb { get; init; } = "POST";
     public string ContentType { get; init; } = string.Empty;
     public int WaitMs { get; init; }
+    public string WaitExpression { get; init; } = "0";
     public string ExpectedStatus { get; init; } = string.Empty;
     public bool StopOnFailure { get; init; } = true;
     public bool IgnoreEmpty { get; init; }
@@ -273,6 +274,7 @@ public sealed class RequestResult
     public DateTimeOffset StartedAt { get; init; }
     public DateTimeOffset EndedAt { get; set; }
     public int WaitMs { get; init; }
+    public string WaitExpression { get; init; } = "0";
     public string Verb { get; init; } = string.Empty;
     public string TargetUrl { get; set; } = string.Empty;
     public string TemplateSource { get; init; } = string.Empty;
@@ -294,6 +296,7 @@ public sealed class RequestResult
     public string RuntimeReferenceKey { get; set; } = string.Empty;
     public string ManualInfo { get; set; } = string.Empty;
     public string ManualComment { get; set; } = string.Empty;
+    public bool ManualAction { get; set; }
     public string Environment { get; init; } = string.Empty;
     public string Result => ErrorMessage.Length > 0 || Assertions.Any(a => a.Result == "FAIL") || (HttpStatus is < 200 or >= 300) ? "FAIL" : "PASS";
 }

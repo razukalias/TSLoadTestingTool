@@ -199,7 +199,7 @@ internal static class Program
         void WriteRequestEvent(RequestResult result)
         {
             events.WriteRequest(result);
-            if (result.StepType.Equals("ActionManual", StringComparison.OrdinalIgnoreCase)) events.WriteManualCompleted(result);
+            if (result.ManualAction || result.StepType.Equals("ActionManual", StringComparison.OrdinalIgnoreCase)) events.WriteManualCompleted(result);
         }
         var runner = new TestRunner(http, new AssertionEngine(), config.TemplatesFolder, config.RequestTimeoutSeconds, WriteRequestEvent, logger, new FeatureConfig
         {

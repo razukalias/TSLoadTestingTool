@@ -884,7 +884,7 @@ public sealed partial class MainWindow : Window
             SetCell(config, configRow, configHeaders, "enabled", draft.Enabled ? "true" : "false");
             SetCell(config, configRow, configHeaders, "timeout", draft.TimeoutSeconds.ToString());
             SetCell(config, configRow, configHeaders, "manualtimeoutminutes", "15");
-            SetCell(config, configRow, configHeaders, "wait", draft.WaitMilliseconds.ToString());
+            SetCell(config, configRow, configHeaders, "wait", draft.WaitExpression);
             SetCell(config, configRow, configHeaders, "targeturl", draft.TargetUrl);
             SetCell(config, configRow, configHeaders, "verb", draft.Verb);
             SetCell(config, configRow, configHeaders, "templetsource", draft.TemplateSource);
