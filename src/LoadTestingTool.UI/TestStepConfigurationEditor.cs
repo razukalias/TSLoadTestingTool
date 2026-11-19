@@ -390,7 +390,6 @@ internal sealed class TestStepConfigurationEditor : UserControl
             using var workbook = new XLWorkbook(_item.WorkbookPath); var sheet = workbook.Worksheets.FirstOrDefault(x => x.Name.Equals("config", StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidDataException("The workbook has no config sheet.");
             var backup = DataEngineBackup.CreateBackup(_item.WorkbookPath);
             var original = sheet.RowsUsed().Skip(1).Where(r => r.CellsUsed().Any(c => !string.IsNullOrWhiteSpace(c.GetString()))).ToList();
-            var stepChanges = BuildStepChanges(original);
             foreach (var header in _headers) sheet.Cell(1, header.Value).Value = header.Key;
             var lastColumn = Math.Max(sheet.LastColumnUsed()?.ColumnNumber() ?? 1, _headers.Values.DefaultIfEmpty(1).Max());
             for (var i = 0; i < _rows.Count; i++)
@@ -399,7 +398,6 @@ internal sealed class TestStepConfigurationEditor : UserControl
                 for (var column = 1; column <= lastColumn; column++) target.Cell(column).Value = source.Cells.GetValueOrDefault(column, "");
             }
             for (var row = _rows.Count + 2; row <= original.Count + 1; row++) for (var column = 1; column <= lastColumn; column++) sheet.Cell(row, column).Clear(XLClearOptions.Contents);
-            var warnings = WorkbookSynchronization.SynchronizeStepColumns(workbook, stepChanges);
             workbook.Save(); _dirty = false; error = $"Workbook saved. Backup: {Path.GetFileName(backup)}"; _status.Text = error; _status.Foreground = DashboardStyle.Green; return true;
         }
         catch (Exception ex) { error = ex.Message; _status.Text = $"Could not save step changes: {ex.Message}"; _status.Foreground = DashboardStyle.Red; return false; }

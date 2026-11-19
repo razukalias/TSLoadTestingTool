@@ -1282,12 +1282,7 @@ public sealed class SpreadsheetPreviewWindow : Window
                 return;
             }
             using var workbook = new XLWorkbook(_sourcePath);
-            var stepChanges = CaptureConfigStepChanges(workbook);
-            var columnChanges = CaptureColumnChanges(workbook);
             WriteWorkbookChanges(workbook, includeEditorStyles: true);
-            WorkbookSynchronization.SynchronizeRequestResponse(workbook);
-            WorkbookSynchronization.SynchronizeStepColumns(workbook, stepChanges);
-            WorkbookSynchronization.SynchronizeColumnReferences(workbook, columnChanges);
             workbook.SaveAs(temp, true);
         }
         catch (Exception ex) when (IsStylesXmlFailure(ex))
@@ -1296,12 +1291,7 @@ public sealed class SpreadsheetPreviewWindow : Window
             {
                 if (File.Exists(temp)) File.Delete(temp);
                 using var recoveryWorkbook = new XLWorkbook(_sourcePath);
-                var stepChanges = CaptureConfigStepChanges(recoveryWorkbook);
-                var columnChanges = CaptureColumnChanges(recoveryWorkbook);
                 WriteWorkbookChanges(recoveryWorkbook, includeEditorStyles: true);
-                WorkbookSynchronization.SynchronizeRequestResponse(recoveryWorkbook);
-                WorkbookSynchronization.SynchronizeStepColumns(recoveryWorkbook, stepChanges);
-                WorkbookSynchronization.SynchronizeColumnReferences(recoveryWorkbook, columnChanges);
                 // Older workbooks can contain legacy font/color ordering that
                 // ClosedXML reads but rejects during strict OpenXML validation.
                 // Validation-disabled output remains readable by Excel and keeps

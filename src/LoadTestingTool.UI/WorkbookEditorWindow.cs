@@ -237,7 +237,6 @@ public sealed class WorkbookEditorWindow : Window
                 if (!sheet.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) sheet.Name = name;
                 draft.WriteTo(sheet);
             }
-            WorkbookSynchronization.SynchronizeRequestResponse(workbook);
             var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmssfff");
             SavedBackup = DataEngineBackup.CreateBackup(_path); workbook.Save(); SetStatus(close ? $"Saved workbook. Backup: {Path.GetFileName(SavedBackup)}" : $"Saved workbook and backup. Editor remains open. Backup: {Path.GetFileName(SavedBackup)}");
             if (close) Close();
